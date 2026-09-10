@@ -1,0 +1,320 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "literal-hit",
+      "source": "ab",
+      "flags": "d",
+      "subject": "zab",
+      "start_utf16": 0
+    },
+    {
+      "id": "literal-miss",
+      "source": "ab",
+      "flags": "d",
+      "subject": "zzz",
+      "start_utf16": 0
+    },
+    {
+      "id": "dot-nonu-astral",
+      "source": ".",
+      "flags": "d",
+      "subject": "\ud83d\ude00",
+      "start_utf16": 0
+    },
+    {
+      "id": "dot-u-astral",
+      "source": ".",
+      "flags": "du",
+      "subject": "\ud83d\ude00",
+      "start_utf16": 0
+    },
+    {
+      "id": "lone-high-u",
+      "source": ".",
+      "flags": "du",
+      "subject": "\ud83d",
+      "start_utf16": 0
+    },
+    {
+      "id": "lone-low-u",
+      "source": ".",
+      "flags": "du",
+      "subject": "\ude00",
+      "start_utf16": 0
+    },
+    {
+      "id": "sticky-low-nonu",
+      "source": ".",
+      "flags": "dy",
+      "subject": "\ud83d\ude00x",
+      "start_utf16": 1
+    },
+    {
+      "id": "sticky-low-u",
+      "source": ".",
+      "flags": "duy",
+      "subject": "\ud83d\ude00x",
+      "start_utf16": 1
+    },
+    {
+      "id": "global-low-u",
+      "source": ".",
+      "flags": "dgu",
+      "subject": "\ud83d\ude00x",
+      "start_utf16": 1
+    },
+    {
+      "id": "sticky-rejects-later-hit",
+      "source": "x",
+      "flags": "dy",
+      "subject": "ax",
+      "start_utf16": 0
+    },
+    {
+      "id": "empty-start-within-pair",
+      "source": "(?:)",
+      "flags": "dg",
+      "subject": "\ud83d\ude00",
+      "start_utf16": 1
+    },
+    {
+      "id": "start-beyond-end",
+      "source": "(?:)",
+      "flags": "dg",
+      "subject": "a",
+      "start_utf16": 2
+    },
+    {
+      "id": "surrogate-escape-nonu",
+      "source": "\\ud83d",
+      "flags": "d",
+      "subject": "\ud83d\ude00",
+      "start_utf16": 0
+    },
+    {
+      "id": "surrogate-escape-u",
+      "source": "\\ud83d",
+      "flags": "du",
+      "subject": "\ud83d\ude00",
+      "start_utf16": 0
+    },
+    {
+      "id": "surrogate-literal-u",
+      "source": "\ud83d",
+      "flags": "du",
+      "subject": "\ud83d",
+      "start_utf16": 0
+    },
+    {
+      "id": "astral-literal-repeat-nonu",
+      "source": "^\ud83d\ude00+$",
+      "flags": "d",
+      "subject": "\ud83d\ude00\ude00",
+      "start_utf16": 0
+    },
+    {
+      "id": "astral-literal-repeat-u",
+      "source": "^\ud83d\ude00+$",
+      "flags": "du",
+      "subject": "\ud83d\ude00\ude00",
+      "start_utf16": 0
+    },
+    {
+      "id": "astral-escaped-repeat-nonu",
+      "source": "^\\ud83d\\ude00+$",
+      "flags": "d",
+      "subject": "\ud83d\ude00\ude00",
+      "start_utf16": 0
+    },
+    {
+      "id": "capture-reset",
+      "source": "(a|(b))+",
+      "flags": "d",
+      "subject": "aba",
+      "start_utf16": 0
+    },
+    {
+      "id": "negative-assertion-capture",
+      "source": "(.*?)a(?!(a+)b\\2c)\\2(.*)",
+      "flags": "d",
+      "subject": "baaabaac",
+      "start_utf16": 0
+    },
+    {
+      "id": "backward-captures",
+      "source": "(?<=([ab]+)([bc]+))$",
+      "flags": "d",
+      "subject": "abc",
+      "start_utf16": 0
+    },
+    {
+      "id": "backreference",
+      "source": "^(a+)\\1$",
+      "flags": "d",
+      "subject": "aaaa",
+      "start_utf16": 0
+    },
+    {
+      "id": "unset-backreference",
+      "source": "^(a|(b))\\2$",
+      "flags": "d",
+      "subject": "a",
+      "start_utf16": 0
+    },
+    {
+      "id": "named-captures",
+      "source": "(?<letter>x)",
+      "flags": "d",
+      "subject": "\ud83d\ude00x",
+      "start_utf16": 0
+    },
+    {
+      "id": "named-unset",
+      "source": "(?<left>a)|(?<right>b)",
+      "flags": "d",
+      "subject": "b",
+      "start_utf16": 0
+    },
+    {
+      "id": "duplicate-disjoint-names",
+      "source": "(?<x>a)|(?<x>b)",
+      "flags": "d",
+      "subject": "b",
+      "start_utf16": 0
+    },
+    {
+      "id": "scoped-modifiers",
+      "source": "^(?i:a)b$",
+      "flags": "d",
+      "subject": "Ab",
+      "start_utf16": 0
+    },
+    {
+      "id": "v-string-set",
+      "source": "^[\\q{ab|c}]$",
+      "flags": "dv",
+      "subject": "ab",
+      "start_utf16": 0
+    },
+    {
+      "id": "v-subtraction-hit",
+      "source": "^[a-z--[aeiou]]$",
+      "flags": "dv",
+      "subject": "b",
+      "start_utf16": 0
+    },
+    {
+      "id": "v-subtraction-miss",
+      "source": "^[a-z--[aeiou]]$",
+      "flags": "dv",
+      "subject": "a",
+      "start_utf16": 0
+    },
+    {
+      "id": "unicode-property",
+      "source": "^\\p{Default_Ignorable_Code_Point}$",
+      "flags": "du",
+      "subject": "\u200b",
+      "start_utf16": 0
+    },
+    {
+      "id": "unicode-word-fold",
+      "source": "^\\w$",
+      "flags": "diu",
+      "subject": "\u212a",
+      "start_utf16": 0
+    },
+    {
+      "id": "legacy-word-fold",
+      "source": "^\\w$",
+      "flags": "di",
+      "subject": "\u212a",
+      "start_utf16": 0
+    },
+    {
+      "id": "legacy-brace-escape",
+      "source": "^\\u{2}$",
+      "flags": "d",
+      "subject": "uu",
+      "start_utf16": 0
+    },
+    {
+      "id": "line-separator-anchor",
+      "source": "^b",
+      "flags": "dm",
+      "subject": "a\u2028b",
+      "start_utf16": 0
+    },
+    {
+      "id": "dot-rejects-line-separator",
+      "source": ".",
+      "flags": "d",
+      "subject": "\u2028",
+      "start_utf16": 0
+    },
+    {
+      "id": "dotall-line-separator",
+      "source": ".",
+      "flags": "ds",
+      "subject": "\u2028",
+      "start_utf16": 0
+    },
+    {
+      "id": "capture-capacity-254",
+      "source": "()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()",
+      "flags": "d",
+      "subject": "",
+      "start_utf16": 0
+    },
+    {
+      "id": "capture-capacity-255",
+      "source": "()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()",
+      "flags": "d",
+      "subject": "",
+      "start_utf16": 0
+    },
+    {
+      "id": "capture-capacity-256",
+      "source": "()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()",
+      "flags": "d",
+      "subject": "",
+      "start_utf16": 0
+    },
+    {
+      "id": "invalid-group",
+      "source": "(",
+      "flags": "du",
+      "subject": "",
+      "start_utf16": 0
+    },
+    {
+      "id": "invalid-range",
+      "source": "[z-a]",
+      "flags": "du",
+      "subject": "",
+      "start_utf16": 0
+    },
+    {
+      "id": "invalid-duplicate-name",
+      "source": "(?<a>x)(?<a>y)",
+      "flags": "du",
+      "subject": "",
+      "start_utf16": 0
+    },
+    {
+      "id": "invalid-unicode-flags",
+      "source": "a",
+      "flags": "duv",
+      "subject": "a",
+      "start_utf16": 0
+    },
+    {
+      "id": "invalid-flag",
+      "source": "a",
+      "flags": "dz",
+      "subject": "a",
+      "start_utf16": 0
+    }
+  ]
+}

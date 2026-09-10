@@ -1,0 +1,11 @@
+[package]
+name = "perex"
+version = "0.0.0"
+edition = "2024"
+description = "An ECMAScript regex engine designed for explicit host memory ownership"
+license = "MIT"
+repository = "https://github.com/PerryTS/perex"
+readme = "README.md"
+publish = false
+
+[dependencies]

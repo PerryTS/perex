@@ -1,0 +1,4 @@
+/target/
+/artifacts/
+__pycache__/
+.DS_Store
