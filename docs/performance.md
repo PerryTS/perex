@@ -26,7 +26,9 @@ No finite benchmark suite proves fastest behavior for all possible patterns, inp
 
 ## Current measurement tool
 
-`examples/input_cost.rs` decomposes the implemented input layer only. It creates one roughly 256 KiB subject and repeatedly validates or traverses that same allocation; seeking targets the middle. A host can measure process CPU and peak RSS externally, preserving stdout checksums and state sizes. This is a setup-cost diagnostic, not an engine comparison or an adoption result:
+`examples/input_cost.rs` decomposes the implemented input layer only. It creates one roughly 256 KiB subject and repeatedly validates or traverses that same allocation; seeking targets the middle. Cases cover ASCII, multibyte BMP, astral characters, separately encoded surrogate pairs, lone surrogates, original UTF-16 ASCII and original UTF-16 astral storage. Each constructs its original representation directly; the UTF-16 cases do not convert a byte subject for traversal.
+
+Modes are `validate`, `forward`, `backward` and `seek`. Output includes a checksum, subject byte/unit lengths, iteration count, input/cursor state sizes and `loop_ns`. Subject construction and the initial input borrow precede that internal timer; process CPU and peak RSS measured externally also include setup. Keep both costs explicit and use the identical driver on both engines or revisions being compared. This is an input-cost diagnostic, not a whole-engine comparison or an adoption result:
 
 ```sh
 cargo build --locked --release --example input_cost

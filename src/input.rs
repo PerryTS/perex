@@ -20,6 +20,7 @@ impl core::error::Error for EncodingError {}
 
 #[derive(Clone, Copy, Debug)]
 enum Storage<'a> {
+    Ascii(&'a [u8]),
     Bytes(&'a [u8]),
     Units(&'a [u16]),
 }
@@ -32,7 +33,6 @@ enum Storage<'a> {
 pub struct Input<'a> {
     storage: Storage<'a>,
     utf16_len: usize,
-    ascii: bool,
 }
 
 impl<'a> Input<'a> {
@@ -41,7 +41,6 @@ impl<'a> Input<'a> {
         Self {
             storage: Storage::Units(units),
             utf16_len: units.len(),
-            ascii: false,
         }
     }
 
@@ -49,9 +48,12 @@ impl<'a> Input<'a> {
     pub fn utf8(text: &'a str) -> Self {
         let utf16_len = text.chars().map(char::len_utf16).sum();
         Self {
-            storage: Storage::Bytes(text.as_bytes()),
+            storage: if utf16_len == text.len() {
+                Storage::Ascii(text.as_bytes())
+            } else {
+                Storage::Bytes(text.as_bytes())
+            },
             utf16_len,
-            ascii: utf16_len == text.len(),
         }
     }
 
@@ -71,9 +73,12 @@ impl<'a> Input<'a> {
             utf16_len += if point > 0xffff { 2 } else { 1 };
         }
         Ok(Self {
-            storage: Storage::Bytes(bytes),
+            storage: if utf16_len == bytes.len() {
+                Storage::Ascii(bytes)
+            } else {
+                Storage::Bytes(bytes)
+            },
             utf16_len,
-            ascii: utf16_len == bytes.len(),
         })
     }
 
@@ -90,7 +95,7 @@ impl<'a> Input<'a> {
     /// UTF-16 storage returns `None`, even when all its units happen to be ASCII.
     pub fn ascii_bytes(self) -> Option<&'a [u8]> {
         match self.storage {
-            Storage::Bytes(bytes) if self.ascii => Some(bytes),
+            Storage::Ascii(bytes) => Some(bytes),
             _ => None,
         }
     }
@@ -99,13 +104,13 @@ impl<'a> Input<'a> {
     // match inside a multibyte encoding. This never constructs a new buffer.
     pub(crate) fn original_bytes(self) -> Option<&'a [u8]> {
         match self.storage {
-            Storage::Bytes(bytes) => Some(bytes),
+            Storage::Ascii(bytes) | Storage::Bytes(bytes) => Some(bytes),
             Storage::Units(_) => None,
         }
     }
 
     pub(crate) fn seek_work(self, position: usize) -> usize {
-        if self.ascii || matches!(self.storage, Storage::Units(_)) {
+        if !matches!(self.storage, Storage::Bytes(_)) {
             1
         } else {
             position.min(self.utf16_len - position).saturating_add(1)
@@ -117,7 +122,6 @@ impl<'a> Input<'a> {
             input: self,
             offset: 0,
             utf16_offset: 0,
-            second_half: false,
         }
     }
 
@@ -131,12 +135,11 @@ impl<'a> Input<'a> {
         if utf16_offset > self.utf16_len {
             return None;
         }
-        if matches!(self.storage, Storage::Units(_)) || self.ascii {
+        if !matches!(self.storage, Storage::Bytes(_)) {
             return Some(Cursor {
                 input: self,
                 offset: utf16_offset,
                 utf16_offset,
-                second_half: false,
             });
         }
         let mut cursor = self.cursor();
@@ -147,7 +150,7 @@ impl<'a> Input<'a> {
         } else {
             cursor.offset = match self.storage {
                 Storage::Bytes(bytes) => bytes.len(),
-                Storage::Units(_) => unreachable!(),
+                Storage::Ascii(_) | Storage::Units(_) => unreachable!(),
             };
             cursor.utf16_offset = self.utf16_len;
             while cursor.utf16_offset > utf16_offset {
@@ -175,20 +178,26 @@ impl<'a> Input<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct Cursor<'a> {
     input: Input<'a>,
-    // Byte offset for Bytes; unit offset for Units. When second_half is true,
-    // this points to the four-byte scalar containing the next low surrogate.
+    // Byte offset for Bytes; unit offset for Units/Ascii. HALF marks a position
+    // between the units of the four-byte scalar at the remaining offset bits.
     offset: usize,
     utf16_offset: usize,
-    second_half: bool,
 }
 
 // Execution-local checkpoints contain no subject pointer. Only the evaluator
 // may restore them, and only on the same immutable input borrow that made them.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Mark {
+    // A valid u8/u16 slice occupies at most isize::MAX bytes. Its endpoint
+    // therefore leaves this bit free, without imposing a new input size limit.
     offset: usize,
     units: usize,
-    half: bool,
+}
+const HALF: usize = 1usize << (usize::BITS - 1);
+
+fn pack_offset(offset: usize, half: bool) -> usize {
+    debug_assert_eq!(offset & HALF, 0);
+    offset | if half { HALF } else { 0 }
 }
 
 impl Cursor<'_> {
@@ -196,13 +205,11 @@ impl Cursor<'_> {
         Mark {
             offset: self.offset,
             units: self.utf16_offset,
-            half: self.second_half,
         }
     }
     pub(crate) fn restore(&mut self, mark: Mark) {
         self.offset = mark.offset;
         self.utf16_offset = mark.units;
-        self.second_half = mark.half;
     }
 
     pub fn position(self) -> usize {
@@ -211,25 +218,30 @@ impl Cursor<'_> {
 
     pub fn next_unit(&mut self) -> Option<u16> {
         let unit = match self.input.storage {
+            Storage::Ascii(bytes) => {
+                let unit = u16::from(*bytes.get(self.offset)?);
+                self.offset += 1;
+                unit
+            }
             Storage::Units(units) => {
                 let unit = *units.get(self.offset)?;
                 self.offset += 1;
                 unit
             }
             Storage::Bytes(bytes) => {
-                if self.offset == bytes.len() {
+                let offset = self.offset & !HALF;
+                if offset == bytes.len() {
                     return None;
                 }
-                let (point, width) = decode_valid(bytes, self.offset);
+                let (point, width) = decode_valid(bytes, offset);
                 if point <= 0xffff {
-                    self.offset += width;
+                    self.offset = offset + width;
                     point as u16
-                } else if self.second_half {
-                    self.second_half = false;
-                    self.offset += width;
+                } else if self.offset & HALF != 0 {
+                    self.offset = offset + width;
                     low_surrogate(point)
                 } else {
-                    self.second_half = true;
+                    self.offset = pack_offset(offset, true);
                     high_surrogate(point)
                 }
             }
@@ -243,13 +255,17 @@ impl Cursor<'_> {
             return None;
         }
         let unit = match self.input.storage {
+            Storage::Ascii(bytes) => {
+                self.offset -= 1;
+                u16::from(bytes[self.offset])
+            }
             Storage::Units(units) => {
                 self.offset -= 1;
                 units[self.offset]
             }
             Storage::Bytes(bytes) => {
-                if self.second_half {
-                    self.second_half = false;
+                if self.offset & HALF != 0 {
+                    self.offset &= !HALF;
                     high_surrogate(decode_valid(bytes, self.offset).0)
                 } else {
                     self.offset -= 1;
@@ -258,7 +274,7 @@ impl Cursor<'_> {
                     }
                     let point = decode_valid(bytes, self.offset).0;
                     if point > 0xffff {
-                        self.second_half = true;
+                        self.offset = pack_offset(self.offset, true);
                         low_surrogate(point)
                     } else {
                         point as u16
@@ -276,15 +292,22 @@ impl Cursor<'_> {
     /// `normalize_unicode_start` separately for RegExp search initialization.
     pub fn next_point(&mut self) -> Option<u32> {
         let first = match self.input.storage {
+            Storage::Ascii(bytes) => {
+                let point = u32::from(*bytes.get(self.offset)?);
+                self.offset += 1;
+                self.utf16_offset += 1;
+                return Some(point);
+            }
             Storage::Units(_) => self.next_unit()?,
             Storage::Bytes(bytes) => {
-                if self.offset == bytes.len() {
+                let offset = self.offset & !HALF;
+                if offset == bytes.len() {
                     return None;
                 }
-                let (point, width) = decode_valid(bytes, self.offset);
-                self.offset += width;
-                if self.second_half {
-                    self.second_half = false;
+                let (point, width) = decode_valid(bytes, offset);
+                let half = self.offset & HALF != 0;
+                self.offset = offset + width;
+                if half {
                     self.utf16_offset += 1;
                     return Some(u32::from(low_surrogate(point)));
                 }
@@ -318,10 +341,15 @@ impl Cursor<'_> {
             return None;
         }
         let last = match self.input.storage {
+            Storage::Ascii(bytes) => {
+                self.offset -= 1;
+                self.utf16_offset -= 1;
+                return Some(u32::from(bytes[self.offset]));
+            }
             Storage::Units(_) => self.previous_unit()?,
             Storage::Bytes(bytes) => {
-                if self.second_half {
-                    self.second_half = false;
+                if self.offset & HALF != 0 {
+                    self.offset &= !HALF;
                     self.utf16_offset -= 1;
                     return Some(u32::from(high_surrogate(
                         decode_valid(bytes, self.offset).0,
@@ -443,4 +471,80 @@ fn decode_valid(bytes: &[u8], offset: usize) -> (u32, usize) {
         point = (point << 6) | u32::from(byte & 0x3f);
     }
     (point, width)
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+
+    #[test]
+    fn packing_preserves_every_offset_bit_up_to_a_valid_slice_endpoint() {
+        for half in [false, true] {
+            for offset in [0, 1, HALF - 2, HALF - 1]
+                .into_iter()
+                .chain((0..usize::BITS - 1).map(|bit| 1usize << bit))
+            {
+                let mark = Mark {
+                    offset: pack_offset(offset, half),
+                    units: offset,
+                };
+                assert_eq!(mark.offset & !HALF, offset);
+                assert_eq!(mark.offset & HALF != 0, half);
+                assert_eq!(mark.units, offset);
+            }
+        }
+        assert_eq!(
+            core::mem::size_of::<Mark>(),
+            2 * core::mem::size_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn restoring_each_boundary_preserves_forward_and_reverse_surrogate_reads() {
+        let units = [0x61, 0xd83d, 0xde00, 0x62];
+        let cesu = [0x61, 0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80, 0x62];
+        let ascii = [0x61, 0x62, 0x63];
+        for (input, expected) in [
+            (Input::utf8("a😀b"), units.as_slice()),
+            (Input::wtf8(&cesu).unwrap(), units.as_slice()),
+            (Input::utf16(&units), units.as_slice()),
+            (Input::utf8("abc"), ascii.as_slice()),
+        ] {
+            for at in 0..=expected.len() {
+                let mut cursor = input.cursor_at(at).unwrap();
+                let mark = cursor.mark();
+                while cursor.next_point().is_some() {}
+                cursor.restore(mark);
+                assert_eq!(cursor.position(), at);
+                for &unit in &expected[at..] {
+                    assert_eq!(cursor.next_unit(), Some(unit));
+                }
+                assert_eq!(cursor.next_unit(), None);
+                cursor.restore(mark);
+                for &unit in expected[..at].iter().rev() {
+                    assert_eq!(cursor.previous_unit(), Some(unit));
+                }
+                assert_eq!(cursor.previous_unit(), None);
+                cursor.restore(mark);
+                for point in core::char::decode_utf16(expected[at..].iter().copied()) {
+                    let value =
+                        point.map_or_else(|e| u32::from(e.unpaired_surrogate()), |c| c as u32);
+                    assert_eq!(cursor.next_point(), Some(value));
+                }
+                assert_eq!(cursor.next_point(), None);
+                let mut points = [0; 4];
+                let mut length = 0;
+                for point in core::char::decode_utf16(expected[..at].iter().copied()) {
+                    points[length] =
+                        point.map_or_else(|e| u32::from(e.unpaired_surrogate()), |c| c as u32);
+                    length += 1;
+                }
+                cursor.restore(mark);
+                for &point in points[..length].iter().rev() {
+                    assert_eq!(cursor.previous_point(), Some(point));
+                }
+                assert_eq!(cursor.previous_point(), None);
+            }
+        }
+    }
 }
