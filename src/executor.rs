@@ -1,4 +1,4 @@
-//! One ordered bytecode evaluator, with host-owned bounded scratch.
+//! One ordered evaluator with caller-owned scratch and resumable offset state.
 use crate::{
     Budget, casefold,
     input::{Cursor, Input, Mark},
@@ -7,39 +7,15 @@ use crate::{
     span::Span,
 };
 mod admission;
+mod state;
+use state::*;
 const UNSET: usize = usize::MAX;
 
 fn equal(program: Program<'_>, left: u32, right: u32) -> bool {
     left == right || (program.words[2] & I != 0 && casefold::equal(left, right, program.unicode()))
 }
-fn class_matches(
-    program: Program<'_>,
-    a: u32,
-    b: u32,
-    c: u32,
-    budget: &mut Budget,
-) -> Result<bool, ExecError> {
-    let values = if program.words[2] & I != 0 {
-        casefold::equivalents(c, program.unicode())
-    } else {
-        [c; 4]
-    };
-    let mut found = false;
-    for i in a..a + (b & !NEGATED) {
-        budget.charge(1).map_err(|_| ExecError::WorkLimit)?;
-        let [lo, hi] = program.range(i as usize);
-        if values.iter().any(|&value| {
-            if lo & PROPERTY != 0 {
-                properties::contains(lo & !PROPERTY, value) != (hi != 0)
-            } else {
-                value >= lo && value <= hi
-            }
-        }) {
-            found = true;
-            break;
-        }
-    }
-    Ok(found != (b & NEGATED != 0))
+fn line_terminator(c: u32) -> bool {
+    matches!(c, 10 | 13 | 0x2028 | 0x2029)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,6 +26,9 @@ pub enum ExecError {
     Undo,
     Captures,
     InvalidProgram,
+    ChangedResources,
+    Cancelled,
+    NotMatched,
 }
 
 /// Caller-owned backtracking/assertion storage. Fields contain offsets only.
@@ -69,24 +48,320 @@ pub struct Undo {
     value: usize,
 }
 
-/// Scratch may be stack storage, an accounted arena or ordinary host buffers.
-/// The evaluator never grows it, allocates, retains a borrow, or calls the host.
+/// Scratch is exclusively borrowed by an active or paused search. It never
+/// grows implicitly and must not contain untraced host object references.
 pub struct Scratch<'a> {
     pub registers: &'a mut [usize],
     pub frames: &'a mut [Frame],
     pub undo: &'a mut [Undo],
 }
-struct Vm<'a, 'p, 's, 'b> {
+
+/// Owner of initialized scratch buffers. Views must preserve all live entries
+/// between calls. Acquiring a view must not allocate, collect, call the host or
+/// change live contents. Allocate replacement owners between advances and use
+/// `Search::rebuffer` to transfer state. The engine owns this value exclusively.
+pub trait ScratchOwner {
+    fn scratch(&mut self) -> Scratch<'_>;
+}
+impl ScratchOwner for Scratch<'_> {
+    fn scratch(&mut self) -> Scratch<'_> {
+        Scratch {
+            registers: self.registers,
+            frames: self.frames,
+            undo: self.undo,
+        }
+    }
+}
+
+/// A rooted, immutable program/subject pair whose backing allocations may move.
+///
+/// Every callback must observe the SAME program words and subject representation
+/// for this resource object's entire search lifetime. Relocation may change
+/// addresses, never contents or encoding. Implementors own roots, sharing rules
+/// and borrow guards. Views must be released before collection, callbacks or
+/// allocation that can move them. Length checks cannot prove immutable identity.
+/// Violating this semantic contract may yield incorrect answers or panic; it
+/// never authorizes unsafe code in the evaluator.
+///
+/// The callback cannot return a view borrowed from its arguments. This keeps
+/// subject/program borrows inside one advance. Existing safe constructors still
+/// validate/count when acquiring views; avoiding repeated validation in a GC
+/// adapter requires a separately established owner invariant.
+///
+/// ```compile_fail
+/// use perex::{executor::Resources, input::Input};
+/// fn escape<R: Resources>(owner: &R) -> Input<'_> {
+///     owner.with_views(|_, input| input).ok().unwrap()
+/// }
+/// ```
+pub trait Resources {
+    type Error;
+    fn with_views<T>(
+        &self,
+        use_views: impl FnOnce(Program<'_>, Input<'_>) -> T,
+    ) -> Result<T, Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Progress {
+    Pending,
+    Matched,
+    NoMatch,
+}
+#[derive(Debug)]
+pub enum SearchError<E> {
+    Resource(E),
+    Execution(ExecError),
+}
+
+/// Minimum capacities that preserve live state and satisfy the current request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScratchRequirements {
+    pub registers: usize,
+    pub frames: usize,
+    pub undo: usize,
+}
+
+/// Failed rebinding returns the unchanged operation and all supplied buffers.
+pub struct RebufferError<S, B> {
+    pub error: ExecError,
+    pub search: S,
+    pub buffers: B,
+}
+
+/// One operation retaining roots, offset-only state and exclusive scratch.
+/// No subject/program view survives `advance`. The operation-wide budget is
+/// never replenished by a pause. Frame/undo requests retain the pending update;
+/// caller-owned replacement buffers can resume it through `rebuffer`.
+pub struct Search<'r, R: Resources, B: ScratchOwner> {
+    resources: &'r R,
+    buffers: B,
+    shape: Shape,
+    state: State,
+    budget: Budget,
+}
+impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
+    pub fn new(
+        resources: &'r R,
+        start_utf16: usize,
+        mut buffers: B,
+        budget: Budget,
+    ) -> Result<Self, SearchError<R::Error>> {
+        let shape = resources
+            .with_views(Shape::new)
+            .map_err(SearchError::Resource)?;
+        if buffers.scratch().registers.len() < shape.registers() {
+            return Err(SearchError::Execution(ExecError::Registers));
+        }
+        Ok(Self {
+            resources,
+            buffers,
+            shape,
+            state: State::new(start_utf16, shape.input.2),
+            budget,
+        })
+    }
+
+    pub fn remaining_work(&self) -> usize {
+        self.budget.remaining()
+    }
+
+    /// Run toward a requested work quantum, then release every view. Zero
+    /// performs no work. Atomic bounded steps may exceed the quantum: at most
+    /// one 256-byte admission chunk plus 32 comparisons per candidate (8,448
+    /// work units). Long seeks, register operations, classes and backreferences
+    /// are incremental. View acquisition/validation belongs to `Resources` and
+    /// is outside this quantum; it is not yet an efficient host reborrow API.
+    pub fn advance(&mut self, quantum: usize) -> Result<Progress, SearchError<R::Error>> {
+        if let Some(error) = self.state.blocked {
+            return Err(SearchError::Execution(error));
+        }
+        if let Some(outcome) = self.state.phase.outcome() {
+            return outcome.map_err(SearchError::Execution);
+        }
+        if quantum == 0 {
+            return Ok(Progress::Pending);
+        }
+        let result = self
+            .resources
+            .with_views(|program, input| {
+                if Shape::new(program, input) != self.shape {
+                    return Err(ExecError::ChangedResources);
+                }
+                let cursor = input
+                    .resume_cursor(self.state.current)
+                    .ok_or(ExecError::ChangedResources)?;
+                let mut scratch = self.buffers.scratch();
+                if scratch.registers.len() < self.shape.registers()
+                    || scratch.frames.len() < self.state.frames
+                    || scratch.undo.len() < self.state.undo
+                {
+                    return Err(ExecError::ChangedResources);
+                }
+                let mut vm = Vm {
+                    program,
+                    input,
+                    cursor,
+                    scratch: &mut scratch,
+                    state: &mut self.state,
+                    budget: &mut self.budget,
+                };
+                let result = vm.run(quantum);
+                vm.state.current = vm.cursor.mark();
+                result
+            })
+            .map_err(SearchError::Resource)?;
+        if let Err(error) = result {
+            if matches!(error, ExecError::Frames | ExecError::Undo) {
+                self.state.blocked = Some(error);
+            } else {
+                self.state.phase = Phase::Failed(error);
+            }
+        }
+        result.map_err(SearchError::Execution)
+    }
+
+    pub fn cancel(&mut self) {
+        if self.state.phase.outcome().is_none() {
+            self.state.blocked = None;
+            self.state.phase = Phase::Failed(ExecError::Cancelled);
+        }
+    }
+
+    pub fn capture_count(&self) -> usize {
+        self.shape.header[3] as usize
+    }
+
+    /// Read one validated capture without allocating or borrowing a subject.
+    pub fn capture(&mut self, index: usize) -> Result<Option<Span>, ExecError> {
+        self.require_match()?;
+        if index >= self.capture_count() {
+            return Err(ExecError::Captures);
+        }
+        let scratch = self.buffers.scratch();
+        let lo = *scratch
+            .registers
+            .get(index * 2)
+            .ok_or(ExecError::ChangedResources)?;
+        let hi = *scratch
+            .registers
+            .get(index * 2 + 1)
+            .ok_or(ExecError::ChangedResources)?;
+        Ok(if lo == UNSET || hi == UNSET {
+            None
+        } else {
+            Span::new(lo, hi)
+        })
+    }
+
+    fn require_match(&self) -> Result<(), ExecError> {
+        if let Some(error) = self.state.blocked {
+            return Err(error);
+        }
+        match self.state.phase {
+            Phase::Finished(true) => {}
+            Phase::Failed(error) => return Err(error),
+            _ => return Err(ExecError::NotMatched),
+        }
+        Ok(())
+    }
+
+    /// Copy spans only after a completed match. Output stays untouched for
+    /// pending/no-match/error and insufficient output capacity.
+    pub fn copy_captures(&mut self, output: &mut [Option<Span>]) -> Result<(), ExecError> {
+        if output.len() < self.capture_count() {
+            return Err(ExecError::Captures);
+        }
+        self.require_match()?;
+        let count = self.capture_count();
+        let scratch = self.buffers.scratch();
+        let registers = scratch
+            .registers
+            .get(..count * 2)
+            .ok_or(ExecError::ChangedResources)?;
+        for (i, target) in output[..count].iter_mut().enumerate() {
+            let lo = registers[i * 2];
+            let hi = registers[i * 2 + 1];
+            *target = if lo == UNSET || hi == UNSET {
+                None
+            } else {
+                Span::new(lo, hi)
+            };
+        }
+        Ok(())
+    }
+
+    pub fn required_scratch(&self) -> ScratchRequirements {
+        ScratchRequirements {
+            registers: self.shape.registers(),
+            frames: self.state.frames + usize::from(self.state.blocked == Some(ExecError::Frames)),
+            undo: self.state.undo + usize::from(self.state.blocked == Some(ExecError::Undo)),
+        }
+    }
+
+    /// Move live scratch metadata to caller-owned replacement buffers between
+    /// advances. This consumes the old borrow, so the caller can free the old
+    /// allocations while the returned search continues. No subject is copied.
+    /// A frame/undo request resumes at its pending update without replaying work.
+    /// Capacity checks precede writes; failure returns both owners unchanged.
+    // Returning the original search on failure is deliberate: boxing it would
+    // introduce an allocation into the core's failure/ownership boundary.
+    #[allow(clippy::result_large_err)]
+    pub fn rebuffer<N: ScratchOwner>(
+        mut self,
+        mut buffers: N,
+    ) -> Result<Search<'r, R, N>, RebufferError<Self, N>> {
+        let need = self.required_scratch();
+        let target = buffers.scratch();
+        let error = if target.registers.len() < need.registers {
+            Some(ExecError::Registers)
+        } else if target.frames.len() < need.frames {
+            Some(ExecError::Frames)
+        } else if target.undo.len() < need.undo {
+            Some(ExecError::Undo)
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            return Err(RebufferError {
+                error,
+                search: self,
+                buffers,
+            });
+        }
+        let source = self.buffers.scratch();
+        if source.registers.len() < need.registers
+            || source.frames.len() < self.state.frames
+            || source.undo.len() < self.state.undo
+        {
+            return Err(RebufferError {
+                error: ExecError::ChangedResources,
+                search: self,
+                buffers,
+            });
+        }
+        target.registers[..need.registers].copy_from_slice(&source.registers[..need.registers]);
+        target.frames[..self.state.frames].copy_from_slice(&source.frames[..self.state.frames]);
+        target.undo[..self.state.undo].copy_from_slice(&source.undo[..self.state.undo]);
+        let mut state = self.state;
+        state.blocked = None;
+        Ok(Search {
+            resources: self.resources,
+            buffers,
+            shape: self.shape,
+            state,
+            budget: self.budget,
+        })
+    }
+}
+
+struct Vm<'a, 'p, 's, 'w> {
     program: Program<'p>,
     input: Input<'a>,
     cursor: Cursor<'a>,
-    scratch: Scratch<'s>,
-    budget: &'b mut Budget,
-    pc: usize,
-    frames: usize,
-    undo: usize,
-    assertion: usize,
-    reverse: bool,
+    scratch: &'w mut Scratch<'s>,
+    state: &'w mut State,
+    budget: &'w mut Budget,
 }
 impl Vm<'_, '_, '_, '_> {
     fn charge(&mut self, n: usize) -> Result<(), ExecError> {
@@ -98,26 +373,16 @@ impl Vm<'_, '_, '_, '_> {
             .registers
             .get(slot)
             .ok_or(ExecError::InvalidProgram)?;
-        if old == value {
-            return Ok(());
-        }
-        if self.frames > 0 {
-            *self
-                .scratch
-                .undo
-                .get_mut(self.undo)
-                .ok_or(ExecError::Undo)? = Undo { slot, value: old };
-            self.undo += 1;
-        }
-        self.scratch.registers[slot] = value;
-        Ok(())
-    }
-    fn rollback(&mut self, until: usize) -> Result<(), ExecError> {
-        while self.undo > until {
-            self.charge(1)?;
-            self.undo -= 1;
-            let old = self.scratch.undo[self.undo];
-            self.scratch.registers[old.slot] = old.value;
+        if old != value {
+            if self.state.frames > 0 {
+                *self
+                    .scratch
+                    .undo
+                    .get_mut(self.state.undo)
+                    .ok_or(ExecError::Undo)? = Undo { slot, value: old };
+                self.state.undo += 1;
+            }
+            self.scratch.registers[slot] = value;
         }
         Ok(())
     }
@@ -125,260 +390,552 @@ impl Vm<'_, '_, '_, '_> {
         *self
             .scratch
             .frames
-            .get_mut(self.frames)
+            .get_mut(self.state.frames)
             .ok_or(ExecError::Frames)? = Frame {
             pc,
             position: self.cursor.mark(),
-            undo: self.undo,
-            assertion: self.assertion,
+            undo: self.state.undo,
+            assertion: self.state.assertion,
             kind,
-            reverse: self.reverse,
+            reverse: self.state.reverse,
         };
-        self.frames += 1;
+        self.state.frames += 1;
         Ok(())
     }
-    fn fail(&mut self) -> Result<bool, ExecError> {
-        while self.frames > 0 {
-            self.charge(1)?;
-            self.frames -= 1;
-            let frame = self.scratch.frames[self.frames];
-            self.rollback(frame.undo)?;
-            self.cursor.restore(frame.position);
-            self.reverse = frame.reverse;
-            self.assertion = frame.assertion;
-            if self.frames == 0 {
-                self.undo = 0;
-            }
-            if frame.kind != 1 {
-                self.pc = frame.pc;
-                return Ok(true);
-            }
-            // Positive assertion failure propagates; negative assertion failure
-            // succeeds. Work/memory errors never enter this failure path.
-        }
-        Ok(false)
-    }
     fn read(&mut self) -> Option<u32> {
-        match (self.program.unicode(), self.reverse) {
-            (true, false) => self.cursor.next_point(),
-            (true, true) => self.cursor.previous_point(),
-            (false, false) => self.cursor.next_unit().map(u32::from),
-            (false, true) => self.cursor.previous_unit().map(u32::from),
-        }
+        read(&mut self.cursor, self.program.unicode(), self.state.reverse)
     }
-    fn equal(&self, left: u32, right: u32) -> bool {
-        equal(self.program, left, right)
+    fn success(&mut self, success: bool) {
+        self.state.phase = if success { Phase::Trial } else { Phase::Fail };
     }
-    fn trial(&mut self) -> Result<bool, ExecError> {
-        loop {
+    fn restore(&mut self, mark: Mark) -> Result<(), ExecError> {
+        self.cursor = self
+            .input
+            .resume_cursor(mark)
+            .ok_or(ExecError::ChangedResources)?;
+        Ok(())
+    }
+    fn seek(&mut self, target: usize, after: AfterSeek, available: usize) -> Result<(), ExecError> {
+        let work = self.input.seek_work(target);
+        if work == 1 || work <= available {
+            self.charge(work)?;
+            self.cursor = self
+                .input
+                .cursor_at(target)
+                .ok_or(ExecError::InvalidProgram)?;
+            self.sought(after)?;
+        } else {
             self.charge(1)?;
-            if self.pc >= self.program.instructions() {
+            self.cursor = self
+                .input
+                .cursor_at(if target <= self.input.len_utf16() / 2 {
+                    0
+                } else {
+                    self.input.len_utf16()
+                })
+                .unwrap();
+            self.state.phase = Phase::Seek { target, after };
+        }
+        Ok(())
+    }
+    fn sought(&mut self, after: AfterSeek) -> Result<(), ExecError> {
+        match after {
+            AfterSeek::Start => {
+                if self.program.unicode() {
+                    self.cursor.normalize_unicode_start();
+                }
+                self.state.start = self.cursor.mark();
+                self.state.phase = Phase::Initialize(0);
+            }
+            AfterSeek::Backref {
+                start,
+                end,
+                matched,
+            } => {
+                let captured = self.cursor.mark();
+                self.restore(matched)?;
+                self.state.phase = Phase::Backref {
+                    start,
+                    end,
+                    captured,
+                };
+            }
+        }
+        Ok(())
+    }
+    fn backref(&mut self, index: usize, available: usize) -> Result<(), ExecError> {
+        let start = self.scratch.registers[index * 2];
+        let end = self.scratch.registers[index * 2 + 1];
+        if start == UNSET || end == UNSET {
+            self.state.phase = Phase::Trial;
+        } else {
+            if start > end || end > self.input.len_utf16() {
                 return Err(ExecError::InvalidProgram);
             }
-            let [op, a, b] = self.program.instruction(self.pc);
-            self.pc += 1;
-            let mut success = true;
-            match op {
-                MATCH => {
-                    if self.assertion != UNSET {
-                        return Err(ExecError::InvalidProgram);
-                    }
-                    return Ok(true);
+            let after = AfterSeek::Backref {
+                start,
+                end,
+                matched: self.cursor.mark(),
+            };
+            self.seek(
+                if self.state.reverse { end } else { start },
+                after,
+                available,
+            )?;
+        }
+        Ok(())
+    }
+    fn begin_class(&mut self, a: u32, b: u32, c: u32, admission: bool) {
+        let values = if self.program.words[2] & I != 0 {
+            casefold::equivalents(c, self.program.unicode())
+        } else {
+            [c; 4]
+        };
+        self.state.phase = Phase::Class {
+            index: a,
+            end: a + (b & !NEGATED),
+            negated: b & NEGATED != 0,
+            values,
+            admission,
+        };
+    }
+    fn class_result(&mut self, found: bool, negated: bool, admission: bool) {
+        let success = found != negated;
+        if admission {
+            self.state.phase = if success {
+                Phase::Start
+            } else {
+                Phase::AdmitClass
+            };
+        } else {
+            self.success(success);
+        }
+    }
+    fn run(&mut self, quantum: usize) -> Result<Progress, ExecError> {
+        let initial = self.budget.remaining();
+        loop {
+            if let Some(result) = self.state.phase.outcome() {
+                return result;
+            }
+            let used = initial - self.budget.remaining();
+            if used >= quantum {
+                return Ok(Progress::Pending);
+            }
+            let available = quantum - used;
+            match self.state.phase {
+                Phase::Admission
+                | Phase::AdmitBytes { .. }
+                | Phase::AdmitByteClass { .. }
+                | Phase::AdmitClass
+                | Phase::AdmitSuffix(_)
+                | Phase::AdmitScan
+                | Phase::AdmitProbe { .. } => self.admit_step()?,
+                Phase::Start => {
+                    self.seek(self.state.requested_start, AfterSeek::Start, available)?
                 }
-                CHAR => success = self.read().is_some_and(|c| self.equal(c, a)),
-                ANY => {
-                    success = self
-                        .read()
-                        .is_some_and(|c| self.program.words[2] & S != 0 || !line_terminator(c))
-                }
-                CLASS => {
-                    if let Some(c) = self.read() {
-                        success = class_matches(self.program, a, b, c, self.budget)?;
+                Phase::Seek { target, after } => {
+                    if self.cursor.position() == target {
+                        self.sought(after)?;
                     } else {
-                        success = false;
-                    }
-                }
-                SAVE => self.store(a as usize, self.cursor.position())?,
-                SPLIT => {
-                    self.push(b as usize, 0)?;
-                    self.pc = a as usize;
-                }
-                JUMP => self.pc = a as usize,
-                START => {
-                    let mut previous = self.cursor;
-                    success = self.cursor.position() == 0
-                        || (self.program.words[2] & M != 0
-                            && previous
-                                .previous_unit()
-                                .is_some_and(|u| line_terminator(u32::from(u))));
-                }
-                END => {
-                    let mut next = self.cursor;
-                    success = self.cursor.position() == self.input.len_utf16()
-                        || (self.program.words[2] & M != 0
-                            && next
-                                .next_unit()
-                                .is_some_and(|u| line_terminator(u32::from(u))));
-                }
-                WORD => {
-                    let mut before = self.cursor;
-                    let mut after = self.cursor;
-                    let ui = self.program.words[2] & (U | I) == U | I;
-                    let left = if self.program.unicode() {
-                        before.previous_point()
-                    } else {
-                        before.previous_unit().map(u32::from)
-                    };
-                    let right = if self.program.unicode() {
-                        after.next_point()
-                    } else {
-                        after.next_unit().map(u32::from)
-                    };
-                    success = (left.is_some_and(|c| casefold::word(c, ui))
-                        != right.is_some_and(|c| casefold::word(c, ui)))
-                        != (a != 0);
-                }
-                BACKREF | NAMED_BACKREF => {
-                    let a = if op == NAMED_BACKREF {
-                        let group = self
-                            .program
-                            .named_group(a as usize)
-                            .ok_or(ExecError::InvalidProgram)?;
-                        let mut selected = None;
-                        for &index in group.capture_indices() {
-                            self.charge(1)?;
-                            if self.scratch.registers[index as usize * 2] != UNSET
-                                && self.scratch.registers[index as usize * 2 + 1] != UNSET
-                            {
-                                if selected.is_some() {
-                                    return Err(ExecError::InvalidProgram);
-                                }
-                                selected = Some(index);
-                            }
-                        }
-                        // With no completed capture the reference matches empty,
-                        // including a forward or self reference.
-                        let Some(index) = selected else {
-                            continue;
+                        self.charge(1)?;
+                        let unit = if self.cursor.position() < target {
+                            self.cursor.next_unit()
+                        } else {
+                            self.cursor.previous_unit()
                         };
-                        index
-                    } else {
-                        a
-                    };
-                    let start = self.scratch.registers[a as usize * 2];
-                    let end = self.scratch.registers[a as usize * 2 + 1];
-                    if start != UNSET && end != UNSET {
-                        if start > end || end > self.input.len_utf16() {
+                        if unit.is_none() {
                             return Err(ExecError::InvalidProgram);
                         }
-                        let at = if self.reverse { end } else { start };
-                        self.charge(self.input.seek_work(at))?;
-                        let mut captured =
-                            self.input.cursor_at(at).ok_or(ExecError::InvalidProgram)?;
-                        let until = if self.reverse { start } else { end };
-                        while captured.position() != until {
-                            self.charge(1)?;
-                            let left = match (self.program.unicode(), self.reverse) {
-                                (true, false) => captured.next_point(),
-                                (true, true) => captured.previous_point(),
-                                (false, false) => captured.next_unit().map(u32::from),
-                                (false, true) => captured.previous_unit().map(u32::from),
-                            };
-                            if captured.position() < start || captured.position() > end {
-                                return Err(ExecError::InvalidProgram);
-                            }
-                            let left = left.ok_or(ExecError::InvalidProgram)?;
-                            if !self.read().is_some_and(|right| self.equal(left, right)) {
-                                success = false;
-                                break;
-                            }
-                        }
                     }
                 }
-                ASSERT => {
-                    self.push(a as usize, if b & 1 == 0 { 1 } else { 2 })?;
-                    self.assertion = self.frames - 1;
-                    self.reverse = b & 2 != 0;
+                Phase::Initialize(index) => {
+                    if index == self.program.register_count() {
+                        self.state.pc = 0;
+                        self.state.frames = 0;
+                        self.state.undo = 0;
+                        self.state.assertion = UNSET;
+                        self.state.reverse = false;
+                        self.restore(self.state.start)?;
+                        self.state.phase = Phase::Trial;
+                    } else {
+                        let end = self
+                            .program
+                            .register_count()
+                            .min(index + available.min(256));
+                        self.charge(end - index)?;
+                        self.scratch.registers[index..end].fill(UNSET);
+                        self.state.phase = Phase::Initialize(end);
+                    }
                 }
-                ASSERT_END => {
-                    if self.assertion == UNSET || self.assertion >= self.frames {
+                Phase::Trial => {
+                    self.charge(1)?;
+                    if self.state.pc >= self.program.instructions() {
                         return Err(ExecError::InvalidProgram);
                     }
-                    let frame = self.scratch.frames[self.assertion];
-                    self.frames = self.assertion;
-                    self.cursor.restore(frame.position);
-                    self.reverse = frame.reverse;
-                    self.assertion = frame.assertion;
-                    if frame.kind == 2 {
-                        self.rollback(frame.undo)?;
-                        success = false;
+                    let [op, a, b] = self.program.instruction(self.state.pc);
+                    self.state.pc += 1;
+                    self.state.phase = Phase::Execute { op, a, b };
+                    // Keep the paid opcode for a capacity retry, while normal
+                    // execution stays in this dispatch without an extra loop.
+                    self.instruction(op, a, b, available.saturating_sub(1))?;
+                }
+                Phase::Execute { op, a, b } => self.instruction(op, a, b, available)?,
+                Phase::Class {
+                    index,
+                    end,
+                    negated,
+                    values,
+                    admission,
+                } => {
+                    if index == end {
+                        self.class_result(false, negated, admission);
                     } else {
-                        self.pc = frame.pc;
-                    }
-                    if self.frames == 0 {
-                        self.undo = 0;
-                    }
-                }
-                REPEAT_INIT => {
-                    let slot = self.program.capture_count() * 2 + a as usize * 2;
-                    self.store(slot, 0)?;
-                    self.store(slot + 1, UNSET)?;
-                }
-                REPEAT_CHOICE => {
-                    let r = self.program.repeat(a as usize);
-                    let slot = self.program.capture_count() * 2 + a as usize * 2;
-                    let count = self.scratch.registers[slot];
-                    if r[2] & 1 == 0 && count >= r[1] as usize {
-                        self.pc = r[4] as usize;
-                    } else if count >= r[0] as usize {
-                        if r[2] & 2 == 0 {
-                            self.push(r[4] as usize, 0)?;
+                        self.charge(1)?;
+                        let [lo, hi] = self.program.range(index as usize);
+                        let found = values.iter().any(|&value| {
+                            if lo & PROPERTY != 0 {
+                                properties::contains(lo & !PROPERTY, value) != (hi != 0)
+                            } else {
+                                value >= lo && value <= hi
+                            }
+                        });
+                        if found {
+                            self.class_result(true, negated, admission);
                         } else {
-                            self.push(r[3] as usize, 0)?;
-                            self.pc = r[4] as usize;
+                            self.state.phase = Phase::Class {
+                                index: index + 1,
+                                end,
+                                negated,
+                                values,
+                                admission,
+                            };
                         }
                     }
                 }
-                REPEAT_BODY => {
-                    let r = self.program.repeat(a as usize);
-                    let slot = self.program.capture_count() * 2 + a as usize * 2;
-                    for capture in r[5] as usize * 2..r[6] as usize * 2 {
-                        self.charge(1)?;
-                        self.store(capture, UNSET)?;
-                    }
-                    self.store(slot + 1, self.cursor.position())?;
-                }
-                REPEAT_NEXT => {
-                    let r = self.program.repeat(a as usize);
-                    let slot = self.program.capture_count() * 2 + a as usize * 2;
-                    let count = self.scratch.registers[slot];
-                    if self.cursor.position() == self.scratch.registers[slot + 1]
-                        && count >= r[0] as usize
-                    {
-                        success = false;
+                Phase::Named {
+                    group,
+                    next,
+                    selected,
+                } => {
+                    let captures = self
+                        .program
+                        .named_group(group)
+                        .ok_or(ExecError::InvalidProgram)?
+                        .capture_indices();
+                    if next == captures.len() {
+                        if selected == UNSET {
+                            self.state.phase = Phase::Trial;
+                        } else {
+                            self.backref(selected, available)?;
+                        }
                     } else {
-                        self.store(slot, count.checked_add(1).ok_or(ExecError::WorkLimit)?)?;
-                        self.pc = r[3] as usize - 1;
+                        self.charge(1)?;
+                        let index = captures[next] as usize;
+                        let complete = self.scratch.registers[index * 2] != UNSET
+                            && self.scratch.registers[index * 2 + 1] != UNSET;
+                        if complete && selected != UNSET {
+                            return Err(ExecError::InvalidProgram);
+                        }
+                        self.state.phase = Phase::Named {
+                            group,
+                            next: next + 1,
+                            selected: if complete { index } else { selected },
+                        };
                     }
                 }
-                _ => return Err(ExecError::InvalidProgram),
-            }
-            if !success && !self.fail()? {
-                return Ok(false);
+                Phase::Backref {
+                    start,
+                    end,
+                    captured,
+                } => {
+                    let mut left = self
+                        .input
+                        .resume_cursor(captured)
+                        .ok_or(ExecError::ChangedResources)?;
+                    let until = if self.state.reverse { start } else { end };
+                    if left.position() == until {
+                        self.state.phase = Phase::Trial;
+                    } else {
+                        self.charge(1)?;
+                        let point = read(&mut left, self.program.unicode(), self.state.reverse)
+                            .ok_or(ExecError::InvalidProgram)?;
+                        if left.position() < start || left.position() > end {
+                            return Err(ExecError::InvalidProgram);
+                        }
+                        if self
+                            .read()
+                            .is_some_and(|right| equal(self.program, point, right))
+                        {
+                            self.state.phase = Phase::Backref {
+                                start,
+                                end,
+                                captured: left.mark(),
+                            };
+                        } else {
+                            self.state.phase = Phase::Fail;
+                        }
+                    }
+                }
+                Phase::Clear { next, end, slot } => {
+                    if next == end {
+                        self.store(slot, self.cursor.position())?;
+                        self.state.phase = Phase::Trial;
+                    } else {
+                        self.charge(1)?;
+                        self.state.phase = Phase::ClearStore { next, end, slot };
+                        self.store(next, UNSET)?;
+                        self.state.phase = Phase::Clear {
+                            next: next + 1,
+                            end,
+                            slot,
+                        };
+                    }
+                }
+                Phase::ClearStore { next, end, slot } => {
+                    self.store(next, UNSET)?;
+                    self.state.phase = Phase::Clear {
+                        next: next + 1,
+                        end,
+                        slot,
+                    };
+                }
+                Phase::Fail => {
+                    if self.state.frames == 0 {
+                        self.state.phase = Phase::NextStart;
+                    } else {
+                        self.charge(1)?;
+                        self.state.frames -= 1;
+                        let frame = self.scratch.frames[self.state.frames];
+                        self.restore(frame.position)?;
+                        self.state.reverse = frame.reverse;
+                        self.state.assertion = frame.assertion;
+                        self.state.pc = frame.pc;
+                        self.state.phase = Phase::Rollback {
+                            until: frame.undo,
+                            fail: frame.kind == 1,
+                        };
+                    }
+                }
+                Phase::Rollback { until, fail } => {
+                    if self.state.undo > until {
+                        self.charge(1)?;
+                        self.state.undo -= 1;
+                        let old = self.scratch.undo[self.state.undo];
+                        self.scratch.registers[old.slot] = old.value;
+                    } else {
+                        if self.state.undo < until {
+                            return Err(ExecError::InvalidProgram);
+                        }
+                        if self.state.frames == 0 {
+                            self.state.undo = 0;
+                        }
+                        self.success(!fail);
+                    }
+                }
+                Phase::NextStart => {
+                    if self.program.words[2] & Y != 0 {
+                        self.state.phase = Phase::Finished(false);
+                    } else {
+                        self.charge(1)?;
+                        self.restore(self.state.start)?;
+                        if read(&mut self.cursor, self.program.unicode(), false).is_none() {
+                            self.state.phase = Phase::Finished(false);
+                        } else {
+                            self.state.start = self.cursor.mark();
+                            self.state.phase = Phase::Initialize(0);
+                        }
+                    }
+                }
+                Phase::Validate(index) => {
+                    if index == self.program.capture_count() {
+                        self.state.phase = Phase::Finished(true);
+                    } else {
+                        self.charge(2)?;
+                        let lo = self.scratch.registers[index * 2];
+                        let hi = self.scratch.registers[index * 2 + 1];
+                        if (index == 0 && (lo == UNSET || hi == UNSET))
+                            || (lo != UNSET
+                                && hi != UNSET
+                                && (lo > hi || hi > self.input.len_utf16()))
+                        {
+                            return Err(ExecError::InvalidProgram);
+                        }
+                        self.state.phase = Phase::Validate(index + 1);
+                    }
+                }
+                Phase::Finished(_) | Phase::Failed(_) => unreachable!(),
             }
         }
     }
+    fn instruction(&mut self, op: u32, a: u32, b: u32, available: usize) -> Result<(), ExecError> {
+        let mut success = true;
+        match op {
+            MATCH => {
+                if self.state.assertion != UNSET {
+                    return Err(ExecError::InvalidProgram);
+                }
+                self.state.phase = Phase::Validate(0);
+                return Ok(());
+            }
+            CHAR => success = self.read().is_some_and(|c| equal(self.program, c, a)),
+            ANY => {
+                success = self
+                    .read()
+                    .is_some_and(|c| self.program.words[2] & S != 0 || !line_terminator(c))
+            }
+            CLASS => {
+                if let Some(c) = self.read() {
+                    self.begin_class(a, b, c, false);
+                    return Ok(());
+                }
+                success = false;
+            }
+            SAVE => self.store(a as usize, self.cursor.position())?,
+            SPLIT => {
+                self.push(b as usize, 0)?;
+                self.state.pc = a as usize;
+            }
+            JUMP => self.state.pc = a as usize,
+            START => {
+                let mut before = self.cursor;
+                success = self.cursor.position() == 0
+                    || (self.program.words[2] & M != 0
+                        && before
+                            .previous_unit()
+                            .is_some_and(|u| line_terminator(u32::from(u))));
+            }
+            END => {
+                let mut after = self.cursor;
+                success = self.cursor.position() == self.input.len_utf16()
+                    || (self.program.words[2] & M != 0
+                        && after
+                            .next_unit()
+                            .is_some_and(|u| line_terminator(u32::from(u))));
+            }
+            WORD => {
+                let mut before = self.cursor;
+                let mut after = self.cursor;
+                let ui = self.program.words[2] & (U | I) == U | I;
+                let left = read(&mut before, self.program.unicode(), true);
+                let right = read(&mut after, self.program.unicode(), false);
+                success = (left.is_some_and(|c| casefold::word(c, ui))
+                    != right.is_some_and(|c| casefold::word(c, ui)))
+                    != (a != 0);
+            }
+            BACKREF => {
+                self.backref(a as usize, available)?;
+                return Ok(());
+            }
+            NAMED_BACKREF => {
+                self.state.phase = Phase::Named {
+                    group: a as usize,
+                    next: 0,
+                    selected: UNSET,
+                };
+                return Ok(());
+            }
+            ASSERT => {
+                self.push(a as usize, if b & 1 == 0 { 1 } else { 2 })?;
+                self.state.assertion = self.state.frames - 1;
+                self.state.reverse = b & 2 != 0;
+            }
+            ASSERT_END => {
+                if self.state.assertion == UNSET || self.state.assertion >= self.state.frames {
+                    return Err(ExecError::InvalidProgram);
+                }
+                let frame = self.scratch.frames[self.state.assertion];
+                self.state.frames = self.state.assertion;
+                self.restore(frame.position)?;
+                self.state.reverse = frame.reverse;
+                self.state.assertion = frame.assertion;
+                if frame.kind == 2 {
+                    self.state.phase = Phase::Rollback {
+                        until: frame.undo,
+                        fail: true,
+                    };
+                    return Ok(());
+                }
+                self.state.pc = frame.pc;
+                if self.state.frames == 0 {
+                    self.state.undo = 0;
+                }
+            }
+            REPEAT_INIT => {
+                let slot = self.program.capture_count() * 2 + a as usize * 2;
+                self.store(slot, 0)?;
+                self.store(slot + 1, UNSET)?;
+            }
+            REPEAT_CHOICE => {
+                let r = self.program.repeat(a as usize);
+                let slot = self.program.capture_count() * 2 + a as usize * 2;
+                let count = self.scratch.registers[slot];
+                if r[2] & 1 == 0 && count >= r[1] as usize {
+                    self.state.pc = r[4] as usize;
+                } else if count >= r[0] as usize {
+                    if r[2] & 2 == 0 {
+                        self.push(r[4] as usize, 0)?;
+                    } else {
+                        self.push(r[3] as usize, 0)?;
+                        self.state.pc = r[4] as usize;
+                    }
+                }
+            }
+            REPEAT_BODY => {
+                let r = self.program.repeat(a as usize);
+                self.state.phase = Phase::Clear {
+                    next: r[5] as usize * 2,
+                    end: r[6] as usize * 2,
+                    slot: self.program.capture_count() * 2 + a as usize * 2 + 1,
+                };
+                return Ok(());
+            }
+            REPEAT_NEXT => {
+                let r = self.program.repeat(a as usize);
+                let slot = self.program.capture_count() * 2 + a as usize * 2;
+                let count = self.scratch.registers[slot];
+                if self.cursor.position() == self.scratch.registers[slot + 1]
+                    && count >= r[0] as usize
+                {
+                    success = false;
+                } else {
+                    self.store(slot, count.checked_add(1).ok_or(ExecError::WorkLimit)?)?;
+                    self.state.pc = r[3] as usize - 1;
+                }
+            }
+            _ => return Err(ExecError::InvalidProgram),
+        }
+        self.success(success);
+        Ok(())
+    }
 }
-fn line_terminator(c: u32) -> bool {
-    matches!(c, 10 | 13 | 0x2028 | 0x2029)
+fn read(cursor: &mut Cursor<'_>, unicode: bool, reverse: bool) -> Option<u32> {
+    match (unicode, reverse) {
+        (true, false) => cursor.next_point(),
+        (true, true) => cursor.previous_point(),
+        (false, false) => cursor.next_unit().map(u32::from),
+        (false, true) => cursor.previous_unit().map(u32::from),
+    }
 }
 
-/// Find the first ordered match at/after an explicit UTF-16 position. A `y`
-/// program is sticky. The host owns lastIndex coercion/update and global loops.
-/// Output is untouched on no-match/error and filled only after a complete match. Work and
-/// scratch exhaustion are errors, never no-match. This initial synchronous API
-/// holds scoped borrows for at most the supplied work allowance; it cannot yet
-/// suspend/resume at a moving safepoint during one operation.
+struct Borrowed<'p, 'i> {
+    program: Program<'p>,
+    input: Input<'i>,
+}
+impl Resources for Borrowed<'_, '_> {
+    type Error = core::convert::Infallible;
+    fn with_views<T>(&self, f: impl FnOnce(Program<'_>, Input<'_>) -> T) -> Result<T, Self::Error> {
+        Ok(f(self.program, self.input))
+    }
+}
+fn infallible(error: SearchError<core::convert::Infallible>) -> ExecError {
+    match error {
+        SearchError::Execution(error) => error,
+        SearchError::Resource(never) => match never {},
+    }
+}
+
+/// Synchronous execution of the same resumable evaluator. Output is untouched
+/// on no-match/error. The host owns lastIndex, result objects and global loops.
 pub fn find(
     program: Program<'_>,
     input: Input<'_>,
@@ -390,85 +947,16 @@ pub fn find(
     if captures.len() < program.capture_count() {
         return Err(ExecError::Captures);
     }
-    if scratch.registers.len() < program.register_count() {
-        return Err(ExecError::Registers);
-    }
-    if start_utf16 > input.len_utf16() {
-        return Ok(false);
-    }
-    if program.words[2] & ADMISSION != 0
-        && input.len_utf16() >= 64
-        && !admission::admits(program, input, budget)?
-    {
-        return Ok(false);
-    }
-    budget
-        .charge(input.seek_work(start_utf16))
-        .map_err(|_| ExecError::WorkLimit)?;
-    let mut start = input.cursor_at(start_utf16).unwrap();
-    if program.unicode() {
-        start.normalize_unicode_start();
-    }
-    let mut vm = Vm {
-        program,
-        input,
-        cursor: start,
-        scratch,
-        budget,
-        pc: 0,
-        frames: 0,
-        undo: 0,
-        assertion: UNSET,
-        reverse: false,
-    };
-    loop {
-        vm.charge(program.register_count())?;
-        vm.scratch.registers[..program.register_count()].fill(UNSET);
-        vm.pc = 0;
-        vm.frames = 0;
-        vm.undo = 0;
-        vm.assertion = UNSET;
-        vm.reverse = false;
-        vm.cursor = start;
-        if vm.trial()? {
-            // Validate every capture before exposing any output.
-            vm.charge(program.capture_count() * 2)?;
-            if vm.scratch.registers[0] == UNSET || vm.scratch.registers[1] == UNSET {
-                return Err(ExecError::InvalidProgram);
-            }
-            for slots in vm.scratch.registers[..program.capture_count() * 2]
-                .as_chunks::<2>()
-                .0
-            {
-                if slots[0] != UNSET
-                    && slots[1] != UNSET
-                    && (slots[0] > slots[1] || slots[1] > input.len_utf16())
-                {
-                    return Err(ExecError::InvalidProgram);
-                }
-            }
-            for (i, target) in captures[..program.capture_count()].iter_mut().enumerate() {
-                let lo = vm.scratch.registers[2 * i];
-                let hi = vm.scratch.registers[2 * i + 1];
-                *target = if lo == UNSET || hi == UNSET {
-                    None
-                } else {
-                    Span::new(lo, hi)
-                };
-            }
-            return Ok(true);
+    let resources = Borrowed { program, input };
+    let mut search = Search::new(&resources, start_utf16, scratch, *budget).map_err(infallible)?;
+    let result = search.advance(usize::MAX).map_err(infallible);
+    *budget = search.budget;
+    match result? {
+        Progress::Matched => {
+            search.copy_captures(captures)?;
+            Ok(true)
         }
-        if program.words[2] & Y != 0 {
-            return Ok(false);
-        }
-        vm.charge(1)?;
-        let next = if program.unicode() {
-            start.next_point()
-        } else {
-            start.next_unit().map(u32::from)
-        };
-        if next.is_none() {
-            return Ok(false);
-        }
+        Progress::NoMatch => Ok(false),
+        Progress::Pending => Err(ExecError::InvalidProgram),
     }
 }

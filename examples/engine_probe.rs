@@ -8,6 +8,8 @@ use perex::{
     span::Span,
 };
 use std::io::{self, BufRead, Write};
+#[path = "support/resumption.rs"]
+mod resumable;
 fn capture(out: &mut impl Write, span: Option<Span>, input: Input<'_>) -> io::Result<()> {
     if let Some(span) = span {
         write!(
@@ -37,6 +39,34 @@ fn bytes(hex: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         .collect()
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let options = match args.next().as_deref() {
+        None => None,
+        Some("--quantum") => {
+            let quantum = args.next().ok_or("missing quantum")?.parse::<usize>()?;
+            if quantum == 0 {
+                return Err("quantum must be positive".into());
+            }
+            let mut relocate = false;
+            let mut grow = false;
+            for arg in args.by_ref() {
+                match arg.as_str() {
+                    "--relocate" if !relocate => relocate = true,
+                    "--grow" if !grow => grow = true,
+                    _ => return Err("expected unique --relocate or --grow".into()),
+                }
+            }
+            Some(resumable::Options {
+                quantum,
+                relocate,
+                grow,
+            })
+        }
+        _ => return Err("expected --quantum N [--relocate] [--grow]".into()),
+    };
+    if args.next().is_some() {
+        return Err("extra argument".into());
+    }
     let mut out = io::BufWriter::new(io::stdout().lock());
     for line in io::stdin().lock().lines() {
         let line = line?;
@@ -86,21 +116,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         let mut registers = vec![0; program.register_count()];
-        let mut frames = vec![Frame::default(); 16_384];
-        let mut undo = vec![Undo::default(); 131_072];
+        let grow = options.is_some_and(|options| options.grow);
+        let mut frames = vec![Frame::default(); if grow { 0 } else { 16_384 }];
+        let mut undo = vec![Undo::default(); if grow { 0 } else { 131_072 }];
         let mut captures = vec![None; program.capture_count()];
-        let found = find(
-            program,
-            input,
-            f[4].parse()?,
-            Scratch {
-                registers: &mut registers,
-                frames: &mut frames,
-                undo: &mut undo,
-            },
-            &mut captures,
-            &mut Budget::new(2_000_000),
-        );
+        let scratch = Scratch {
+            registers: &mut registers,
+            frames: &mut frames,
+            undo: &mut undo,
+        };
+        let mut budget = Budget::new(2_000_000);
+        let start = f[4].parse()?;
+        let found = if let Some(options) = options {
+            resumable::find(
+                program,
+                &subject,
+                start,
+                scratch,
+                &mut captures,
+                &mut budget,
+                options,
+            )
+        } else {
+            find(program, input, start, scratch, &mut captures, &mut budget)
+        };
         match found {
             Ok(false) => writeln!(out, "{{\"id\":{id:?},\"outcome\":\"no-match\"}}")?,
             Err(error) => writeln!(

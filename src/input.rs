@@ -109,6 +109,51 @@ impl<'a> Input<'a> {
         }
     }
 
+    pub(crate) fn shape(self) -> (u8, usize, usize) {
+        let (kind, len) = match self.storage {
+            Storage::Ascii(bytes) => (0, bytes.len()),
+            Storage::Bytes(bytes) => (1, bytes.len()),
+            Storage::Units(units) => (2, units.len()),
+        };
+        (kind, len, self.utf16_len)
+    }
+
+    // Resumption is internal and requires a Resources owner that keeps the
+    // exact immutable representation alive. Cheap checks reject incompatible
+    // layouts; they do not prove that unrelated slices have identical contents.
+    pub(crate) fn resume_cursor(self, mark: Mark) -> Option<Cursor<'a>> {
+        if mark.units > self.utf16_len {
+            return None;
+        }
+        let offset = mark.offset & !HALF;
+        let half = mark.offset & HALF != 0;
+        match self.storage {
+            Storage::Ascii(bytes) => {
+                if half || offset != mark.units || offset > bytes.len() {
+                    return None;
+                }
+            }
+            Storage::Units(units) => {
+                if half || offset != mark.units || offset > units.len() {
+                    return None;
+                }
+            }
+            Storage::Bytes(bytes) => {
+                if offset > bytes.len()
+                    || (offset == bytes.len()) != (mark.units == self.utf16_len)
+                    || (offset == 0 && !half && mark.units != 0)
+                    || (offset < bytes.len() && is_continuation(bytes[offset]))
+                    || (half && (offset == bytes.len() || decode_valid(bytes, offset).0 <= 0xffff))
+                {
+                    return None;
+                }
+            }
+        }
+        let mut cursor = self.cursor();
+        cursor.restore(mark);
+        Some(cursor)
+    }
+
     pub(crate) fn seek_work(self, position: usize) -> usize {
         if !matches!(self.storage, Storage::Bytes(_)) {
             1

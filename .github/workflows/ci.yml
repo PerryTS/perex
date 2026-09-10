@@ -36,6 +36,15 @@ jobs:
       - run: cargo +stable build --locked --release --example engine_probe
       - name: Partial engine differential with exact documented omissions
         run: node tools/check-engine.mjs target/release/examples/engine_probe --allow-listed-unsupported --allow-reviewed-reference-disagreements
+      - name: Paused execution with relocation and scratch growth
+        shell: bash
+        run: |
+          for quantum in 1 17; do
+            probe="$RUNNER_TEMP/perex-resumed-$quantum"
+            printf '#!/bin/sh\nexec "%s" --quantum %s --relocate --grow "$@"\n' "$PWD/target/release/examples/engine_probe" "$quantum" > "$probe"
+            chmod +x "$probe"
+            node tools/check-engine.mjs "$probe" --allow-listed-unsupported --allow-reviewed-reference-disagreements --output "artifacts/resumed-$quantum"
+          done
       - name: Named captures, Unicode identifiers and duplicate alternatives
         run: node tools/check-names.mjs target/release/examples/engine_probe
       - name: Legacy numeric escapes, control prefixes and quantified lookahead

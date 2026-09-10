@@ -1,0 +1,142 @@
+use super::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Shape {
+    pub header: [u32; HEADER],
+    pub words: usize,
+    pub input: (u8, usize, usize),
+}
+impl Shape {
+    pub fn new(p: Program<'_>, input: Input<'_>) -> Self {
+        Self {
+            header: p.words[..HEADER].try_into().unwrap(),
+            words: p.words.len(),
+            input: input.shape(),
+        }
+    }
+    pub fn registers(self) -> usize {
+        (self.header[3] as usize + self.header[6] as usize) * 2
+    }
+}
+#[derive(Clone, Copy)]
+pub(super) enum AfterSeek {
+    Start,
+    Backref {
+        start: usize,
+        end: usize,
+        matched: Mark,
+    },
+}
+#[derive(Clone, Copy)]
+pub(super) enum Phase {
+    Admission,
+    AdmitBytes {
+        offset: usize,
+    },
+    AdmitByteClass {
+        offset: usize,
+        lo: u8,
+        hi: u8,
+    },
+    AdmitClass,
+    AdmitSuffix(usize),
+    AdmitScan,
+    AdmitProbe {
+        index: usize,
+        scan: Mark,
+    },
+    Start,
+    Seek {
+        target: usize,
+        after: AfterSeek,
+    },
+    Initialize(usize),
+    Trial,
+    Execute {
+        op: u32,
+        a: u32,
+        b: u32,
+    },
+    Class {
+        index: u32,
+        end: u32,
+        negated: bool,
+        values: [u32; 4],
+        admission: bool,
+    },
+    Named {
+        group: usize,
+        next: usize,
+        selected: usize,
+    },
+    Backref {
+        start: usize,
+        end: usize,
+        captured: Mark,
+    },
+    Clear {
+        next: usize,
+        end: usize,
+        slot: usize,
+    },
+    ClearStore {
+        next: usize,
+        end: usize,
+        slot: usize,
+    },
+    Fail,
+    Rollback {
+        until: usize,
+        fail: bool,
+    },
+    NextStart,
+    Validate(usize),
+    Finished(bool),
+    Failed(ExecError),
+}
+impl Phase {
+    pub fn outcome(self) -> Option<Result<Progress, ExecError>> {
+        match self {
+            Self::Finished(true) => Some(Ok(Progress::Matched)),
+            Self::Finished(false) => Some(Ok(Progress::NoMatch)),
+            Self::Failed(error) => Some(Err(error)),
+            _ => None,
+        }
+    }
+}
+pub(super) struct State {
+    pub blocked: Option<ExecError>,
+    pub phase: Phase,
+    pub requested_start: usize,
+    pub start: Mark,
+    pub current: Mark,
+    pub pc: usize,
+    pub frames: usize,
+    pub undo: usize,
+    pub assertion: usize,
+    pub reverse: bool,
+    pub needle: [u8; ADMISSION_MAX],
+    pub needle_len: usize,
+}
+impl State {
+    pub fn new(start: usize, length: usize) -> Self {
+        Self {
+            blocked: None,
+            phase: if start > length {
+                Phase::Finished(false)
+            } else {
+                Phase::Admission
+            },
+            requested_start: start,
+            start: Mark::default(),
+            current: Mark::default(),
+            pc: 0,
+            frames: 0,
+            undo: 0,
+            assertion: UNSET,
+            reverse: false,
+            needle: [0; ADMISSION_MAX],
+            needle_len: 0,
+        }
+    }
+}
