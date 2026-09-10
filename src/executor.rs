@@ -87,6 +87,8 @@ impl ScratchOwner for Scratch<'_> {
 /// subject/program borrows inside one advance. Existing safe constructors still
 /// validate/count when acquiring views; avoiding repeated validation in a GC
 /// adapter requires a separately established owner invariant.
+/// An acquisition error must occur before invoking the callback. After invoking
+/// it, return its result successfully so retrying cannot replay completed work.
 ///
 /// ```compile_fail
 /// use perex::{executor::Resources, input::Input};
@@ -286,6 +288,16 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
             frames: self.state.frames + usize::from(self.state.blocked == Some(ExecError::Frames)),
             undo: self.state.undo + usize::from(self.state.blocked == Some(ExecError::Undo)),
         }
+    }
+
+    /// End this operation and return its scratch owner for reuse or release.
+    /// Pending matching state is discarded; this is not a restart or a resume.
+    /// Save `remaining_work` and copy completed captures first if needed.
+    /// No resource view is acquired, no allocation occurs, and the returned
+    /// owner has only the lifetimes of its own type. Contents remain opaque
+    /// scratch; a subsequent search initializes its own live state.
+    pub fn into_buffers(self) -> B {
+        self.buffers
     }
 
     /// Move live scratch metadata to caller-owned replacement buffers between

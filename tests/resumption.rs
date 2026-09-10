@@ -513,6 +513,122 @@ struct BufferCounts {
     alive: Cell<usize>,
     drops: Cell<usize>,
 }
+
+struct ReusableBuffers {
+    registers: Vec<usize>,
+    frames: Vec<Frame>,
+    undo: Vec<Undo>,
+}
+impl perex::executor::ScratchOwner for ReusableBuffers {
+    fn scratch(&mut self) -> Scratch<'_> {
+        Scratch {
+            registers: &mut self.registers,
+            frames: &mut self.frames,
+            undo: &mut self.undo,
+        }
+    }
+}
+struct WatchedOwner<'a> {
+    owner: Owner,
+    drops: &'a Cell<usize>,
+}
+impl Resources for WatchedOwner<'_> {
+    type Error = &'static str;
+    fn with_views<T>(&self, f: impl FnOnce(Program<'_>, Input<'_>) -> T) -> Result<T, Self::Error> {
+        self.owner.with_views(f)
+    }
+}
+impl Drop for WatchedOwner<'_> {
+    fn drop(&mut self) {
+        let mut data = self.owner.data.borrow_mut();
+        data.0.fill(0xdeadbeef);
+        data.1.poison();
+        self.drops.set(self.drops.get() + 1);
+    }
+}
+
+#[test]
+fn scratch_reuse_does_not_retain_resources_or_a_previous_search_state() {
+    for ending in 0..5 {
+        let drops = Cell::new(0);
+        let buffers = ReusableBuffers {
+            registers: vec![0; 64],
+            frames: vec![Frame::default(); if ending == 4 { 0 } else { 128 }],
+            undo: vec![Undo::default(); 512],
+        };
+        let addresses = (
+            buffers.registers.as_ptr(),
+            buffers.frames.as_ptr(),
+            buffers.undo.as_ptr(),
+        );
+        let buffers = {
+            let owner = WatchedOwner {
+                owner: Owner::new("^((a|ab)+)c$", "", Subject::Bytes(b"aababc".to_vec())),
+                drops: &drops,
+            };
+            let mut search = Search::new(
+                &owner,
+                0,
+                buffers,
+                Budget::new(if ending == 3 { 0 } else { 2_000_000 }),
+            )
+            .unwrap();
+            match ending {
+                0 => {
+                    assert_eq!(search.advance(usize::MAX).unwrap(), Progress::Matched);
+                    let mut captures = [None; 3];
+                    search.copy_captures(&mut captures).unwrap();
+                    assert_eq!(captures[0], Span::new(0, 6));
+                }
+                1 | 2 => {
+                    assert_eq!(search.advance(1).unwrap(), Progress::Pending);
+                    if ending == 2 {
+                        search.cancel();
+                    }
+                }
+                3 => assert!(matches!(
+                    search.advance(usize::MAX),
+                    Err(SearchError::Execution(ExecError::WorkLimit))
+                )),
+                4 => assert!(matches!(
+                    search.advance(usize::MAX),
+                    Err(SearchError::Execution(ExecError::Frames))
+                )),
+                _ => unreachable!(),
+            }
+            let borrows = owner.owner.borrows.get();
+            let returned = search.into_buffers();
+            assert_eq!(
+                owner.owner.borrows.get(),
+                borrows,
+                "releasing scratch reacquired a resource"
+            );
+            returned
+        };
+        assert_eq!(
+            drops.get(),
+            1,
+            "scratch retained the previous resource owner"
+        );
+        assert_eq!(
+            (
+                buffers.registers.as_ptr(),
+                buffers.frames.as_ptr(),
+                buffers.undo.as_ptr()
+            ),
+            addresses
+        );
+        // The old program and subject are destroyed. Reuse the exact same
+        // allocations with different resource lengths/captures and no choices.
+        let owner = Owner::new("x", "y", Subject::Bytes(b"x".to_vec()));
+        let mut search = Search::new(&owner, 0, buffers, Budget::new(1000)).unwrap();
+        assert_eq!(search.advance(usize::MAX).unwrap(), Progress::Matched);
+        let mut output = [None];
+        search.copy_captures(&mut output).unwrap();
+        assert_eq!(output, [Span::new(0, 1)]);
+        drop(search.into_buffers());
+    }
+}
 struct OwnedBuffers<'a> {
     registers: Vec<usize>,
     frames: Vec<Frame>,
