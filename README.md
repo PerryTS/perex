@@ -46,6 +46,7 @@ cargo build --locked --release --example engine_probe
 node tools/check-engine.mjs target/release/examples/engine_probe --allow-listed-unsupported --allow-reviewed-reference-disagreements
 node tools/check-casefold.mjs target/release/examples/engine_probe
 node tools/check-names.mjs target/release/examples/engine_probe
+node tools/check-legacy.mjs target/release/examples/engine_probe
 cargo build --locked --release --example property_probe
 node tools/check-properties.mjs target/release/examples/property_probe target/release/examples/engine_probe --allow-reviewed-reference-disagreements
 node tools/reference.mjs --check

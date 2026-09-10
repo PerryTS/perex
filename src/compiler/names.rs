@@ -2,38 +2,11 @@
 use super::*;
 
 impl Parser<'_, '_> {
-    // Only legacy \k needs a scan to determine whether named syntax is enabled
-    // by a declaration later in the pattern. Ordinary patterns pay no scan.
     pub(super) fn has_named_mode(&mut self) -> Result<bool, CompileError> {
-        if let Some(value) = self.named_mode {
-            return Ok(value);
+        if self.named_mode.is_none() {
+            self.scan_groups()?;
         }
-        let mut cursor = self.pattern.cursor();
-        let mut class = false;
-        let mut found = false;
-        while let Some(c) = cursor.next_unit() {
-            self.step()?;
-            match c {
-                92 => {
-                    cursor.next_unit();
-                }
-                91 if !class => class = true,
-                93 if class => class = false,
-                40 if !class => {
-                    let mut look = cursor;
-                    if look.next_unit() == Some(63)
-                        && look.next_unit() == Some(60)
-                        && !matches!(look.next_unit(), Some(61 | 33))
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        self.named_mode = Some(found);
-        Ok(found)
+        Ok(self.named_mode.unwrap())
     }
 
     fn name_point(&self, start: u32, index: u32) -> u32 {

@@ -8,7 +8,9 @@ Literals, concatenation, ordered alternatives, numbered/named capturing and nonc
 
 Flags `i`, `m`, `s`, `u` and `y` affect the engine. `d` and `g` are accepted; captures are always available, and the host owns global iteration. `find` takes an explicit UTF-16 start whether or not `g` is present. The host must apply JS `lastIndex` semantics before calling it. [Case equivalence](casefold.md) uses pinned Unicode 17.0.0 data and preserves the different Unicode/legacy rules without folding or copying the subject.
 
-Unicode-mode [character properties](properties.md), including general categories, binary properties, Script and Script_Extensions, use shared immutable tables. Current omissions include Unicode sets/string properties under `v`, scoped flags, quantified assertions and parts of Annex B numeric/control escaping. They are reported as `CompileError::Unsupported`, not fabricated syntax errors or no-match. The parser is not yet a complete syntax validator for omitted features. Invalid `v` expressions can therefore be reported unsupported until that grammar is implemented. No compatibility percentage should describe these outcomes as handled.
+[Legacy numeric/control escapes and quantified lookahead](legacy.md) follow Annex B, including octal/backreference ambiguity and distinct Unicode-mode syntax errors.
+
+Unicode-mode [character properties](properties.md), including general categories, binary properties, Script and Script_Extensions, use shared immutable tables. Current omitted features include Unicode sets/string properties under `v` and scoped flags. They are reported as `CompileError::Unsupported`, not fabricated syntax errors or no-match. The parser is not yet a complete syntax validator for omitted features. Invalid `v` expressions can therefore be reported unsupported until that grammar is implemented. No compatibility percentage should describe these outcomes as handled.
 
 ## Memory and work
 
@@ -39,5 +41,7 @@ node tools/check-engine.mjs target/release/examples/engine_probe \
 `tools/check-casefold.mjs` additionally checks 93,404 complete answers against Node with no differences, including literals, complements and forward/reverse backreferences across Unicode casing edges. Original UTF-16, canonical WTF-8 and separate-surrogate byte storage have an explicit shared capture witness.
 
 `tools/check-names.mjs` checks 54,873 complete answers against Node with no differences, including 5,252 Unicode identifier boundary values, duplicate-name grammar, forward/self references, capture resets and lookbehind. Five additional Rust tests check named metadata, relocation, original string storage and bounded failures.
+
+`tools/check-legacy.mjs` adds 112,748 exact Node answers for 1,047 numeric spellings, forward/named capture counts, atom/quantifier boundaries, all 256 control-prefix suffix bytes and quantified assertions. Three Rust tests pin the corresponding interactions.
 
 Complete Unicode/grammar support, Test262, broader differential generation, interruption/resumption, per-owner allocation accounting, Perry's GC/operation adapter and the full per-case CPU/RSS comparisons remain required. This change establishes actual matching and its test boundary, not the performance goal.

@@ -53,6 +53,7 @@ const REPEAT: u32 = 36;
 const WRAP: u32 = 37;
 const NAME_META: u32 = 38;
 const NAME_DECL: u32 = 39;
+mod escapes;
 mod names;
 
 struct Parser<'a, 's> {
@@ -68,6 +69,7 @@ struct Parser<'a, 's> {
     name_count: u32,
     named_mode: Option<bool>,
     captures: u32,
+    capture_total: Option<u32>,
     repeats: u32,
     budget: &'s mut Budget,
     depth: usize,
@@ -346,8 +348,8 @@ impl Parser<'_, '_> {
         if matches!(node.kind, START | END | WORD) {
             return Err(self.error());
         }
-        if node.kind == ASSERT {
-            return Err(self.unsupported("quantified assertion"));
+        if node.kind == ASSERT && (self.flags & U != 0 || node.flags & 2 != 0) {
+            return Err(self.error());
         }
         let lazy = self.eat(b'?')?;
         let id = self.repeats;
@@ -493,18 +495,22 @@ impl Parser<'_, '_> {
             118 => 11,
             102 => 12,
             98 if in_class => 8,
-            48 => {
-                if matches!(self.peek(), Some(48..=57)) {
-                    return Err(self.unsupported("legacy octal escape"));
-                }
-                0
-            }
+            48..=57 => self.numeric_character(c)?,
             99 => {
-                let c = self.take()?.ok_or_else(|| self.error())?;
-                if !matches!(c,65..=90|97..=122) {
-                    return Err(self.unsupported("legacy control escape"));
+                if let Some(next) = self.peek()
+                    && (matches!(next, 65..=90 | 97..=122)
+                        || (in_class && self.flags & U == 0 && matches!(next, 48..=57 | 95)))
+                {
+                    self.take()?;
+                    u32::from(next & 31)
+                } else if self.flags & U != 0 {
+                    return Err(self.error());
+                } else {
+                    // Annex B's invalid control prefix consumes only the
+                    // backslash. Leave c as a separate (quantifiable) atom.
+                    self.cursor.previous_unit();
+                    92
                 }
-                u32::from(c & 31)
             }
             120 | 117 => {
                 if c == 117 && self.flags & U != 0 && self.eat(b'{')? {
@@ -577,15 +583,7 @@ impl Parser<'_, '_> {
             return self.leaf(NAMED_BACKREF, name, 0);
         }
         if matches!(c, 49..=57) {
-            let mut n = u32::from(c - 48);
-            while let Some(d @ 48..=57) = self.peek() {
-                self.take()?;
-                n = n
-                    .checked_mul(10)
-                    .and_then(|v| v.checked_add(u32::from(d - 48)))
-                    .ok_or(CompileError::SizeLimit)?;
-            }
-            return self.leaf(BACKREF, n, 0);
+            return self.numeric_node(c);
         }
         let start = self.range_used;
         if self.builtin(c)? {
@@ -599,9 +597,6 @@ impl Parser<'_, '_> {
             let c = self.take()?.ok_or_else(|| self.error())?;
             if self.builtin(c)? {
                 return Ok(None);
-            }
-            if matches!(c, 49..=57) {
-                return Err(self.unsupported("legacy class numeric escape"));
             }
             return Ok(Some(self.escaped_point(c, true)?));
         }
@@ -733,6 +728,7 @@ pub fn compile<'p>(
         name_count: 0,
         named_mode: if bits & U != 0 { Some(true) } else { None },
         captures: 1,
+        capture_total: None,
         repeats: 0,
         budget,
         depth: 0,
@@ -748,11 +744,7 @@ pub fn compile<'p>(
             .charge(1)
             .map_err(|_| CompileError::WorkLimit)?;
         if node.kind == BACKREF && node.a >= parser.captures {
-            return Err(if bits & U != 0 {
-                parser.error()
-            } else {
-                parser.unsupported("legacy numeric escape")
-            });
+            return Err(parser.error());
         }
     }
     let count = parser.nodes[root as usize]
