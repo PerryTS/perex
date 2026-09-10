@@ -1,0 +1,2 @@
+# Preserve byte-for-byte upstream Unicode sources and notices.
+third_party/unicode/17.0.0/*.txt -text -whitespace

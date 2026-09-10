@@ -40,16 +40,6 @@
     "feature": "Unicode properties"
   },
   {
-    "id": "unicode-word-fold",
-    "outcome": "unsupported",
-    "feature": "ignore-case Unicode tables"
-  },
-  {
-    "id": "legacy-word-fold",
-    "outcome": "unsupported",
-    "feature": "ignore-case Unicode tables"
-  },
-  {
     "id": "invalid-duplicate-name",
     "outcome": "unsupported",
     "feature": "named captures"

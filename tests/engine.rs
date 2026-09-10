@@ -50,6 +50,93 @@ fn run(
     })
 }
 #[test]
+fn case_equivalence_obeys_mode_and_keeps_original_capture_spans() {
+    assert_eq!(
+        run("(s)(k)\\1", "iu", "ſKS", 0),
+        Some(vec![Some((0, 3)), Some((0, 1)), Some((1, 2))])
+    );
+    assert_eq!(run("(s)(k)\\1", "i", "ſKS", 0), None);
+    assert_eq!(run("[ω]", "iu", "Ω", 0), Some(vec![Some((0, 1))]));
+    assert_eq!(run("[ω]", "i", "Ω", 0), None);
+    assert_eq!(run("[ß]", "iu", "ẞ", 0), Some(vec![Some((0, 1))]));
+    assert_eq!(run("[ß]", "i", "ẞ", 0), None);
+    assert_eq!(run("ß", "iu", "ss", 0), None);
+    assert_eq!(run("i", "iu", "ıİ", 0), None);
+    assert_eq!(run("[\\W]", "iu", "ſK", 0), None);
+    assert_eq!(run("[^\\W]+", "iu", "ſK", 0), Some(vec![Some((0, 2))]));
+    assert_eq!(run("\\b\\w+\\b", "iu", " ſK!", 0), Some(vec![Some((1, 3))]));
+    assert_eq!(
+        run("(.)\\1", "iu", "𐐀𐐨", 0),
+        Some(vec![Some((0, 4)), Some((0, 2))])
+    );
+    assert_eq!(
+        run("(?<=^\\1(.))$", "iu", "𐐀𐐨", 0),
+        Some(vec![Some((4, 4)), Some((2, 4))])
+    );
+    assert_eq!(run("[^a-z]", "iu", "ſK", 0), None);
+    assert_eq!(run("[A-z]", "i", "_", 0), Some(vec![Some((0, 1))]));
+}
+#[test]
+fn casefold_backreferences_borrow_each_original_string_representation() {
+    let mut nodes = [Node::default(); 32];
+    let mut ranges = [Range::default(); 32];
+    let mut storage = [0; 256];
+    let p = compile(
+        Input::utf8("(𐐀)\\1(?<=𐐨)"),
+        "iu",
+        &mut nodes,
+        &mut ranges,
+        &mut storage,
+        &mut Budget::new(10000),
+    )
+    .unwrap();
+    let original_units = [0xd801, 0xdc00, 0xd801, 0xdc28];
+    let original_bytes = [0xf0, 0x90, 0x90, 0x80, 0xf0, 0x90, 0x90, 0xa8];
+    let separate_surrogates = [
+        0xed, 0xa0, 0x81, 0xed, 0xb0, 0x80, 0xed, 0xa0, 0x81, 0xed, 0xb0, 0xa8,
+    ];
+    for input in [
+        Input::utf16(&original_units),
+        Input::wtf8(&original_bytes).unwrap(),
+        Input::wtf8(&separate_surrogates).unwrap(),
+    ] {
+        let mut registers = [0; 4];
+        let mut frames = [Frame::default(); 8];
+        let mut undo = [Undo::default(); 16];
+        let mut captures = [None; 2];
+        assert!(
+            find(
+                p,
+                input,
+                0,
+                Scratch {
+                    registers: &mut registers,
+                    frames: &mut frames,
+                    undo: &mut undo
+                },
+                &mut captures,
+                &mut Budget::new(10000)
+            )
+            .unwrap()
+        );
+        assert_eq!(captures, [Span::new(0, 4), Span::new(0, 2)]);
+        assert!(
+            captures[0]
+                .unwrap()
+                .units(input)
+                .unwrap()
+                .eq(original_units)
+        );
+        assert!(
+            captures[1]
+                .unwrap()
+                .units(input)
+                .unwrap()
+                .eq([0xd801, 0xdc00])
+        );
+    }
+}
+#[test]
 fn ordered_matching_repetition_and_resets() {
     assert_eq!(
         run("(ab|a)b", "", "ab", 0),

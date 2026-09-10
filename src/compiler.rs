@@ -358,6 +358,14 @@ impl Parser<'_, '_> {
     fn builtin(&mut self, c: u16) -> Result<bool, CompileError> {
         let ranges: &[(u32, u32)] = match c | 32 {
             100 => &[(48, 57)],
+            119 if self.flags & (U | I) == U | I => &[
+                (48, 57),
+                (65, 90),
+                (95, 95),
+                (97, 122),
+                (0x17f, 0x17f),
+                (0x212a, 0x212a),
+            ],
             119 => &[(48, 57), (65, 90), (95, 95), (97, 122)],
             115 => &[
                 (9, 13),
@@ -625,6 +633,7 @@ pub fn compile<'p>(
         }
         seen |= bit;
         bits |= match c {
+            b'i' => I,
             b'm' => M,
             b's' => S,
             b'u' => U,
@@ -634,12 +643,6 @@ pub fn compile<'p>(
     }
     if seen & 96 == 96 {
         return Err(CompileError::Syntax { utf16_offset: 0 });
-    }
-    if seen & 4 != 0 {
-        return Err(CompileError::Unsupported {
-            feature: "ignore-case Unicode tables",
-            utf16_offset: 0,
-        });
     }
     if seen & 64 != 0 {
         return Err(CompileError::Unsupported {

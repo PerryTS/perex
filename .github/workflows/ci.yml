@@ -19,6 +19,7 @@ jobs:
       - run: cargo +stable clippy --locked --all-targets -- -D warnings
       - run: cargo +stable test --locked
       - run: cargo +stable test --locked --release
+      - run: python3 tools/generate-casefold.py --check
 
   input-differential:
     runs-on: ubuntu-latest
@@ -34,6 +35,8 @@ jobs:
       - run: cargo +stable build --locked --release --example engine_probe
       - name: Partial engine differential with exact documented omissions
         run: node tools/check-engine.mjs target/release/examples/engine_probe --allow-listed-unsupported --allow-reviewed-reference-disagreements
+      - name: Unicode and legacy case equivalence differential
+        run: node tools/check-casefold.mjs target/release/examples/engine_probe
 
   semantic-reference:
     runs-on: ubuntu-latest

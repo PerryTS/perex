@@ -1,6 +1,6 @@
 //! One ordered bytecode evaluator, with host-owned bounded scratch.
 use crate::{
-    Budget,
+    Budget, casefold,
     input::{Cursor, Input, Mark},
     program::*,
     span::Span,
@@ -131,6 +131,11 @@ impl Vm<'_, '_, '_, '_> {
             (false, true) => self.cursor.previous_unit().map(u32::from),
         }
     }
+    fn equal(&self, left: u32, right: u32) -> bool {
+        left == right
+            || (self.program.words[2] & I != 0
+                && casefold::equal(left, right, self.program.unicode()))
+    }
     fn trial(&mut self) -> Result<bool, ExecError> {
         loop {
             self.charge(1)?;
@@ -147,7 +152,7 @@ impl Vm<'_, '_, '_, '_> {
                     }
                     return Ok(true);
                 }
-                CHAR => success = self.read() == Some(a),
+                CHAR => success = self.read().is_some_and(|c| self.equal(c, a)),
                 ANY => {
                     success = self
                         .read()
@@ -155,11 +160,16 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 CLASS => {
                     if let Some(c) = self.read() {
+                        let values = if self.program.words[2] & I != 0 {
+                            casefold::equivalents(c, self.program.unicode())
+                        } else {
+                            [c; 4]
+                        };
                         let mut found = false;
                         for i in a..a + (b & !NEGATED) {
                             self.charge(1)?;
                             let [lo, hi] = self.program.range(i as usize);
-                            if c >= lo && c <= hi {
+                            if values.iter().any(|&value| value >= lo && value <= hi) {
                                 found = true;
                                 break;
                             }
@@ -194,8 +204,19 @@ impl Vm<'_, '_, '_, '_> {
                 WORD => {
                     let mut before = self.cursor;
                     let mut after = self.cursor;
-                    success = (before.previous_unit().is_some_and(word)
-                        != after.next_unit().is_some_and(word))
+                    let ui = self.program.words[2] & (U | I) == U | I;
+                    let left = if self.program.unicode() {
+                        before.previous_point()
+                    } else {
+                        before.previous_unit().map(u32::from)
+                    };
+                    let right = if self.program.unicode() {
+                        after.next_point()
+                    } else {
+                        after.next_unit().map(u32::from)
+                    };
+                    success = (left.is_some_and(|c| casefold::word(c, ui))
+                        != right.is_some_and(|c| casefold::word(c, ui)))
                         != (a != 0);
                 }
                 BACKREF => {
@@ -209,14 +230,20 @@ impl Vm<'_, '_, '_, '_> {
                         self.charge(self.input.seek_work(at))?;
                         let mut captured =
                             self.input.cursor_at(at).ok_or(ExecError::InvalidProgram)?;
-                        for _ in start..end {
+                        let until = if self.reverse { start } else { end };
+                        while captured.position() != until {
                             self.charge(1)?;
-                            let (left, right) = if self.reverse {
-                                (captured.previous_unit(), self.cursor.previous_unit())
-                            } else {
-                                (captured.next_unit(), self.cursor.next_unit())
+                            let left = match (self.program.unicode(), self.reverse) {
+                                (true, false) => captured.next_point(),
+                                (true, true) => captured.previous_point(),
+                                (false, false) => captured.next_unit().map(u32::from),
+                                (false, true) => captured.previous_unit().map(u32::from),
                             };
-                            if left != right {
+                            if captured.position() < start || captured.position() > end {
+                                return Err(ExecError::InvalidProgram);
+                            }
+                            let left = left.ok_or(ExecError::InvalidProgram)?;
+                            if !self.read().is_some_and(|right| self.equal(left, right)) {
                                 success = false;
                                 break;
                             }
@@ -299,9 +326,6 @@ impl Vm<'_, '_, '_, '_> {
 }
 fn line_terminator(c: u32) -> bool {
     matches!(c, 10 | 13 | 0x2028 | 0x2029)
-}
-fn word(c: u16) -> bool {
-    matches!(c,48..=57|65..=90|95|97..=122)
 }
 
 /// Find the first ordered match at/after an explicit UTF-16 position. A `y`

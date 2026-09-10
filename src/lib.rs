@@ -16,6 +16,7 @@
 pub mod input;
 pub mod span;
 
+mod casefold;
 pub mod compiler;
 pub mod executor;
 pub mod program;

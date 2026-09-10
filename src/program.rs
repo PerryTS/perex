@@ -3,11 +3,12 @@ use crate::Budget;
 
 pub(crate) const HEADER: usize = 7;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 2;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
 pub(crate) const Y: u32 = 8;
+pub(crate) const I: u32 = 16;
 pub(crate) const NEGATED: u32 = 1 << 31;
 pub(crate) const MATCH: u32 = 0;
 pub(crate) const CHAR: u32 = 1;
@@ -50,7 +51,7 @@ impl<'a> Program<'a> {
         if words.len() < HEADER
             || words[0] != MAGIC
             || words[1] != VERSION
-            || words[2] & !(U | M | S | Y) != 0
+            || words[2] & !(U | M | S | Y | I) != 0
             || words[3] == 0
             || words[4] == 0
         {
