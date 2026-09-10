@@ -1,7 +1,8 @@
 //! Perex: an ECMAScript regex engine with explicit host memory ownership.
 //!
-//! This crate is an initial project scaffold. The compiler, matcher, program
-//! format, and embedding API are not implemented or stabilized yet.
+//! Lossless borrowed input cursors and UTF-16 result spans are implemented.
+//! The compiler, matcher and program format are not implemented yet. The
+//! embedding API is experimental and not stabilized.
 //!
 //! The implementation will expose one compiler and matcher, immutable
 //! relocatable programs, caller-controlled scratch, lossless subject access,
@@ -11,3 +12,6 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+
+pub mod input;
+pub mod span;

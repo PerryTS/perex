@@ -2,7 +2,7 @@
 
 An independent ECMAScript regex engine being developed for [Perry](https://github.com/PerryTS/perry) and other embedders.
 
-**Status: project scaffold and semantic reference tests. There is no Perex compiler or matcher yet.** The crate currently builds without dependencies or the Rust standard library. This does not establish that the future engine is allocation-free, conformant, or fast. No crate release is published.
+**Status: borrowed input cursors, capture spans and semantic reference tests. There is no Perex compiler or matcher yet.** The implemented input layer traverses UTF-8/WTF-8 and UTF-16 in both directions without allocating or copying the subject. The crate builds without dependencies or the Rust standard library. This does not establish engine conformance or a CPU/RSS improvement. No crate release is published.
 
 Perex is designed around one matching engine and explicit host memory ownership:
 
@@ -28,6 +28,8 @@ Perex does not depend on `perry-runtime`. Perry will use a pinned Perex revision
 
 Start with [architecture](docs/architecture.md), the [memory contract](docs/memory-contract.md), and the [implementation milestones](docs/roadmap.md). The [research notes](docs/research.md) explain the source material and what existing engine tests do and do not establish.
 
+The experimental [input API](docs/input.md) reads the original string, including individual surrogate halves inside four-byte UTF-8 characters. Capture spans borrow those units without constructing substrings. Validation, seeking and relocation costs are documented explicitly. The [performance requirements](docs/performance.md) preserve per-case CPU and RSS results alongside complete host measurements.
+
 ## Development
 
 ```sh
@@ -35,11 +37,14 @@ cargo fmt --all -- --check
 cargo check --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
+cargo test --locked --release
+cargo build --locked --release --example input_probe
+node tools/check-input.mjs target/release/examples/input_probe
 node tools/reference.mjs --check
 node --test tools/reference.test.mjs
 ```
 
-The semantic fixture oracle requires Node 26.8.1 in CI. The fixture receipt records the exact Node/V8/Unicode versions that generated the committed expected answers. These checks validate the reference fixtures and comparator; they **do not test an unimplemented Perex matcher**.
+The semantic fixture oracle requires Node 26.8.1 in CI. The fixture receipt records the exact Node/V8/Unicode versions that generated the committed expected answers. `check-input.mjs` compares the implemented Perex cursors with Node string operations and Unicode RegExp starting positions. The separate `reference.mjs` checks validate the reference fixtures and comparator; they **do not test an unimplemented Perex matcher**.
 
 An engine harness can emit the documented JSONL answers and compare them using:
 

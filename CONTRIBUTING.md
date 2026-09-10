@@ -1,6 +1,6 @@
 # Contributing
 
-Perex currently has an independently buildable crate scaffold, an embedding design, and an executable semantic reference suite. Work toward the milestones in `docs/roadmap.md`; do not substitute stub matching results for missing implementation.
+Perex currently has borrowed input cursors, capture spans, an embedding design, and executable input/reference tests. Work toward the milestones in `docs/roadmap.md`; do not substitute stub matching results for missing implementation.
 
 ## Correctness
 
@@ -14,11 +14,11 @@ To intentionally update fixtures, use the pinned Node version and run `node tool
 
 Follow `docs/memory-contract.md`. Every allocation needs an explicit owner and lifetime. Do not add production engine fallback, implicit global caches or host GC dependencies. A raw pointer cannot substitute for a traced host reference across relocation.
 
-The empty crate currently forbids unsafe code. If a later implementation needs a native boundary, propose a narrow documented safety boundary and fail-capable tests as part of that change; do not remove the restriction casually.
+The crate currently forbids unsafe code. If a later implementation needs a native boundary, propose a narrow documented safety boundary and fail-capable tests as part of that change; do not remove the restriction casually.
 
 ## Dependencies and attribution
 
-The scaffold has no dependencies. Add implementation dependencies only for a concrete requirement, recording their memory behavior and supported targets. Preserve licenses, source revisions and notices when reusing upstream implementation or tests. No QuickJS, Irregexp, Yarr, regress or Test262 source is vendored in this initial repository.
+The crate has no dependencies. Add implementation dependencies only for a concrete requirement, recording their memory behavior and supported targets. Preserve licenses, source revisions and notices when reusing upstream implementation or tests. No QuickJS, Irregexp, Yarr, regress or Test262 source is vendored in this initial repository.
 
 ## Measurements
 

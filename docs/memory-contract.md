@@ -1,6 +1,6 @@
 # Host memory contract
 
-This document specifies implementation requirements. The scaffold does not implement these storage or execution APIs yet.
+This document specifies implementation requirements. The borrowed input/span layer is implemented; program storage, compiler and evaluator APIs remain outstanding. See `input.md` for the implemented layer's limits.
 
 ## Programs
 
@@ -22,7 +22,7 @@ Stable temporary memory need not be a moving GC allocation. It must have a visib
 
 Borrow subjects through explicit scopes. Support exact UTF-8/WTF-8 and UTF-16 semantics through a validated input design, including lone surrogates, positions within pairs, and reverse traversal. Never treat arbitrary WTF-8 as Rust `str`.
 
-Direct ASCII borrowing should be cheap. An exact UTF-16 scratch conversion can serve as the initial reference path, with copying measured. Persistent duplicate subject buffers are not a default policy. Measure cursor complexity and conversion costs on forward, backward and random access before choosing optimizations.
+Traverse the original subject without copying it or building a UTF-16 conversion buffer. Direct ASCII borrowing should be cheap. Backtracking, lookbehind, backreferences and half-pair captures must use the same lossless input model. A UTF-16 input supplied by another host is supported as its original storage; it is not a conversion requirement for a byte-string host. Measure validation, forward/backward traversal, random access and relocation resumption independently. Test oracles may encode/copy data to produce an independent answer; production traversal may not require that copy.
 
 Return integer spans and explicit unset captures into caller-owned storage. Return no durable interior pointer or engine-owned substring. The host materializes result objects using its allocator and applies its own string sharing/immutability rules.
 

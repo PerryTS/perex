@@ -2,7 +2,7 @@
 
 Perex is one independent ECMAScript regex compiler and matcher. The initial implementation will use one compact bytecode representation and evaluator. Native/AOT compilation is future work after the portable core passes semantic, memory and CPU gates.
 
-The core consumes exact pattern text and flags, compiles into immutable relocatable storage, and executes against a lossless subject view with explicit starting position and caller-controlled scratch. It returns match/capture spans or an explicit error. Public Rust API names and the binary format are not stable yet; the crate does not currently expose placeholder compile/find functions.
+The core will consume exact pattern text and flags, compile into immutable relocatable storage, and execute against a lossless subject view with explicit starting position and caller-controlled scratch. It will return match/capture spans or an explicit error. The implemented input/span API is described in `input.md`; compiler/matcher APIs and the binary format remain outstanding and are not represented by placeholder compile/find functions.
 
 ## Engine and host
 
@@ -11,6 +11,8 @@ The engine owns grammar, character/Unicode modes, assertions, backreferences, ca
 The host owns persistent storage, allocation policy, collection, reentrancy, JS objects and operation semantics. For a JavaScript host this includes `lastIndex` coercion/update, overridden exec methods, empty-match progress in string algorithms, replacement callbacks, result arrays and observable exception behavior.
 
 Subject cursors must distinguish code-unit matching from Unicode matching. Public spans use UTF-16 coordinates. A byte-oriented fast path must preserve this contract, including half-pair matches, starts within pairs and reverse lookbehind traversal.
+
+The production engine must traverse the original host string directly. It must not require conversion to another encoding or a copied substring to search, backtrack, compare backreferences or traverse lookbehind.
 
 ## Ownership
 
