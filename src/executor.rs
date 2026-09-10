@@ -518,6 +518,48 @@ impl Vm<'_, '_, '_, '_> {
             self.success(success);
         }
     }
+    fn class_step(&mut self, available: usize) -> Result<(), ExecError> {
+        let Phase::Class {
+            index,
+            end,
+            negated,
+            values,
+            admission,
+        } = self.state.phase
+        else {
+            return Err(ExecError::InvalidProgram);
+        };
+        // Keep the table cursor local through a bounded batch. Every visited
+        // range still pays separately, preserving early-match/work-limit order.
+        let stop = end.min(index.saturating_add(available.min(256) as u32));
+        for index in index..stop {
+            self.charge(1)?;
+            let [lo, hi] = self.program.range(index as usize);
+            let found = values.iter().any(|&value| {
+                if lo & PROPERTY != 0 {
+                    properties::contains(lo & !PROPERTY, value) != (hi != 0)
+                } else {
+                    value >= lo && value <= hi
+                }
+            });
+            if found {
+                self.class_result(true, negated, admission);
+                return Ok(());
+            }
+        }
+        if stop == end {
+            self.class_result(false, negated, admission);
+        } else {
+            self.state.phase = Phase::Class {
+                index: stop,
+                end,
+                negated,
+                values,
+                admission,
+            };
+        }
+        Ok(())
+    }
     fn begin_trial(&mut self) {
         self.state.pc = 0;
         self.state.frames = 0;
@@ -588,7 +630,7 @@ impl Vm<'_, '_, '_, '_> {
                 | Phase::AdmitClass
                 | Phase::AdmitSuffix(_)
                 | Phase::AdmitScan
-                | Phase::AdmitProbe { .. } => self.admit_step()?,
+                | Phase::AdmitProbe { .. } => self.admit_step(available)?,
                 Phase::Start => {
                     self.seek(self.state.requested_start, AfterSeek::Start, available)?
                 }
@@ -625,38 +667,7 @@ impl Vm<'_, '_, '_, '_> {
                     }
                 }
                 Phase::Trial | Phase::Execute { .. } => self.trial(available)?,
-                Phase::Class {
-                    index,
-                    end,
-                    negated,
-                    values,
-                    admission,
-                } => {
-                    if index == end {
-                        self.class_result(false, negated, admission);
-                    } else {
-                        self.charge(1)?;
-                        let [lo, hi] = self.program.range(index as usize);
-                        let found = values.iter().any(|&value| {
-                            if lo & PROPERTY != 0 {
-                                properties::contains(lo & !PROPERTY, value) != (hi != 0)
-                            } else {
-                                value >= lo && value <= hi
-                            }
-                        });
-                        if found {
-                            self.class_result(true, negated, admission);
-                        } else {
-                            self.state.phase = Phase::Class {
-                                index: index + 1,
-                                end,
-                                negated,
-                                values,
-                                admission,
-                            };
-                        }
-                    }
-                }
+                Phase::Class { .. } => self.class_step(available)?,
                 Phase::Named {
                     group,
                     next,
@@ -842,7 +853,12 @@ impl Vm<'_, '_, '_, '_> {
             CLASS => {
                 if let Some(c) = self.read() {
                     self.begin_class(a, b, c, false);
-                    return Ok(Step::Phase);
+                    self.class_step(available)?;
+                    return Ok(match self.state.phase {
+                        Phase::Trial => Step::Next,
+                        Phase::Fail => Step::Fail,
+                        _ => Step::Phase,
+                    });
                 }
                 success = false;
             }

@@ -12,7 +12,7 @@ impl Vm<'_, '_, '_, '_> {
             },
         )[1]
     }
-    pub(super) fn admit_step(&mut self) -> Result<(), ExecError> {
+    pub(super) fn admit_step(&mut self, available: usize) -> Result<(), ExecError> {
         match self.state.phase {
             Phase::Admission => {
                 if self.input.len_utf16() < 64 || self.program.words[2] & ADMISSION == 0 {
@@ -127,6 +127,7 @@ impl Vm<'_, '_, '_, '_> {
                     let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
                     let [_, a, b] = self.program.instruction(pc);
                     self.begin_class(a, b, c, true);
+                    self.class_step(available.saturating_sub(1))?;
                 } else {
                     self.state.phase = Phase::Finished(false);
                 }
