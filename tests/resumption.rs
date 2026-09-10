@@ -1,5 +1,6 @@
 use perex::{
     Budget,
+    binding::{BoundProgram, BoundResources, BoundSubject, ImmutableProgram, ImmutableSubject},
     compiler::{Node, Range, compile},
     executor::{ExecError, Frame, Progress, Resources, Scratch, Search, SearchError, Undo, find},
     input::Input,
@@ -99,6 +100,118 @@ impl Resources for Owner {
     }
 }
 
+impl ImmutableProgram for Owner {
+    type Error = &'static str;
+    fn with_words<T>(&self, f: impl FnOnce(&[u32]) -> T) -> Result<T, Self::Error> {
+        if self.fail_borrow.replace(false) {
+            return Err("borrow unavailable");
+        }
+        self.borrows.set(self.borrows.get() + 1);
+        Ok(f(&self.data.borrow().0))
+    }
+}
+impl ImmutableSubject for Owner {
+    type Error = &'static str;
+    fn with_subject<T>(
+        &self,
+        f: impl FnOnce(perex::binding::Subject<'_>) -> T,
+    ) -> Result<T, Self::Error> {
+        if self.fail_borrow.replace(false) {
+            return Err("borrow unavailable");
+        }
+        self.borrows.set(self.borrows.get() + 1);
+        let data = self.data.borrow();
+        Ok(f(match &data.1 {
+            Subject::Bytes(bytes) => perex::binding::Subject::Wtf8(bytes),
+            Subject::Units(units) => perex::binding::Subject::Utf16(units),
+        }))
+    }
+}
+
+#[test]
+fn bindings_validate_initial_storage_and_return_owners_on_failure() {
+    use perex::binding::{BoundProgramError, SubjectError};
+    use perex::program::ProgramError;
+    for bytes in [
+        vec![0xff],
+        vec![0x80],
+        vec![0xe0],
+        vec![0xc0, 0x80],
+        vec![0xf4, 0x90, 0x80, 0x80],
+    ] {
+        let owner = Owner::new("a", "", Subject::Bytes(bytes));
+        let error = match BoundSubject::new(&owner) {
+            Err(error) => error,
+            Ok(_) => panic!("invalid bytes bound as validated input"),
+        };
+        assert!(std::ptr::eq(error.storage, &owner));
+        assert!(matches!(error.error, SubjectError::Encoding(_)));
+    }
+    let owner = Owner::new("(a|b)+", "", Subject::Bytes(b"a".to_vec()));
+    let error = match BoundProgram::new(&owner, &mut Budget::new(0)) {
+        Err(error) => error,
+        Ok(_) => panic!("binding ignored validation work limit"),
+    };
+    assert!(std::ptr::eq(error.storage, &owner));
+    assert!(matches!(
+        error.error,
+        BoundProgramError::Validation(ProgramError::WorkLimit)
+    ));
+    owner.data.borrow_mut().0[0] = 0;
+    let error = match BoundProgram::new(&owner, &mut Budget::new(10_000)) {
+        Err(error) => error,
+        Ok(_) => panic!("invalid program bound as validated words"),
+    };
+    assert!(std::ptr::eq(error.storage, &owner));
+    assert!(matches!(
+        error.error,
+        BoundProgramError::Validation(ProgramError::Invalid)
+    ));
+    owner.fail_borrow.set(true);
+    let error = match BoundSubject::new(&owner) {
+        Err(error) => error,
+        Ok(_) => panic!("binding lost resource failure"),
+    };
+    assert!(std::ptr::eq(error.storage, &owner));
+    assert!(matches!(
+        error.error,
+        SubjectError::Resource("borrow unavailable")
+    ));
+}
+
+#[test]
+fn bound_view_guards_reject_changed_layout_before_exposing_a_view() {
+    use perex::binding::{BoundProgramError, SubjectError};
+    let owner = Owner::new("a", "", Subject::Bytes(b"a".to_vec()));
+    let subject = BoundSubject::new(&owner).unwrap_or_else(|e| panic!("{:?}", e.error));
+    let program = BoundProgram::new(&owner, &mut Budget::new(10_000))
+        .unwrap_or_else(|e| panic!("{:?}", e.error));
+    // These intentionally broken owners violate the semantic contract. The
+    // guards reject layout changes, not arbitrary equal-length content changes.
+    owner.data.borrow_mut().1 = Subject::Bytes(b"ab".to_vec());
+    assert!(matches!(
+        subject.with_view(|_| panic!("length guard bypassed")),
+        Err(SubjectError::ChangedLayout)
+    ));
+    owner.data.borrow_mut().1 = Subject::Units(vec![97]);
+    assert!(matches!(
+        subject.with_view(|_| panic!("encoding guard bypassed")),
+        Err(SubjectError::ChangedLayout)
+    ));
+    owner.data.borrow_mut().0[2] ^= 1;
+    assert!(matches!(
+        program.with_view(|_| panic!("header guard bypassed")),
+        Err(BoundProgramError::ChangedLayout)
+    ));
+    owner.data.borrow_mut().0.clear();
+    assert!(matches!(
+        program.with_view(|_| panic!("size guard bypassed")),
+        Err(BoundProgramError::ChangedLayout)
+    ));
+    assert!(std::ptr::eq(subject.into_storage(), &owner));
+    assert!(std::ptr::eq(program.into_storage(), &owner));
+}
+
 fn compare(owner: &Owner, start: usize, quantum: usize) -> usize {
     let mut registers = vec![0; 1024];
     let mut frames = vec![Frame::default(); 2048];
@@ -124,8 +237,15 @@ fn compare(owner: &Owner, start: usize, quantum: usize) -> usize {
         })
         .unwrap()
         .unwrap();
+    let program = BoundProgram::new(owner, &mut Budget::new(10_000_000))
+        .unwrap_or_else(|e| panic!("{:?}", e.error));
+    let subject = BoundSubject::new(owner).unwrap_or_else(|e| panic!("{:?}", e.error));
+    let resources = BoundResources {
+        program: &program,
+        subject: &subject,
+    };
     let mut search = Search::new(
-        owner,
+        &resources,
         start,
         Scratch {
             registers: &mut registers,

@@ -203,11 +203,13 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
                     input,
                     cursor,
                     scratch: &mut scratch,
-                    state: &mut self.state,
-                    budget: &mut self.budget,
+                    state: self.state,
+                    budget: self.budget,
                 };
                 let result = vm.run(quantum);
                 vm.state.current = vm.cursor.mark();
+                self.state = vm.state;
+                self.budget = vm.budget;
                 result
             })
             .map_err(SearchError::Resource)?;
@@ -275,20 +277,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
         self.require_match()?;
         let count = self.capture_count();
         let scratch = self.buffers.scratch();
-        let registers = scratch
-            .registers
-            .get(..count * 2)
-            .ok_or(ExecError::ChangedResources)?;
-        for (i, target) in output[..count].iter_mut().enumerate() {
-            let lo = registers[i * 2];
-            let hi = registers[i * 2 + 1];
-            *target = if lo == UNSET || hi == UNSET {
-                None
-            } else {
-                Span::new(lo, hi)
-            };
-        }
-        Ok(())
+        copy_match_registers(scratch.registers, output, count)
     }
 
     pub fn required_scratch(&self) -> ScratchRequirements {
@@ -360,8 +349,8 @@ struct Vm<'a, 'p, 's, 'w> {
     input: Input<'a>,
     cursor: Cursor<'a>,
     scratch: &'w mut Scratch<'s>,
-    state: &'w mut State,
-    budget: &'w mut Budget,
+    state: State,
+    budget: Budget,
 }
 impl Vm<'_, '_, '_, '_> {
     fn charge(&mut self, n: usize) -> Result<(), ExecError> {
@@ -408,12 +397,13 @@ impl Vm<'_, '_, '_, '_> {
     fn success(&mut self, success: bool) {
         self.state.phase = if success { Phase::Trial } else { Phase::Fail };
     }
-    fn restore(&mut self, mark: Mark) -> Result<(), ExecError> {
-        self.cursor = self
-            .input
-            .resume_cursor(mark)
-            .ok_or(ExecError::ChangedResources)?;
-        Ok(())
+    #[inline]
+    fn restore(&mut self, mark: Mark) {
+        // All VM marks originate from cursors on this immutable resource.
+        // Search::advance checks the fresh view and saved current mark at the
+        // borrow boundary. Within it, restoring another private mark changes
+        // only offsets; it need not reconstruct/recheck the same input view.
+        self.cursor.restore(mark);
     }
     fn seek(&mut self, target: usize, after: AfterSeek, available: usize) -> Result<(), ExecError> {
         let work = self.input.seek_work(target);
@@ -453,7 +443,7 @@ impl Vm<'_, '_, '_, '_> {
                 matched,
             } => {
                 let captured = self.cursor.mark();
-                self.restore(matched)?;
+                self.restore(matched);
                 self.state.phase = Phase::Backref {
                     start,
                     end,
@@ -555,7 +545,7 @@ impl Vm<'_, '_, '_, '_> {
                         self.state.undo = 0;
                         self.state.assertion = UNSET;
                         self.state.reverse = false;
-                        self.restore(self.state.start)?;
+                        self.restore(self.state.start);
                         self.state.phase = Phase::Trial;
                     } else {
                         let end = self
@@ -574,10 +564,13 @@ impl Vm<'_, '_, '_, '_> {
                     }
                     let [op, a, b] = self.program.instruction(self.state.pc);
                     self.state.pc += 1;
-                    self.state.phase = Phase::Execute { op, a, b };
-                    // Keep the paid opcode for a capacity retry, while normal
-                    // execution stays in this dispatch without an extra loop.
-                    self.instruction(op, a, b, available.saturating_sub(1))?;
+                    let result = self.instruction(op, a, b, available.saturating_sub(1));
+                    // Only a capacity retry needs the already-paid opcode.
+                    // Successful execution does not materialize this state.
+                    if matches!(result, Err(ExecError::Frames | ExecError::Undo)) {
+                        self.state.phase = Phase::Execute { op, a, b };
+                    }
+                    result?;
                 }
                 Phase::Execute { op, a, b } => self.instruction(op, a, b, available)?,
                 Phase::Class {
@@ -648,10 +641,8 @@ impl Vm<'_, '_, '_, '_> {
                     end,
                     captured,
                 } => {
-                    let mut left = self
-                        .input
-                        .resume_cursor(captured)
-                        .ok_or(ExecError::ChangedResources)?;
+                    let mut left = self.cursor;
+                    left.restore(captured);
                     let until = if self.state.reverse { start } else { end };
                     if left.position() == until {
                         self.state.phase = Phase::Trial;
@@ -706,7 +697,7 @@ impl Vm<'_, '_, '_, '_> {
                         self.charge(1)?;
                         self.state.frames -= 1;
                         let frame = self.scratch.frames[self.state.frames];
-                        self.restore(frame.position)?;
+                        self.restore(frame.position);
                         self.state.reverse = frame.reverse;
                         self.state.assertion = frame.assertion;
                         self.state.pc = frame.pc;
@@ -737,7 +728,7 @@ impl Vm<'_, '_, '_, '_> {
                         self.state.phase = Phase::Finished(false);
                     } else {
                         self.charge(1)?;
-                        self.restore(self.state.start)?;
+                        self.restore(self.state.start);
                         if read(&mut self.cursor, self.program.unicode(), false).is_none() {
                             self.state.phase = Phase::Finished(false);
                         } else {
@@ -767,6 +758,7 @@ impl Vm<'_, '_, '_, '_> {
             }
         }
     }
+    #[inline(always)]
     fn instruction(&mut self, op: u32, a: u32, b: u32, available: usize) -> Result<(), ExecError> {
         let mut success = true;
         match op {
@@ -845,7 +837,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 let frame = self.scratch.frames[self.state.assertion];
                 self.state.frames = self.state.assertion;
-                self.restore(frame.position)?;
+                self.restore(frame.position);
                 self.state.reverse = frame.reverse;
                 self.state.assertion = frame.assertion;
                 if frame.kind == 2 {
@@ -908,6 +900,25 @@ impl Vm<'_, '_, '_, '_> {
         Ok(())
     }
 }
+fn copy_match_registers(
+    registers: &[usize],
+    output: &mut [Option<Span>],
+    count: usize,
+) -> Result<(), ExecError> {
+    let registers = registers
+        .get(..count * 2)
+        .ok_or(ExecError::ChangedResources)?;
+    for (i, target) in output[..count].iter_mut().enumerate() {
+        let lo = registers[i * 2];
+        let hi = registers[i * 2 + 1];
+        *target = if lo == UNSET || hi == UNSET {
+            None
+        } else {
+            Span::new(lo, hi)
+        };
+    }
+    Ok(())
+}
 fn read(cursor: &mut Cursor<'_>, unicode: bool, reverse: bool) -> Option<u32> {
     match (unicode, reverse) {
         (true, false) => cursor.next_point(),
@@ -917,43 +928,38 @@ fn read(cursor: &mut Cursor<'_>, unicode: bool, reverse: bool) -> Option<u32> {
     }
 }
 
-struct Borrowed<'p, 'i> {
-    program: Program<'p>,
-    input: Input<'i>,
-}
-impl Resources for Borrowed<'_, '_> {
-    type Error = core::convert::Infallible;
-    fn with_views<T>(&self, f: impl FnOnce(Program<'_>, Input<'_>) -> T) -> Result<T, Self::Error> {
-        Ok(f(self.program, self.input))
-    }
-}
-fn infallible(error: SearchError<core::convert::Infallible>) -> ExecError {
-    match error {
-        SearchError::Execution(error) => error,
-        SearchError::Resource(never) => match never {},
-    }
-}
-
 /// Synchronous execution of the same resumable evaluator. Output is untouched
 /// on no-match/error. The host owns lastIndex, result objects and global loops.
 pub fn find(
     program: Program<'_>,
     input: Input<'_>,
     start_utf16: usize,
-    scratch: Scratch<'_>,
+    mut scratch: Scratch<'_>,
     captures: &mut [Option<Span>],
     budget: &mut Budget,
 ) -> Result<bool, ExecError> {
     if captures.len() < program.capture_count() {
         return Err(ExecError::Captures);
     }
-    let resources = Borrowed { program, input };
-    let mut search = Search::new(&resources, start_utf16, scratch, *budget).map_err(infallible)?;
-    let result = search.advance(usize::MAX).map_err(infallible);
-    *budget = search.budget;
+    if scratch.registers.len() < program.register_count() {
+        return Err(ExecError::Registers);
+    }
+    // The caller already holds both immutable views. Enter the same evaluator
+    // directly; constructing a rooted-owner binding is unnecessary for this
+    // single borrow. Search uses this identical VM across multiple borrows.
+    let mut vm = Vm {
+        program,
+        input,
+        cursor: input.cursor(),
+        scratch: &mut scratch,
+        state: State::new(start_utf16, input.len_utf16()),
+        budget: *budget,
+    };
+    let result = vm.run(usize::MAX);
+    *budget = vm.budget;
     match result? {
         Progress::Matched => {
-            search.copy_captures(captures)?;
+            copy_match_registers(vm.scratch.registers, captures, program.capture_count())?;
             Ok(true)
         }
         Progress::NoMatch => Ok(false),

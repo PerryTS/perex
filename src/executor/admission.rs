@@ -173,7 +173,7 @@ impl Vm<'_, '_, '_, '_> {
                             scan,
                         };
                     } else {
-                        self.restore(scan)?;
+                        self.restore(scan);
                         self.state.phase = Phase::AdmitScan;
                     }
                 }

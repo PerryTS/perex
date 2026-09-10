@@ -104,6 +104,7 @@ impl Phase {
         }
     }
 }
+#[derive(Clone, Copy)]
 pub(super) struct State {
     pub blocked: Option<ExecError>,
     pub phase: Phase,

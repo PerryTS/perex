@@ -13,6 +13,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod binding;
 pub mod input;
 pub mod span;
 

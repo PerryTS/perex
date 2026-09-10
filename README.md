@@ -2,7 +2,7 @@
 
 An independent ECMAScript regex engine being developed for [Perry](https://github.com/PerryTS/perry) and other embedders.
 
-**Status: experimental compiler, matcher, borrowed input and capture spans.** One evaluator implements core matching, numbered/named captures, repetition, assertions and backreferences using caller-owned storage and original subject bytes. Experimental pause/resume retains offset state between scoped borrows and supports explicit scratch replacement. Full Unicode/grammar support, efficient host reborrowing and Perry integration remain outstanding. There is no demonstrated engine CPU/RSS win or production adoption. The crate has no dependencies, uses no standard library, and is not published.
+**Status: experimental compiler, matcher, borrowed input and capture spans.** One evaluator implements core matching, numbered/named captures, repetition, assertions and backreferences using caller-owned storage and original subject bytes. Experimental pause/resume retains offset state between scoped borrows, supports explicit scratch replacement and reborrows through immutable owner bindings without rescanning. Full Unicode/grammar support, actual host invariants and Perry integration remain outstanding. Resumable execution has measured CPU regressions that remain optimization work; there is no demonstrated all-case CPU/RSS win or production adoption. The crate has no dependencies, uses no standard library, and is not published.
 
 Perex is designed around one matching engine and explicit host memory ownership:
 

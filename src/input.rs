@@ -118,6 +118,22 @@ impl<'a> Input<'a> {
         (kind, len, self.utf16_len)
     }
 
+    // Only owner-bound validation may use this. The owner preserves the exact
+    // immutable bytes from initial validation; shape is a cheap guard, not a
+    // transferable validity certificate for arbitrary slices.
+    pub(crate) fn reborrow_bytes(bytes: &'a [u8], layout: (u8, usize, usize)) -> Option<Self> {
+        let (kind, len, utf16_len) = layout;
+        if bytes.len() != len {
+            return None;
+        }
+        let storage = match kind {
+            0 => Storage::Ascii(bytes),
+            1 => Storage::Bytes(bytes),
+            _ => return None,
+        };
+        Some(Self { storage, utf16_len })
+    }
+
     // Resumption is internal and requires a Resources owner that keeps the
     // exact immutable representation alive. Cheap checks reject incompatible
     // layouts; they do not prove that unrelated slices have identical contents.

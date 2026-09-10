@@ -2,11 +2,13 @@
 //! this mock collector moves and poisons its own original backing allocations.
 use perex::{
     Budget,
+    binding::{
+        BoundProgram, BoundResources, BoundSubject, ImmutableProgram, ImmutableSubject, Subject,
+    },
     executor::{
-        ExecError, Frame, Progress, Resources, Scratch, ScratchOwner, ScratchRequirements, Search,
+        ExecError, Frame, Progress, Scratch, ScratchOwner, ScratchRequirements, Search,
         SearchError, Undo,
     },
-    input::Input,
     program::Program,
     span::Span,
 };
@@ -21,13 +23,16 @@ pub struct Options {
 struct Owner {
     storage: RefCell<(Vec<u32>, Vec<u8>)>,
 }
-impl Resources for Owner {
+impl ImmutableProgram for Owner {
     type Error = Infallible;
-    fn with_views<T>(&self, f: impl FnOnce(Program<'_>, Input<'_>) -> T) -> Result<T, Self::Error> {
-        let storage = self.storage.borrow();
-        let p = Program::from_words(&storage.0, &mut Budget::new(usize::MAX)).unwrap();
-        let input = Input::wtf8(&storage.1).unwrap();
-        Ok(f(p, input))
+    fn with_words<T>(&self, f: impl FnOnce(&[u32]) -> T) -> Result<T, Self::Error> {
+        Ok(f(&self.storage.borrow().0))
+    }
+}
+impl ImmutableSubject for Owner {
+    type Error = Infallible;
+    fn with_subject<T>(&self, f: impl FnOnce(Subject<'_>) -> T) -> Result<T, Self::Error> {
+        Ok(f(Subject::Wtf8(&self.storage.borrow().1)))
     }
 }
 impl Owner {
@@ -43,10 +48,10 @@ impl Owner {
         *storage = replacement;
     }
 }
-fn error(error: SearchError<Infallible>) -> ExecError {
+fn error<E: core::fmt::Debug>(error: SearchError<E>) -> ExecError {
     match error {
         SearchError::Execution(error) => error,
-        SearchError::Resource(never) => match never {},
+        SearchError::Resource(error) => panic!("immutable development owner failed: {error:?}"),
     }
 }
 
@@ -117,6 +122,13 @@ pub fn find(
     let owner = Owner {
         storage: RefCell::new((program.words().to_vec(), subject.to_vec())),
     };
+    let bound_program = BoundProgram::new(&owner, &mut Budget::new(usize::MAX))
+        .unwrap_or_else(|e| panic!("{:?}", e.error));
+    let bound_subject = BoundSubject::new(&owner).unwrap_or_else(|e| panic!("{:?}", e.error));
+    let resources = BoundResources {
+        program: &bound_program,
+        subject: &bound_subject,
+    };
     let mut sizes = ScratchRequirements {
         registers: program.register_count(),
         frames: 0,
@@ -127,7 +139,7 @@ pub fn find(
     } else {
         Buffers::Borrowed(scratch)
     };
-    let mut search = Search::new(&owner, start, buffers, *budget).map_err(error)?;
+    let mut search = Search::new(&resources, start, buffers, *budget).map_err(error)?;
     let result = loop {
         match search.advance(options.quantum).map_err(error) {
             Ok(Progress::Pending) => {

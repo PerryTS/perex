@@ -2,15 +2,15 @@
 
 `Search` retains one operation's offset state, exclusive caller-owned scratch, work budget and a reference to the host's rooted `Resources` owner. It holds no subject or program view between `advance` calls. The synchronous `find` function runs this same evaluator to completion; there is no second matcher or fallback route.
 
-This implementation is under validation. Pause/resume and explicit scratch replacement are implemented experimentally. Efficient view reacquisition and Perry's adapter remain outstanding; this is not moving-GC adoption evidence.
+This implementation is under validation. Pause/resume, explicit scratch replacement and constant-work owner-bound reborrowing are implemented experimentally. Perry's owner/GC adapter and performance requirements remain outstanding; this is not moving-GC adoption evidence.
 
 ## Borrow and identity boundary
 
 A `Resources` implementation supplies validated `Program` and `Input` views inside `with_views`. Its callback result cannot contain a borrow of those views. A host can release the borrows, move allocations, update roots and reacquire current bases on the next advance. The owner must preserve the exact immutable program words and subject representation for the search's lifetime, including its sharing rules. Moving storage does not permit changing its contents, encoding or logical identity.
 
-The implementation retains header/layout metadata and checks fresh views against it. Private cursor restoration also checks bounds, encoding boundaries and half-pair consistency. These checks do not establish that unrelated equal-length buffers are identical. Rooted identity and immutability are the owner's semantic contract; violating it can produce incorrect answers or a panic. The core remains safe Rust and does not introduce unchecked public view constructors.
+The implementation retains header/layout metadata and checks fresh views against it. At the advance boundary, saved-current-cursor restoration also checks bounds, encoding boundaries and half-pair consistency. Within that borrow, private VM marks restore only offsets against the same immutable input. These checks do not establish that unrelated equal-length buffers are identical. Rooted identity and immutability are the owner's semantic contract; violating it can produce incorrect answers or a panic. The core remains safe Rust and does not introduce unchecked public view constructors.
 
-The current safe byte/program constructors still scan to validate/count. A normal immutable embedder can retain validated borrowed views, but a moving host needs an established invariant that permits efficient reacquisition. Revalidating a whole subject/program on every pause is not an acceptable final host design and is not claimed solved here. The test collector deliberately revalidates to exercise correctness; its timings would include that extra work.
+The ordinary byte/program constructors scan to validate/count. Experimental [owner-bound validation](binding.md) retains the immutable owner and initial metadata, then scopes new views without repeating those scans. The relocation matrix and development probe use that path. The host still has to establish the actual root/immutability and non-collecting-getter invariants. Initial validation remains synchronous and has a separate work/latency boundary.
 
 ## Work and completion
 
