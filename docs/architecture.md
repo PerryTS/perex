@@ -2,7 +2,7 @@
 
 Perex is one independent ECMAScript regex compiler and matcher. The initial implementation will use one compact bytecode representation and evaluator. Native/AOT compilation is future work after the portable core passes semantic, memory and CPU gates.
 
-The core will consume exact pattern text and flags, compile into immutable relocatable storage, and execute against a lossless subject view with explicit starting position and caller-controlled scratch. It will return match/capture spans or an explicit error. The implemented input/span API is described in `input.md`; compiler/matcher APIs and the binary format remain outstanding and are not represented by placeholder compile/find functions.
+The experimental core consumes exact pattern text and flags, compiles supported syntax into immutable relocatable storage, and executes against a lossless subject view with explicit starting position and caller-controlled scratch. It returns match/capture spans or explicit errors. The implemented APIs and remaining semantics/storage limits are described in `engine.md` and `input.md`; the API and binary format are unstable.
 
 ## Engine and host
 

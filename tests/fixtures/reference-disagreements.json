@@ -1,0 +1,123 @@
+[
+  {
+    "id": "matrix:3670",
+    "case": {
+      "id": "matrix:3670",
+      "source": "\\B",
+      "flags": "du",
+      "subject": "a\ud83d\ude00b",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "matrix:3670",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            2,
+            2
+          ],
+          "units": []
+        }
+      ],
+      "groups": null
+    },
+    "perex": {
+      "id": "matrix:3670",
+      "outcome": "no-match"
+    },
+    "evidence": "docs/reference-disagreements.md"
+  },
+  {
+    "id": "generated:1:u:8448",
+    "case": {
+      "id": "generated:1:u:8448",
+      "source": "((?:(?![^b])(?:))+)",
+      "flags": "du",
+      "subject": "a\ud83d\ude00b",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "generated:1:u:8448",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            2,
+            2
+          ],
+          "units": []
+        },
+        {
+          "span": [
+            2,
+            2
+          ],
+          "units": []
+        }
+      ],
+      "groups": null
+    },
+    "perex": {
+      "id": "generated:1:u:8448",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            3,
+            3
+          ],
+          "units": []
+        },
+        {
+          "span": [
+            3,
+            3
+          ],
+          "units": []
+        }
+      ],
+      "groups": null
+    },
+    "evidence": "docs/reference-disagreements.md"
+  },
+  {
+    "id": "generated:163:u:9744",
+    "case": {
+      "id": "generated:163:u:9744",
+      "source": "(?=(?:(?:[^b]|\\d)|(?:\\d)*?))(?:(?![^b])(?:)|(?!\ud83d\ude00)\ud83d\ude00)",
+      "flags": "du",
+      "subject": "a\ud83d\ude00b",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "generated:163:u:9744",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            2,
+            2
+          ],
+          "units": []
+        }
+      ],
+      "groups": null
+    },
+    "perex": {
+      "id": "generated:163:u:9744",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            3,
+            3
+          ],
+          "units": []
+        }
+      ],
+      "groups": null
+    },
+    "evidence": "docs/reference-disagreements.md"
+  }
+]

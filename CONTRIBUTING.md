@@ -1,6 +1,6 @@
 # Contributing
 
-Perex currently has borrowed input cursors, capture spans, an embedding design, and executable input/reference tests. Work toward the milestones in `docs/roadmap.md`; do not substitute stub matching results for missing implementation.
+Perex currently has an experimental compiler/matcher, borrowed input cursors, capture spans, an embedding design, and executable engine/input/reference tests. Work toward the milestones in `docs/roadmap.md`; do not substitute stub matching results for missing implementation.
 
 ## Correctness
 

@@ -44,7 +44,7 @@ export function compareAnswers(expected, actual) {
   return differences;
 }
 
-function runCase(row) {
+export function runCase(row) {
   let re;
   try {
     re = new RegExp(row.source, row.flags);

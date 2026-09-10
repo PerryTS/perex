@@ -1,6 +1,6 @@
 # Host memory contract
 
-This document specifies implementation requirements. The borrowed input/span layer is implemented; program storage, compiler and evaluator APIs remain outstanding. See `input.md` for the implemented layer's limits.
+This document specifies implementation requirements. Borrowed input/spans and an experimental relocatable program/compiler/evaluator are implemented. See `input.md` and `engine.md` for current limits; efficient moving-safepoint resumption and the host adapter remain outstanding.
 
 ## Programs
 

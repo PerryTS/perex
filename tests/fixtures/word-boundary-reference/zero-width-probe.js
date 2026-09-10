@@ -1,0 +1,2 @@
+var cases=[{"id": "generated:1:u:8448", "source": "((?:(?![^b])(?:))+)", "flags": "du", "subject": "a\ud83d\ude00b", "start_utf16": 0}, {"id": "generated:163:u:9744", "source": "(?=(?:(?:[^b]|\\d)|(?:\\d)*?))(?:(?![^b])(?:)|(?!\ud83d\ude00)\ud83d\ude00)", "flags": "du", "subject": "a\ud83d\ude00b", "start_utf16": 0}];
+for(var row of cases) {var re=new RegExp(row.source,row.flags);re.lastIndex=row.start_utf16;var m=re.exec(row.subject);console.log(JSON.stringify({id:row.id,indices:m===null?null:m.indices}));}

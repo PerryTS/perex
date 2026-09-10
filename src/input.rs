@@ -95,6 +95,14 @@ impl<'a> Input<'a> {
         }
     }
 
+    pub(crate) fn seek_work(self, position: usize) -> usize {
+        if self.ascii || matches!(self.storage, Storage::Units(_)) {
+            1
+        } else {
+            position.min(self.utf16_len - position).saturating_add(1)
+        }
+    }
+
     pub fn cursor(self) -> Cursor<'a> {
         Cursor {
             input: self,
@@ -165,7 +173,29 @@ pub struct Cursor<'a> {
     second_half: bool,
 }
 
+// Execution-local checkpoints contain no subject pointer. Only the evaluator
+// may restore them, and only on the same immutable input borrow that made them.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Mark {
+    offset: usize,
+    units: usize,
+    half: bool,
+}
+
 impl Cursor<'_> {
+    pub(crate) fn mark(self) -> Mark {
+        Mark {
+            offset: self.offset,
+            units: self.utf16_offset,
+            half: self.second_half,
+        }
+    }
+    pub(crate) fn restore(&mut self, mark: Mark) {
+        self.offset = mark.offset;
+        self.utf16_offset = mark.units;
+        self.second_half = mark.half;
+    }
+
     pub fn position(self) -> usize {
         self.utf16_offset
     }

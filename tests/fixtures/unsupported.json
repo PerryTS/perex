@@ -1,0 +1,57 @@
+[
+  {
+    "id": "named-captures",
+    "outcome": "unsupported",
+    "feature": "named captures"
+  },
+  {
+    "id": "named-unset",
+    "outcome": "unsupported",
+    "feature": "named captures"
+  },
+  {
+    "id": "duplicate-disjoint-names",
+    "outcome": "unsupported",
+    "feature": "named captures"
+  },
+  {
+    "id": "scoped-modifiers",
+    "outcome": "unsupported",
+    "feature": "group modifiers or extension"
+  },
+  {
+    "id": "v-string-set",
+    "outcome": "unsupported",
+    "feature": "Unicode sets"
+  },
+  {
+    "id": "v-subtraction-hit",
+    "outcome": "unsupported",
+    "feature": "Unicode sets"
+  },
+  {
+    "id": "v-subtraction-miss",
+    "outcome": "unsupported",
+    "feature": "Unicode sets"
+  },
+  {
+    "id": "unicode-property",
+    "outcome": "unsupported",
+    "feature": "Unicode properties"
+  },
+  {
+    "id": "unicode-word-fold",
+    "outcome": "unsupported",
+    "feature": "ignore-case Unicode tables"
+  },
+  {
+    "id": "legacy-word-fold",
+    "outcome": "unsupported",
+    "feature": "ignore-case Unicode tables"
+  },
+  {
+    "id": "invalid-duplicate-name",
+    "outcome": "unsupported",
+    "feature": "named captures"
+  }
+]

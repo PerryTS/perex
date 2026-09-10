@@ -1,8 +1,8 @@
 //! Perex: an ECMAScript regex engine with explicit host memory ownership.
 //!
-//! Lossless borrowed input cursors and UTF-16 result spans are implemented.
-//! The compiler, matcher and program format are not implemented yet. The
-//! embedding API is experimental and not stabilized.
+//! An experimental compiler, ordered evaluator, lossless borrowed input cursors
+//! and UTF-16 spans are implemented. Full ECMAScript coverage and efficient
+//! host resumption are outstanding; the embedding API and format are unstable.
 //!
 //! The implementation will expose one compiler and matcher, immutable
 //! relocatable programs, caller-controlled scratch, lossless subject access,
@@ -15,3 +15,34 @@
 
 pub mod input;
 pub mod span;
+
+pub mod compiler;
+pub mod executor;
+pub mod program;
+
+/// Work allowance shared across an entire compile or search operation. It is
+/// never reset when trying another start position or entering an assertion.
+#[derive(Clone, Copy, Debug)]
+pub struct Budget {
+    remaining: usize,
+}
+impl Budget {
+    pub fn new(work: usize) -> Self {
+        Self { remaining: work }
+    }
+    pub fn remaining(self) -> usize {
+        self.remaining
+    }
+    pub(crate) fn charge(&mut self, work: usize) -> Result<(), ()> {
+        match self.remaining.checked_sub(work) {
+            Some(n) => {
+                self.remaining = n;
+                Ok(())
+            }
+            None => {
+                self.remaining = 0;
+                Err(())
+            }
+        }
+    }
+}

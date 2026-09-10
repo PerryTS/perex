@@ -31,6 +31,9 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - run: cargo +stable build --locked --release --example input_probe
       - run: node tools/check-input.mjs target/release/examples/input_probe
+      - run: cargo +stable build --locked --release --example engine_probe
+      - name: Partial engine differential with exact documented omissions
+        run: node tools/check-engine.mjs target/release/examples/engine_probe --allow-listed-unsupported --allow-reviewed-reference-disagreements
 
   semantic-reference:
     runs-on: ubuntu-latest
