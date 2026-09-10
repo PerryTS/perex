@@ -886,6 +886,23 @@ pub fn compile<'p>(
         parser.range_used as u32,
         parser.repeats,
     ]);
+    // Preserve the existing atom instruction and its admission-hint address.
+    // The entry selects a bounded retry record in the same evaluator; keeping
+    // the generic body words avoids a second program or an AST relocation pass.
+    for i in 0..parser.repeats as usize {
+        parser.step()?;
+        let p = Program { words: output };
+        let r = p.repeat(i);
+        let entry = r[3] as usize - 2;
+        if r[4] as usize == entry + 5
+            && r[5] == r[6]
+            && matches!(p.instruction(entry + 3)[0], CHAR | CLASS | ANY)
+        {
+            output[HEADER + entry * 3] = ATOM_REPEAT;
+            let at = HEADER + count as usize * 3 + parser.range_used * 2 + i * 8;
+            output[at + 7] = 1;
+        }
+    }
     if parser.repeats != 0 {
         let hint = parser.admission(Program { words: output }, root)?;
         output[2] |= hint;

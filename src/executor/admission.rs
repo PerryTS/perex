@@ -2,11 +2,17 @@
 use super::*;
 
 impl Vm<'_, '_, '_, '_> {
+    fn needle(&self) -> &[u8] {
+        match &self.state.work {
+            Work::Needle { bytes, len } => &bytes[..*len as usize],
+            _ => unreachable!("admission literal buffer is not active"),
+        }
+    }
     fn required(&self, index: usize) -> u32 {
         let (pc, reverse) = self.program.admission().unwrap();
         self.program.instruction(
             pc + if reverse {
-                self.state.needle_len - 1 - index
+                self.needle().len() - 1 - index
             } else {
                 index
             },
@@ -37,16 +43,23 @@ impl Vm<'_, '_, '_, '_> {
                     self.state.phase = Phase::AdmitClass;
                     return Ok(());
                 }
-                self.state.needle_len = self.program.literal_run(pc);
-                self.charge(self.state.needle_len)?;
+                let len = self.program.literal_run(pc);
+                self.charge(len)?;
+                self.state.work = Work::Needle {
+                    bytes: [0; ADMISSION_MAX],
+                    len: len as u8,
+                };
                 let mut ascii = true;
-                for i in 0..self.state.needle_len {
+                for i in 0..len {
                     let c = self.required(i);
                     if c >= 128 {
                         ascii = false;
                         break;
                     }
-                    self.state.needle[i] = c as u8;
+                    let Work::Needle { bytes, .. } = &mut self.state.work else {
+                        unreachable!()
+                    };
+                    bytes[i] = c as u8;
                 }
                 let bytes = if self.program.words[2] & I != 0 {
                     self.input.ascii_bytes()
@@ -57,7 +70,7 @@ impl Vm<'_, '_, '_, '_> {
                     self.state.phase = Phase::AdmitBytes { offset: 0 };
                 } else {
                     self.cursor = self.input.cursor_at(self.input.len_utf16()).unwrap();
-                    self.state.phase = Phase::AdmitSuffix(self.state.needle_len);
+                    self.state.phase = Phase::AdmitSuffix(len);
                 }
             }
             Phase::AdmitByteClass { offset, lo, hi } => {
@@ -94,18 +107,18 @@ impl Vm<'_, '_, '_, '_> {
                 } else {
                     let end = bytes.len().min(offset + 256);
                     self.charge(end - offset)?;
-                    let len = self.state.needle_len;
+                    let len = self.needle().len();
                     let mut at = offset;
                     while let Some(hit) = bytes[at..end].iter().position(|&b| {
                         if fold {
-                            b.eq_ignore_ascii_case(&self.state.needle[0])
+                            b.eq_ignore_ascii_case(&self.needle()[0])
                         } else {
-                            b == self.state.needle[0]
+                            b == self.needle()[0]
                         }
                     }) {
                         at += hit;
                         self.charge(len)?;
-                        let needle = &self.state.needle[..len];
+                        let needle = self.needle();
                         if let Some(window) = bytes.get(at..at + len)
                             && if fold {
                                 window.eq_ignore_ascii_case(needle)
@@ -126,7 +139,7 @@ impl Vm<'_, '_, '_, '_> {
                     self.charge(1)?;
                     let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
                     let [_, a, b] = self.program.instruction(pc);
-                    self.begin_class(a, b, c, true);
+                    self.begin_class(a, b, c, ClassUse::Admission);
                     self.class_step(available.saturating_sub(1))?;
                 } else {
                     self.state.phase = Phase::Finished(false);
@@ -161,7 +174,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
             }
             Phase::AdmitProbe { index, scan } => {
-                if index == self.state.needle_len {
+                if index == self.needle().len() {
                     self.state.phase = Phase::Start;
                 } else {
                     self.charge(1)?;

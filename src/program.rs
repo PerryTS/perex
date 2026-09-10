@@ -3,7 +3,7 @@ use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 7;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 5;
+pub(crate) const VERSION: u32 = 6;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -35,6 +35,7 @@ pub(crate) const REPEAT_CHOICE: u32 = 14;
 pub(crate) const REPEAT_BODY: u32 = 15;
 pub(crate) const REPEAT_NEXT: u32 = 16;
 pub(crate) const NAMED_BACKREF: u32 = 17;
+pub(crate) const ATOM_REPEAT: u32 = 18;
 
 /// One name and its numeric capture slots, borrowed from the same program.
 /// Duplicate declarations in disjoint alternatives share one entry.
@@ -176,6 +177,12 @@ impl<'a> Program<'a> {
                 NAMED_BACKREF => (a as usize) < p.name_count() && b == 0,
                 ASSERT => a < words[4] && b < 4,
                 REPEAT_INIT | REPEAT_CHOICE | REPEAT_BODY | REPEAT_NEXT => a < words[6] && b == 0,
+                ATOM_REPEAT => {
+                    a < words[6]
+                        && b == 0
+                        && p.repeat(a as usize)[7] == 1
+                        && (p.repeat(a as usize)[3] as usize).checked_sub(2) == Some(pc)
+                }
                 _ => false,
             };
             if !valid || (pc + 1 == p.instructions() && !matches!(op, MATCH | JUMP)) {
@@ -204,9 +211,25 @@ impl<'a> Program<'a> {
                 || r[4] >= words[4]
                 || r[5] > r[6]
                 || r[6] > words[3]
-                || r[7] != 0
+                || r[7] > 1
             {
                 return Err(bad);
+            }
+            if r[7] == 1 {
+                // The atom remains an ordinary instruction in the same
+                // program. A tagged repeat may only reference this exact
+                // five-instruction shape with a noncapturing consuming body.
+                let entry = (r[3] as usize).checked_sub(2).ok_or(bad)?;
+                if entry.checked_add(5) != Some(r[4] as usize)
+                    || r[5] != r[6]
+                    || p.instruction(entry) != [ATOM_REPEAT, i as u32, 0]
+                    || p.instruction(entry + 1) != [REPEAT_CHOICE, i as u32, 0]
+                    || p.instruction(entry + 2) != [REPEAT_BODY, i as u32, 0]
+                    || !matches!(p.instruction(entry + 3)[0], CHAR | CLASS | ANY)
+                    || p.instruction(entry + 4) != [REPEAT_NEXT, i as u32, 0]
+                {
+                    return Err(bad);
+                }
             }
         }
         Ok(p)

@@ -1,5 +1,38 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct AtomState {
+    pub minimum_end: usize,
+    pub needed: u32,
+    pub remaining: u32,
+    pub before: Mark,
+}
+
+// Admission is complete before the first instruction executes. Its literal
+// buffer and an active atom scan therefore never need storage simultaneously.
+#[derive(Clone, Copy)]
+pub(super) enum Work {
+    Idle,
+    Needle { bytes: [u8; ADMISSION_MAX], len: u8 },
+    Atom(AtomState),
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ClassUse {
+    Trial,
+    Admission,
+    AtomScan,
+    AtomExtend,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum AfterRollback {
+    Trial,
+    Fail,
+    AtomRetreat,
+    AtomExtend,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Shape {
     pub header: [u32; HEADER],
@@ -62,8 +95,16 @@ pub(super) enum Phase {
         end: u32,
         negated: bool,
         values: [u32; 4],
-        admission: bool,
+        context: ClassUse,
     },
+    AtomScan,
+    AtomExtend,
+    AtomResult {
+        matched: bool,
+        extend: bool,
+    },
+    AtomCommit,
+    AtomRetreat,
     Named {
         group: usize,
         next: usize,
@@ -87,7 +128,7 @@ pub(super) enum Phase {
     Fail,
     Rollback {
         until: usize,
-        fail: bool,
+        after: AfterRollback,
     },
     NextStart,
     Validate(usize),
@@ -116,8 +157,7 @@ pub(super) struct State {
     pub undo: usize,
     pub assertion: usize,
     pub reverse: bool,
-    pub needle: [u8; ADMISSION_MAX],
-    pub needle_len: usize,
+    pub work: Work,
 }
 impl State {
     pub fn new(start: usize, length: usize) -> Self {
@@ -136,8 +176,17 @@ impl State {
             undo: 0,
             assertion: UNSET,
             reverse: false,
-            needle: [0; ADMISSION_MAX],
-            needle_len: 0,
+            work: Work::Idle,
         }
+    }
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn scan_storage_reuses_the_admission_buffer_without_expanding_frames() {
+        assert!(core::mem::size_of::<Work>() <= 40);
+        assert_eq!(core::mem::size_of::<Frame>(), 48);
     }
 }

@@ -1,0 +1,153 @@
+//! One retry record for a repeated, noncapturing consuming atom. All scanning
+//! and retreat uses the current original input view; pauses retain offsets only.
+use super::*;
+
+impl Vm<'_, '_, '_, '_> {
+    fn atom_state(&self) -> Result<AtomState, ExecError> {
+        match self.state.work {
+            Work::Atom(state) => Ok(state),
+            _ => Err(ExecError::InvalidProgram),
+        }
+    }
+    fn atom_record(&self) -> Result<[u32; 8], ExecError> {
+        if self.state.pc >= self.program.instructions() {
+            return Err(ExecError::InvalidProgram);
+        }
+        let [op, id, _] = self.program.instruction(self.state.pc);
+        if op != ATOM_REPEAT {
+            return Err(ExecError::InvalidProgram);
+        }
+        Ok(self.program.repeat(id as usize))
+    }
+    pub(super) fn atom_scan(&mut self, extend: bool) -> Result<(), ExecError> {
+        let mut atom = self.atom_state()?;
+        let r = self.atom_record()?;
+        let infinite = r[2] & 1 != 0;
+        if !extend && atom.needed == 0 && (r[2] & 2 != 0 || (!infinite && atom.remaining == 0)) {
+            self.state.phase = Phase::AtomCommit;
+            return Ok(());
+        }
+        if extend && (atom.needed != 0 || (!infinite && atom.remaining == 0)) {
+            return Err(ExecError::InvalidProgram);
+        }
+        self.charge(1)?;
+        atom.before = self.cursor.mark();
+        self.state.work = Work::Atom(atom);
+        let [op, a, b] = self.program.instruction(self.state.pc + 3);
+        let matched = if let Some(c) = self.read() {
+            match op {
+                CHAR => equal(self.program, c, a),
+                ANY => self.program.words[2] & S != 0 || !line_terminator(c),
+                CLASS => {
+                    self.begin_class(
+                        a,
+                        b,
+                        c,
+                        if extend {
+                            ClassUse::AtomExtend
+                        } else {
+                            ClassUse::AtomScan
+                        },
+                    );
+                    return Ok(());
+                }
+                _ => return Err(ExecError::InvalidProgram),
+            }
+        } else {
+            false
+        };
+        self.atom_result(matched, extend)
+    }
+
+    pub(super) fn atom_result(&mut self, matched: bool, extend: bool) -> Result<(), ExecError> {
+        let mut atom = self.atom_state()?;
+        let r = self.atom_record()?;
+        if matched {
+            if atom.needed > 0 {
+                atom.needed -= 1;
+                atom.minimum_end = self.cursor.position();
+            } else if r[2] & 1 == 0 {
+                atom.remaining = atom
+                    .remaining
+                    .checked_sub(1)
+                    .ok_or(ExecError::InvalidProgram)?;
+            }
+            self.state.work = Work::Atom(atom);
+            self.state.phase = if extend {
+                Phase::AtomCommit
+            } else {
+                Phase::AtomScan
+            };
+        } else {
+            self.restore(atom.before);
+            self.state.phase = if extend || atom.needed != 0 {
+                Phase::Fail
+            } else {
+                Phase::AtomCommit
+            };
+        }
+        Ok(())
+    }
+
+    pub(super) fn atom_commit(&mut self) -> Result<(), ExecError> {
+        let atom = self.atom_state()?;
+        let r = self.atom_record()?;
+        if atom.needed != 0 {
+            return Err(ExecError::InvalidProgram);
+        }
+        let lazy = r[2] & 2 != 0;
+        let retry = if lazy {
+            r[2] & 1 != 0 || atom.remaining != 0
+        } else {
+            self.cursor.position() != atom.minimum_end
+        };
+        if retry {
+            // A capacity failure leaves this phase and all paid scan/retreat
+            // state intact. Replacement scratch can resume just this store.
+            self.push(self.state.pc, if lazy { 4 } else { 3 })?;
+            self.scratch.frames[self.state.frames - 1].limit = if lazy {
+                atom.remaining as usize
+            } else {
+                atom.minimum_end
+            };
+        }
+        self.state.pc = r[4] as usize;
+        self.state.work = Work::Idle;
+        self.state.phase = Phase::Trial;
+        Ok(())
+    }
+
+    pub(super) fn atom_retreat(&mut self) -> Result<(), ExecError> {
+        let atom = self.atom_state()?;
+        let r = self.atom_record()?;
+        let position = self.cursor.position();
+        if r[2] & 2 != 0
+            || if self.state.reverse {
+                position >= atom.minimum_end
+            } else {
+                position <= atom.minimum_end
+            }
+        {
+            return Err(ExecError::InvalidProgram);
+        }
+        self.charge(1)?;
+        // Every position between this endpoint and the minimum was already
+        // accepted by this same atom on this immutable input. No membership
+        // recheck, subject copy or saved per-character record is necessary.
+        read(
+            &mut self.cursor,
+            self.program.unicode(),
+            !self.state.reverse,
+        )
+        .ok_or(ExecError::InvalidProgram)?;
+        if if self.state.reverse {
+            self.cursor.position() > atom.minimum_end
+        } else {
+            self.cursor.position() < atom.minimum_end
+        } {
+            return Err(ExecError::InvalidProgram);
+        }
+        self.state.phase = Phase::AtomCommit;
+        Ok(())
+    }
+}

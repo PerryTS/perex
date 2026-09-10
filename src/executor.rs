@@ -7,6 +7,7 @@ use crate::{
     span::Span,
 };
 mod admission;
+mod atom;
 mod state;
 use state::*;
 const UNSET: usize = usize::MAX;
@@ -34,10 +35,13 @@ pub enum ExecError {
 /// Caller-owned backtracking/assertion storage. Fields contain offsets only.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Frame {
-    pc: usize,
+    // Program instruction counts and all targets are validated u32 values.
+    // Packing the PC leaves room for a repeat bound at the existing frame size.
+    pc: u32,
     position: Mark,
     undo: usize,
     assertion: usize,
+    limit: usize,
     kind: u8,
     reverse: bool,
 }
@@ -393,6 +397,7 @@ impl Vm<'_, '_, '_, '_> {
         Ok(())
     }
     fn push(&mut self, pc: usize, kind: u8) -> Result<(), ExecError> {
+        let pc = u32::try_from(pc).map_err(|_| ExecError::InvalidProgram)?;
         *self
             .scratch
             .frames
@@ -402,6 +407,7 @@ impl Vm<'_, '_, '_, '_> {
             position: self.cursor.mark(),
             undo: self.state.undo,
             assertion: self.state.assertion,
+            limit: 0,
             kind,
             reverse: self.state.reverse,
         };
@@ -410,9 +416,6 @@ impl Vm<'_, '_, '_, '_> {
     }
     fn read(&mut self) -> Option<u32> {
         read(&mut self.cursor, self.program.unicode(), self.state.reverse)
-    }
-    fn success(&mut self, success: bool) {
-        self.state.phase = if success { Phase::Trial } else { Phase::Fail };
     }
     #[inline]
     fn restore(&mut self, mark: Mark) {
@@ -492,7 +495,7 @@ impl Vm<'_, '_, '_, '_> {
         }
         Ok(())
     }
-    fn begin_class(&mut self, a: u32, b: u32, c: u32, admission: bool) {
+    fn begin_class(&mut self, a: u32, b: u32, c: u32, context: ClassUse) {
         let values = if self.program.words[2] & I != 0 {
             casefold::equivalents(c, self.program.unicode())
         } else {
@@ -503,20 +506,35 @@ impl Vm<'_, '_, '_, '_> {
             end: a + (b & !NEGATED),
             negated: b & NEGATED != 0,
             values,
-            admission,
+            context,
         };
     }
-    fn class_result(&mut self, found: bool, negated: bool, admission: bool) {
+    fn class_result(&mut self, found: bool, negated: bool, context: ClassUse) {
         let success = found != negated;
-        if admission {
-            self.state.phase = if success {
-                Phase::Start
-            } else {
-                Phase::AdmitClass
-            };
-        } else {
-            self.success(success);
-        }
+        self.state.phase = match context {
+            ClassUse::Trial => {
+                if success {
+                    Phase::Trial
+                } else {
+                    Phase::Fail
+                }
+            }
+            ClassUse::Admission => {
+                if success {
+                    Phase::Start
+                } else {
+                    Phase::AdmitClass
+                }
+            }
+            ClassUse::AtomScan => Phase::AtomResult {
+                matched: success,
+                extend: false,
+            },
+            ClassUse::AtomExtend => Phase::AtomResult {
+                matched: success,
+                extend: true,
+            },
+        };
     }
     fn class_step(&mut self, available: usize) -> Result<(), ExecError> {
         let Phase::Class {
@@ -524,7 +542,7 @@ impl Vm<'_, '_, '_, '_> {
             end,
             negated,
             values,
-            admission,
+            context,
         } = self.state.phase
         else {
             return Err(ExecError::InvalidProgram);
@@ -543,19 +561,19 @@ impl Vm<'_, '_, '_, '_> {
                 }
             });
             if found {
-                self.class_result(true, negated, admission);
+                self.class_result(true, negated, context);
                 return Ok(());
             }
         }
         if stop == end {
-            self.class_result(false, negated, admission);
+            self.class_result(false, negated, context);
         } else {
             self.state.phase = Phase::Class {
                 index: stop,
                 end,
                 negated,
                 values,
-                admission,
+                context,
             };
         }
         Ok(())
@@ -668,6 +686,11 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 Phase::Trial | Phase::Execute { .. } => self.trial(available)?,
                 Phase::Class { .. } => self.class_step(available)?,
+                Phase::AtomScan => self.atom_scan(false)?,
+                Phase::AtomExtend => self.atom_scan(true)?,
+                Phase::AtomResult { matched, extend } => self.atom_result(matched, extend)?,
+                Phase::AtomCommit => self.atom_commit()?,
+                Phase::AtomRetreat => self.atom_retreat()?,
                 Phase::Named {
                     group,
                     next,
@@ -763,14 +786,37 @@ impl Vm<'_, '_, '_, '_> {
                         self.restore(frame.position);
                         self.state.reverse = frame.reverse;
                         self.state.assertion = frame.assertion;
-                        self.state.pc = frame.pc;
+                        self.state.pc = frame.pc as usize;
+                        let after = match frame.kind {
+                            0 | 2 => AfterRollback::Trial,
+                            1 => AfterRollback::Fail,
+                            3 | 4 => {
+                                self.state.work = Work::Atom(AtomState {
+                                    minimum_end: if frame.kind == 3 { frame.limit } else { 0 },
+                                    needed: 0,
+                                    remaining: if frame.kind == 4 {
+                                        u32::try_from(frame.limit)
+                                            .map_err(|_| ExecError::InvalidProgram)?
+                                    } else {
+                                        0
+                                    },
+                                    before: frame.position,
+                                });
+                                if frame.kind == 3 {
+                                    AfterRollback::AtomRetreat
+                                } else {
+                                    AfterRollback::AtomExtend
+                                }
+                            }
+                            _ => return Err(ExecError::InvalidProgram),
+                        };
                         self.state.phase = Phase::Rollback {
                             until: frame.undo,
-                            fail: frame.kind == 1,
+                            after,
                         };
                     }
                 }
-                Phase::Rollback { until, fail } => {
+                Phase::Rollback { until, after } => {
                     if self.state.undo > until {
                         self.charge(1)?;
                         self.state.undo -= 1;
@@ -783,7 +829,12 @@ impl Vm<'_, '_, '_, '_> {
                         if self.state.frames == 0 {
                             self.state.undo = 0;
                         }
-                        self.success(!fail);
+                        self.state.phase = match after {
+                            AfterRollback::Trial => Phase::Trial,
+                            AfterRollback::Fail => Phase::Fail,
+                            AfterRollback::AtomRetreat => Phase::AtomRetreat,
+                            AfterRollback::AtomExtend => Phase::AtomExtend,
+                        };
                     }
                 }
                 Phase::NextStart => {
@@ -852,7 +903,7 @@ impl Vm<'_, '_, '_, '_> {
             }
             CLASS => {
                 if let Some(c) = self.read() {
-                    self.begin_class(a, b, c, false);
+                    self.begin_class(a, b, c, ClassUse::Trial);
                     self.class_step(available)?;
                     return Ok(match self.state.phase {
                         Phase::Trial => Step::Next,
@@ -923,11 +974,11 @@ impl Vm<'_, '_, '_, '_> {
                 if frame.kind == 2 {
                     self.state.phase = Phase::Rollback {
                         until: frame.undo,
-                        fail: true,
+                        after: AfterRollback::Fail,
                     };
                     return Ok(Step::Phase);
                 }
-                self.state.pc = frame.pc;
+                self.state.pc = frame.pc as usize;
                 if self.state.frames == 0 {
                     self.state.undo = 0;
                 }
@@ -936,6 +987,18 @@ impl Vm<'_, '_, '_, '_> {
                 let slot = self.program.capture_count() * 2 + a as usize * 2;
                 self.store(slot, 0)?;
                 self.store(slot + 1, UNSET)?;
+            }
+            ATOM_REPEAT => {
+                let r = self.program.repeat(a as usize);
+                self.state.pc -= 1;
+                self.state.work = Work::Atom(AtomState {
+                    minimum_end: self.cursor.position(),
+                    needed: r[0],
+                    remaining: if r[2] & 1 == 0 { r[1] - r[0] } else { 0 },
+                    before: self.cursor.mark(),
+                });
+                self.state.phase = Phase::AtomScan;
+                return Ok(Step::Phase);
             }
             REPEAT_CHOICE => {
                 let r = self.program.repeat(a as usize);

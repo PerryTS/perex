@@ -321,6 +321,13 @@ fn every_small_quantum_preserves_captures_and_half_pairs_after_relocation() {
         ("x", "", "", 0),
         ("", "", "", 0),
         ("a", "", "abc", 100),
+        (r"^([a-z]+)([a-z]{2})$", "", "abcdef", 0),
+        (r"^([a-z]+?)([a-z]{2})$", "", "abcdef", 0),
+        (r"^([a-z]+)([a-z]*)([a-z]{2})$", "", "abcdef", 0),
+        (r"(?<=^([a-z]{2})([a-z]+?))$", "", "abcdef", 0),
+        (r"^(.{1,3})(.)$", "u", "😀a😀", 0),
+        (r"(?<=^(.)(.{1,3}))$", "u", "😀a😀", 0),
+        (r"^(\ud83d*)(\ude00)$", "", "😀", 0),
     ];
     for (pattern, flags, subject, start) in cases {
         for storage in [
@@ -685,6 +692,18 @@ fn growing_owned_scratch_preserves_partial_updates_and_releases_previous_owners(
         ("(?=(a+))a*b\\1", "", "baaabac"),
         ("^(a|aa)+b$", "", "aaaaaa"),
         (r"\ud83d((?:X|\ude00)+)", "", "😀"),
+        (r"^([a-z]+)([a-z]{2})$", "", "abcdefghijklmnopqrstuvwxyz"),
+        (r"^([a-z]+?)([a-z]{2})$", "", "abcdefghijklmnopqrstuvwxyz"),
+        (
+            r"(?<=^([a-z]{2})([a-z]+))$",
+            "",
+            "abcdefghijklmnopqrstuvwxyz",
+        ),
+        (
+            r"(?<=^([a-z]{2})([a-z]+?))$",
+            "",
+            "abcdefghijklmnopqrstuvwxyz",
+        ),
     ] {
         let owner = Owner::new(pattern, flags, Subject::Bytes(subject.as_bytes().to_vec()));
         let counts = BufferCounts {
@@ -800,5 +819,182 @@ fn growing_owned_scratch_preserves_partial_updates_and_releases_previous_owners(
         drop(search);
         assert_eq!(counts.alive.get(), 0);
         assert_eq!(counts.drops.get(), grows + 2); // Initial, replacements, rejected buffer.
+    }
+}
+
+#[test]
+fn shrinking_to_live_scratch_can_republish_popped_atom_retries_without_replay() {
+    for (pattern, flags, subject) in [
+        (r"^([a-z]+)([a-z]{2})$", "", "abcdef"),
+        (r"^([a-z]+?)([a-z]{2})$", "", "abcdef"),
+        (r"(?<=^([a-z]{2})([a-z]+))$", "", "abcdef"),
+        (r"(?<=^([a-z]{2})([a-z]+?))$", "", "abcdef"),
+        (r"^(.{1,4})(.{2})$", "u", "😀a😀b"),
+        (r"^(.{1,4}?)(.{2})$", "u", "😀a😀b"),
+    ] {
+        for storage in [
+            Subject::Bytes(subject.as_bytes().to_vec()),
+            Subject::Units(subject.encode_utf16().collect()),
+        ] {
+            let owner = Owner::new(pattern, flags, storage);
+            let counts = BufferCounts {
+                alive: Cell::new(0),
+                drops: Cell::new(0),
+            };
+            let (registers, captures) = owner
+                .with_views(|p, _| (p.register_count(), p.capture_count()))
+                .unwrap();
+            let mut expected = vec![None; captures];
+            let mut reference_budget = Budget::new(2_000_000);
+            assert!(
+                owner
+                    .with_views(|p, input| find(
+                        p,
+                        input,
+                        0,
+                        Scratch {
+                            registers: &mut vec![0; registers],
+                            frames: &mut vec![Frame::default(); 16],
+                            undo: &mut vec![Undo::default(); 256],
+                        },
+                        &mut expected,
+                        &mut reference_budget,
+                    ))
+                    .unwrap()
+                    .unwrap()
+            );
+            let buffers = OwnedBuffers::new(&owner, &counts, registers, 16, 256);
+            let mut search = Search::new(&owner, 0, buffers, Budget::new(2_000_000)).unwrap();
+            let mut popped_retry = false;
+            let mut republished = 0;
+            let mut replacements = 0;
+            loop {
+                let before = search.required_scratch();
+                let progress = search.advance(1);
+                let capture_error = match &progress {
+                    Err(SearchError::Execution(error)) => *error,
+                    _ => ExecError::NotMatched,
+                };
+                match progress {
+                    Ok(Progress::Matched) => break,
+                    Ok(Progress::Pending) => {
+                        popped_retry |= search.required_scratch().frames < before.frames;
+                    }
+                    Err(SearchError::Execution(ExecError::Frames)) => {
+                        republished += usize::from(popped_retry);
+                        popped_retry = false;
+                        let remaining = search.remaining_work();
+                        assert!(matches!(
+                            search.advance(100),
+                            Err(SearchError::Execution(ExecError::Frames))
+                        ));
+                        assert_eq!(search.remaining_work(), remaining);
+                    }
+                    Err(SearchError::Execution(ExecError::Undo)) => {}
+                    other => panic!("{pattern}: {other:?}"),
+                }
+                let mut output = vec![Span::new(900, 901); captures];
+                assert_eq!(search.copy_captures(&mut output), Err(capture_error));
+                assert_eq!(output, vec![Span::new(900, 901); captures]);
+                let need = search.required_scratch();
+                let remaining = search.remaining_work();
+                // Deliberately discard every spare slot. The next retry may
+                // need to grow again after its paid scan or retreat completed.
+                let buffers =
+                    OwnedBuffers::new(&owner, &counts, need.registers, need.frames, need.undo);
+                search = search
+                    .rebuffer(buffers)
+                    .unwrap_or_else(|e| panic!("{:?}", e.error));
+                assert_eq!(search.remaining_work(), remaining);
+                assert_eq!(counts.alive.get(), 1);
+                replacements += 1;
+                assert!(replacements < 10_000, "no progress: {pattern}");
+            }
+            let mut actual = vec![None; captures];
+            search.copy_captures(&mut actual).unwrap();
+            assert_eq!(actual, expected, "{pattern}");
+            assert_eq!(
+                search.remaining_work(),
+                reference_budget.remaining(),
+                "{pattern}"
+            );
+            assert!(republished > 0, "retry was never republished: {pattern}");
+            drop(search);
+            assert_eq!(counts.alive.get(), 0);
+            assert_eq!(counts.drops.get(), replacements + 1);
+        }
+    }
+}
+
+#[test]
+fn atom_retries_preserve_lone_surrogates_across_relocation_and_cancellation() {
+    let representations = [
+        Subject::Units(vec![0xd800, 0xd83d, 0xde00, 97, 0xdfff]),
+        Subject::Bytes(vec![
+            0xed, 0xa0, 0x80, 0xf0, 0x9f, 0x98, 0x80, 97, 0xed, 0xbf, 0xbf,
+        ]),
+        Subject::Bytes(vec![
+            0xed, 0xa0, 0x80, 0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80, 97, 0xed, 0xbf, 0xbf,
+        ]),
+    ];
+    for (pattern, flags, expected) in [
+        (r"^(.+)(.{2})$", "u", [(0, 5), (0, 3), (3, 5)]),
+        (r"^(.+?)(.{2})$", "u", [(0, 5), (0, 3), (3, 5)]),
+        (r"(?<=^(.{2})(.+))$", "u", [(5, 5), (0, 3), (3, 5)]),
+        (r"(?<=^(.{2})(.+?))$", "u", [(5, 5), (0, 3), (3, 5)]),
+        (r"^(.+)(.{3})$", "", [(0, 5), (0, 2), (2, 5)]),
+        (r"^(.+?)(.{3})$", "", [(0, 5), (0, 2), (2, 5)]),
+    ] {
+        for storage in &representations {
+            let owner = Owner::new(pattern, flags, storage.clone());
+            let pauses = compare(&owner, 0, 1);
+            // Cancel at every observable pause, including scan/class/retreat
+            // phases; cancellation must finish without reacquiring a view.
+            for stop in 0..=pauses + 1 {
+                let mut registers = [0; 64];
+                let mut frames = [Frame::default(); 16];
+                let mut undo = [Undo::default(); 256];
+                let mut search = Search::new(
+                    &owner,
+                    0,
+                    Scratch {
+                        registers: &mut registers,
+                        frames: &mut frames,
+                        undo: &mut undo,
+                    },
+                    Budget::new(2_000_000),
+                )
+                .unwrap();
+                let mut completed = false;
+                for _ in 0..stop {
+                    match search.advance(1).unwrap() {
+                        Progress::Pending => owner.relocate(),
+                        Progress::Matched => {
+                            let mut actual = [None; 3];
+                            search.copy_captures(&mut actual).unwrap();
+                            assert_eq!(actual, expected.map(|(lo, hi)| Span::new(lo, hi)));
+                            completed = true;
+                            break;
+                        }
+                        Progress::NoMatch => panic!("{pattern}"),
+                    }
+                }
+                if !completed {
+                    owner.relocate();
+                    let remaining = search.remaining_work();
+                    let borrows = owner.borrows.get();
+                    search.cancel();
+                    assert!(matches!(
+                        search.advance(1),
+                        Err(SearchError::Execution(ExecError::Cancelled))
+                    ));
+                    assert_eq!(owner.borrows.get(), borrows);
+                    assert_eq!(search.remaining_work(), remaining);
+                    let mut output = [Span::new(900, 901); 3];
+                    assert_eq!(search.copy_captures(&mut output), Err(ExecError::Cancelled));
+                    assert_eq!(output, [Span::new(900, 901); 3]);
+                }
+            }
+        }
     }
 }
