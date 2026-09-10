@@ -47,6 +47,8 @@ node tools/check-engine.mjs target/release/examples/engine_probe --allow-listed-
 node tools/check-casefold.mjs target/release/examples/engine_probe
 node tools/check-names.mjs target/release/examples/engine_probe
 node tools/check-legacy.mjs target/release/examples/engine_probe
+node tools/check-admission.mjs target/release/examples/engine_probe
+node tools/check-repetition.mjs target/release/examples/engine_probe
 cargo build --locked --release --example property_probe
 node tools/check-properties.mjs target/release/examples/property_probe target/release/examples/engine_probe --allow-reviewed-reference-disagreements
 node tools/reference.mjs --check
@@ -68,3 +70,7 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 [Unicode character properties](docs/properties.md) use shared immutable data and compact property references in programs. Their exhaustive membership check preserves the documented Node disagreement on the empty historical `Hrkt` script; strict mode remains available and fails on that discrepancy.
 
 [Named captures](docs/names.md) keep packed names and numeric capture lists inside the relocatable program. Matching and backreferences continue to borrow the original subject.
+
+[Required-text admission](docs/admission.md) uses a condition proved by the compiler and original subject storage. Its correctness and CPU/RSS costs require separate checks.
+
+[Single-atom repetition merging](docs/repetition.md) removes duplicate partitions when match ordering can be preserved, using the same evaluator and caller-owned storage.

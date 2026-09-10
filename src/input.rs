@@ -95,6 +95,15 @@ impl<'a> Input<'a> {
         }
     }
 
+    // Byte optimizations must separately prove that their predicate cannot
+    // match inside a multibyte encoding. This never constructs a new buffer.
+    pub(crate) fn original_bytes(self) -> Option<&'a [u8]> {
+        match self.storage {
+            Storage::Bytes(bytes) => Some(bytes),
+            Storage::Units(_) => None,
+        }
+    }
+
     pub(crate) fn seek_work(self, position: usize) -> usize {
         if self.ascii || matches!(self.storage, Storage::Units(_)) {
             1

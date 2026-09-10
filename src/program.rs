@@ -3,13 +3,16 @@ use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 7;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 4;
+pub(crate) const VERSION: u32 = 5;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
 pub(crate) const Y: u32 = 8;
 pub(crate) const I: u32 = 16;
 pub(crate) const NAMES: u32 = 32;
+pub(crate) const ADMISSION_REVERSE: u32 = 64;
+pub(crate) const ADMISSION: u32 = 128;
+pub(crate) const ADMISSION_MAX: usize = 32;
 pub(crate) const NEGATED: u32 = 1 << 31;
 // A class-table record is either (literal low, literal high), or
 // (PROPERTY | shared property id, complemented). Both words are relocatable.
@@ -73,7 +76,7 @@ impl<'a> Program<'a> {
         if words.len() < HEADER
             || words[0] != MAGIC
             || words[1] != VERSION
-            || words[2] & !(U | M | S | Y | I | NAMES) != 0
+            || (words[2] & ADMISSION == 0 && words[2] & !(U | M | S | Y | I | NAMES) != 0)
             || words[3] == 0
             || words[4] == 0
         {
@@ -95,6 +98,11 @@ impl<'a> Program<'a> {
             return Err(bad);
         }
         let p = Self { words };
+        if let Some((pc, _)) = p.admission()
+            && (pc >= p.instructions() || !matches!(p.instruction(pc)[0], CHAR | CLASS))
+        {
+            return Err(bad);
+        }
         if words[2] & NAMES == 0 {
             if size != words.len() {
                 return Err(bad);
@@ -214,6 +222,20 @@ impl<'a> Program<'a> {
     }
     pub fn size_bytes(self) -> usize {
         self.words.len() * 4
+    }
+    // The optional hint uses spare flag/header bits and points into existing
+    // instructions. It adds no program words or second literal/class buffer.
+    pub(crate) fn admission(self) -> Option<(usize, bool)> {
+        (self.words[2] & ADMISSION != 0).then_some((
+            (self.words[2] >> 8) as usize,
+            self.words[2] & ADMISSION_REVERSE != 0,
+        ))
+    }
+    pub(crate) fn literal_run(self, pc: usize) -> usize {
+        (pc..self.instructions())
+            .take(ADMISSION_MAX)
+            .take_while(|&at| self.instruction(at)[0] == CHAR)
+            .count()
     }
     fn names_start(self) -> usize {
         HEADER + self.instructions() * 3 + self.words[5] as usize * 2 + self.words[6] as usize * 8

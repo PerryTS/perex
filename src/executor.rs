@@ -6,7 +6,41 @@ use crate::{
     properties,
     span::Span,
 };
+mod admission;
 const UNSET: usize = usize::MAX;
+
+fn equal(program: Program<'_>, left: u32, right: u32) -> bool {
+    left == right || (program.words[2] & I != 0 && casefold::equal(left, right, program.unicode()))
+}
+fn class_matches(
+    program: Program<'_>,
+    a: u32,
+    b: u32,
+    c: u32,
+    budget: &mut Budget,
+) -> Result<bool, ExecError> {
+    let values = if program.words[2] & I != 0 {
+        casefold::equivalents(c, program.unicode())
+    } else {
+        [c; 4]
+    };
+    let mut found = false;
+    for i in a..a + (b & !NEGATED) {
+        budget.charge(1).map_err(|_| ExecError::WorkLimit)?;
+        let [lo, hi] = program.range(i as usize);
+        if values.iter().any(|&value| {
+            if lo & PROPERTY != 0 {
+                properties::contains(lo & !PROPERTY, value) != (hi != 0)
+            } else {
+                value >= lo && value <= hi
+            }
+        }) {
+            found = true;
+            break;
+        }
+    }
+    Ok(found != (b & NEGATED != 0))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecError {
@@ -133,9 +167,7 @@ impl Vm<'_, '_, '_, '_> {
         }
     }
     fn equal(&self, left: u32, right: u32) -> bool {
-        left == right
-            || (self.program.words[2] & I != 0
-                && casefold::equal(left, right, self.program.unicode()))
+        equal(self.program, left, right)
     }
     fn trial(&mut self) -> Result<bool, ExecError> {
         loop {
@@ -161,27 +193,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 CLASS => {
                     if let Some(c) = self.read() {
-                        let values = if self.program.words[2] & I != 0 {
-                            casefold::equivalents(c, self.program.unicode())
-                        } else {
-                            [c; 4]
-                        };
-                        let mut found = false;
-                        for i in a..a + (b & !NEGATED) {
-                            self.charge(1)?;
-                            let [lo, hi] = self.program.range(i as usize);
-                            if values.iter().any(|&value| {
-                                if lo & PROPERTY != 0 {
-                                    properties::contains(lo & !PROPERTY, value) != (hi != 0)
-                                } else {
-                                    value >= lo && value <= hi
-                                }
-                            }) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        success = found != (b & NEGATED != 0);
+                        success = class_matches(self.program, a, b, c, self.budget)?;
                     } else {
                         success = false;
                     }
@@ -382,6 +394,12 @@ pub fn find(
         return Err(ExecError::Registers);
     }
     if start_utf16 > input.len_utf16() {
+        return Ok(false);
+    }
+    if program.words[2] & ADMISSION != 0
+        && input.len_utf16() >= 64
+        && !admission::admits(program, input, budget)?
+    {
         return Ok(false);
     }
     budget

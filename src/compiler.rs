@@ -53,8 +53,10 @@ const REPEAT: u32 = 36;
 const WRAP: u32 = 37;
 const NAME_META: u32 = 38;
 const NAME_DECL: u32 = 39;
+mod admission;
 mod escapes;
 mod names;
+mod repetition;
 
 struct Parser<'a, 's> {
     pattern: Input<'a>,
@@ -352,6 +354,9 @@ impl Parser<'_, '_> {
             return Err(self.error());
         }
         let lazy = self.eat(b'?')?;
+        if !lazy && self.merge_repetition(child, min, max, infinite)? {
+            return Ok(child);
+        }
         let id = self.repeats;
         self.repeats = self.repeats.checked_add(1).ok_or(CompileError::SizeLimit)?;
         self.add(Node {
@@ -881,6 +886,10 @@ pub fn compile<'p>(
         parser.range_used as u32,
         parser.repeats,
     ]);
+    if parser.repeats != 0 {
+        let hint = parser.admission(Program { words: output }, root)?;
+        output[2] |= hint;
+    }
     Program::from_words(output, parser.budget).map_err(|e| match e {
         ProgramError::WorkLimit => CompileError::WorkLimit,
         ProgramError::Invalid => CompileError::InvalidProgram,
