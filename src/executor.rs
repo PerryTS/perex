@@ -352,6 +352,11 @@ struct Vm<'a, 'p, 's, 'w> {
     state: State,
     budget: Budget,
 }
+enum Step {
+    Next,
+    Fail,
+    Phase,
+}
 impl Vm<'_, '_, '_, '_> {
     fn charge(&mut self, n: usize) -> Result<(), ExecError> {
         self.budget.charge(n).map_err(|_| ExecError::WorkLimit)
@@ -501,6 +506,58 @@ impl Vm<'_, '_, '_, '_> {
             self.success(success);
         }
     }
+    fn begin_trial(&mut self) {
+        self.state.pc = 0;
+        self.state.frames = 0;
+        self.state.undo = 0;
+        self.state.assertion = UNSET;
+        self.state.reverse = false;
+        self.restore(self.state.start);
+        self.state.phase = Phase::Trial;
+    }
+
+    // Ordinary opcodes stay in one dispatch loop. A long sub-operation, pause,
+    // failure or capacity request returns to the outer resumable phase loop.
+    // This is the same instruction implementation for both entry points.
+    fn trial(&mut self, quantum: usize) -> Result<(), ExecError> {
+        let initial = self.budget.remaining();
+        let mut paid = match self.state.phase {
+            Phase::Execute { op, a, b } => Some([op, a, b]),
+            _ => None,
+        };
+        self.state.phase = Phase::Trial;
+        loop {
+            if initial - self.budget.remaining() >= quantum {
+                return Ok(());
+            }
+            let [op, a, b] = if let Some(opcode) = paid.take() {
+                opcode
+            } else {
+                self.charge(1)?;
+                if self.state.pc >= self.program.instructions() {
+                    return Err(ExecError::InvalidProgram);
+                }
+                let opcode = self.program.instruction(self.state.pc);
+                self.state.pc += 1;
+                opcode
+            };
+            let available = quantum.saturating_sub(initial - self.budget.remaining());
+            match self.instruction(op, a, b, available) {
+                Ok(Step::Next) => {}
+                Ok(Step::Fail) => {
+                    self.state.phase = Phase::Fail;
+                    return Ok(());
+                }
+                Ok(Step::Phase) => return Ok(()),
+                Err(error) => {
+                    if matches!(error, ExecError::Frames | ExecError::Undo) {
+                        self.state.phase = Phase::Execute { op, a, b };
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
     fn run(&mut self, quantum: usize) -> Result<Progress, ExecError> {
         let initial = self.budget.remaining();
         loop {
@@ -540,13 +597,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 Phase::Initialize(index) => {
                     if index == self.program.register_count() {
-                        self.state.pc = 0;
-                        self.state.frames = 0;
-                        self.state.undo = 0;
-                        self.state.assertion = UNSET;
-                        self.state.reverse = false;
-                        self.restore(self.state.start);
-                        self.state.phase = Phase::Trial;
+                        self.begin_trial();
                     } else {
                         let end = self
                             .program
@@ -554,25 +605,14 @@ impl Vm<'_, '_, '_, '_> {
                             .min(index + available.min(256));
                         self.charge(end - index)?;
                         self.scratch.registers[index..end].fill(UNSET);
-                        self.state.phase = Phase::Initialize(end);
+                        if end == self.program.register_count() {
+                            self.begin_trial();
+                        } else {
+                            self.state.phase = Phase::Initialize(end);
+                        }
                     }
                 }
-                Phase::Trial => {
-                    self.charge(1)?;
-                    if self.state.pc >= self.program.instructions() {
-                        return Err(ExecError::InvalidProgram);
-                    }
-                    let [op, a, b] = self.program.instruction(self.state.pc);
-                    self.state.pc += 1;
-                    let result = self.instruction(op, a, b, available.saturating_sub(1));
-                    // Only a capacity retry needs the already-paid opcode.
-                    // Successful execution does not materialize this state.
-                    if matches!(result, Err(ExecError::Frames | ExecError::Undo)) {
-                        self.state.phase = Phase::Execute { op, a, b };
-                    }
-                    result?;
-                }
-                Phase::Execute { op, a, b } => self.instruction(op, a, b, available)?,
+                Phase::Trial | Phase::Execute { .. } => self.trial(available)?,
                 Phase::Class {
                     index,
                     end,
@@ -738,9 +778,11 @@ impl Vm<'_, '_, '_, '_> {
                     }
                 }
                 Phase::Validate(index) => {
-                    if index == self.program.capture_count() {
-                        self.state.phase = Phase::Finished(true);
-                    } else {
+                    let end = self
+                        .program
+                        .capture_count()
+                        .min(index + (available / 2).clamp(1, 128));
+                    for index in index..end {
                         self.charge(2)?;
                         let lo = self.scratch.registers[index * 2];
                         let hi = self.scratch.registers[index * 2 + 1];
@@ -751,15 +793,25 @@ impl Vm<'_, '_, '_, '_> {
                         {
                             return Err(ExecError::InvalidProgram);
                         }
-                        self.state.phase = Phase::Validate(index + 1);
                     }
+                    self.state.phase = if end == self.program.capture_count() {
+                        Phase::Finished(true)
+                    } else {
+                        Phase::Validate(end)
+                    };
                 }
                 Phase::Finished(_) | Phase::Failed(_) => unreachable!(),
             }
         }
     }
     #[inline(always)]
-    fn instruction(&mut self, op: u32, a: u32, b: u32, available: usize) -> Result<(), ExecError> {
+    fn instruction(
+        &mut self,
+        op: u32,
+        a: u32,
+        b: u32,
+        available: usize,
+    ) -> Result<Step, ExecError> {
         let mut success = true;
         match op {
             MATCH => {
@@ -767,7 +819,7 @@ impl Vm<'_, '_, '_, '_> {
                     return Err(ExecError::InvalidProgram);
                 }
                 self.state.phase = Phase::Validate(0);
-                return Ok(());
+                return Ok(Step::Phase);
             }
             CHAR => success = self.read().is_some_and(|c| equal(self.program, c, a)),
             ANY => {
@@ -778,7 +830,7 @@ impl Vm<'_, '_, '_, '_> {
             CLASS => {
                 if let Some(c) = self.read() {
                     self.begin_class(a, b, c, false);
-                    return Ok(());
+                    return Ok(Step::Phase);
                 }
                 success = false;
             }
@@ -816,7 +868,7 @@ impl Vm<'_, '_, '_, '_> {
             }
             BACKREF => {
                 self.backref(a as usize, available)?;
-                return Ok(());
+                return Ok(Step::Phase);
             }
             NAMED_BACKREF => {
                 self.state.phase = Phase::Named {
@@ -824,7 +876,7 @@ impl Vm<'_, '_, '_, '_> {
                     next: 0,
                     selected: UNSET,
                 };
-                return Ok(());
+                return Ok(Step::Phase);
             }
             ASSERT => {
                 self.push(a as usize, if b & 1 == 0 { 1 } else { 2 })?;
@@ -845,7 +897,7 @@ impl Vm<'_, '_, '_, '_> {
                         until: frame.undo,
                         fail: true,
                     };
-                    return Ok(());
+                    return Ok(Step::Phase);
                 }
                 self.state.pc = frame.pc;
                 if self.state.frames == 0 {
@@ -874,12 +926,17 @@ impl Vm<'_, '_, '_, '_> {
             }
             REPEAT_BODY => {
                 let r = self.program.repeat(a as usize);
-                self.state.phase = Phase::Clear {
-                    next: r[5] as usize * 2,
-                    end: r[6] as usize * 2,
-                    slot: self.program.capture_count() * 2 + a as usize * 2 + 1,
-                };
-                return Ok(());
+                let slot = self.program.capture_count() * 2 + a as usize * 2 + 1;
+                if r[5] == r[6] {
+                    self.store(slot, self.cursor.position())?;
+                } else {
+                    self.state.phase = Phase::Clear {
+                        next: r[5] as usize * 2,
+                        end: r[6] as usize * 2,
+                        slot,
+                    };
+                    return Ok(Step::Phase);
+                }
             }
             REPEAT_NEXT => {
                 let r = self.program.repeat(a as usize);
@@ -896,8 +953,7 @@ impl Vm<'_, '_, '_, '_> {
             }
             _ => return Err(ExecError::InvalidProgram),
         }
-        self.success(success);
-        Ok(())
+        Ok(if success { Step::Next } else { Step::Fail })
     }
 }
 fn copy_match_registers(
