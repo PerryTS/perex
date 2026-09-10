@@ -2,7 +2,7 @@
 
 An independent ECMAScript regex engine being developed for [Perry](https://github.com/PerryTS/perry) and other embedders.
 
-**Status: experimental compiler, matcher, borrowed input and capture spans.** One evaluator implements core matching, numbered captures, repetition, assertions and backreferences using caller-owned storage and original subject bytes. Full Unicode/grammar support, efficient interruption/resumption and Perry integration remain outstanding. There is no demonstrated engine CPU/RSS win or production adoption. The crate has no dependencies, uses no standard library, and is not published.
+**Status: experimental compiler, matcher, borrowed input and capture spans.** One evaluator implements core matching, numbered/named captures, repetition, assertions and backreferences using caller-owned storage and original subject bytes. Full Unicode/grammar support, efficient interruption/resumption and Perry integration remain outstanding. There is no demonstrated engine CPU/RSS win or production adoption. The crate has no dependencies, uses no standard library, and is not published.
 
 Perex is designed around one matching engine and explicit host memory ownership:
 
@@ -45,6 +45,7 @@ node tools/check-input.mjs target/release/examples/input_probe
 cargo build --locked --release --example engine_probe
 node tools/check-engine.mjs target/release/examples/engine_probe --allow-listed-unsupported --allow-reviewed-reference-disagreements
 node tools/check-casefold.mjs target/release/examples/engine_probe
+node tools/check-names.mjs target/release/examples/engine_probe
 cargo build --locked --release --example property_probe
 node tools/check-properties.mjs target/release/examples/property_probe target/release/examples/engine_probe --allow-reviewed-reference-disagreements
 node tools/reference.mjs --check
@@ -64,3 +65,5 @@ See [contributing](CONTRIBUTING.md) for fixtures, source attribution and validat
 Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V3](third_party/unicode/17.0.0/LICENSE.txt). Pinned inputs, hashes and generation rules are documented in [case folding](docs/casefold.md).
 
 [Unicode character properties](docs/properties.md) use shared immutable data and compact property references in programs. Their exhaustive membership check preserves the documented Node disagreement on the empty historical `Hrkt` script; strict mode remains available and fails on that discrepancy.
+
+[Named captures](docs/names.md) keep packed names and numeric capture lists inside the relocatable program. Matching and backreferences continue to borrow the original subject.

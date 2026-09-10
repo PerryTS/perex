@@ -3,12 +3,13 @@ use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 7;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 3;
+pub(crate) const VERSION: u32 = 4;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
 pub(crate) const Y: u32 = 8;
 pub(crate) const I: u32 = 16;
+pub(crate) const NAMES: u32 = 32;
 pub(crate) const NEGATED: u32 = 1 << 31;
 // A class-table record is either (literal low, literal high), or
 // (PROPERTY | shared property id, complemented). Both words are relocatable.
@@ -30,6 +31,24 @@ pub(crate) const REPEAT_INIT: u32 = 13;
 pub(crate) const REPEAT_CHOICE: u32 = 14;
 pub(crate) const REPEAT_BODY: u32 = 15;
 pub(crate) const REPEAT_NEXT: u32 = 16;
+pub(crate) const NAMED_BACKREF: u32 = 17;
+
+/// One name and its numeric capture slots, borrowed from the same program.
+/// Duplicate declarations in disjoint alternatives share one entry.
+#[derive(Clone, Copy, Debug)]
+pub struct NamedGroup<'a> {
+    words: &'a [u32],
+    units: usize,
+    captures: &'a [u32],
+}
+impl<'a> NamedGroup<'a> {
+    pub fn name_units(self) -> impl DoubleEndedIterator<Item = u16> + ExactSizeIterator + 'a {
+        (0..self.units).map(move |i| (self.words[i / 2] >> ((i % 2) * 16)) as u16)
+    }
+    pub fn capture_indices(self) -> &'a [u32] {
+        self.captures
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProgramError {
@@ -54,7 +73,7 @@ impl<'a> Program<'a> {
         if words.len() < HEADER
             || words[0] != MAGIC
             || words[1] != VERSION
-            || words[2] & !(U | M | S | Y | I) != 0
+            || words[2] & !(U | M | S | Y | I | NAMES) != 0
             || words[3] == 0
             || words[4] == 0
         {
@@ -67,7 +86,7 @@ impl<'a> Program<'a> {
             .ok_or(bad)?
             .checked_add((words[6] as usize).checked_mul(8).ok_or(bad)?)
             .ok_or(bad)?;
-        if size != words.len()
+        if size > words.len()
             || words[3]
                 .checked_add(words[6])
                 .and_then(|n| n.checked_mul(2))
@@ -76,6 +95,62 @@ impl<'a> Program<'a> {
             return Err(bad);
         }
         let p = Self { words };
+        if words[2] & NAMES == 0 {
+            if size != words.len() {
+                return Err(bad);
+            }
+        } else {
+            let names = *words.get(size).ok_or(bad)? as usize;
+            if names == 0 || names >= p.capture_count() {
+                return Err(bad);
+            }
+            let mut next = size
+                .checked_add(1)
+                .and_then(|n| n.checked_add(names.checked_mul(3)?))
+                .ok_or(bad)?;
+            if next > words.len() {
+                return Err(bad);
+            }
+            for i in 0..names {
+                budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
+                let at = size + 1 + i * 3;
+                let units = words[at] as usize;
+                let members = words[at + 1] as usize;
+                if units == 0 || members == 0 || words[at + 2] as usize != next {
+                    return Err(bad);
+                }
+                let packed = units.div_ceil(2);
+                let end = next
+                    .checked_add(packed)
+                    .and_then(|n| n.checked_add(members))
+                    .ok_or(bad)?;
+                if end > words.len() {
+                    return Err(bad);
+                }
+                if !units.is_multiple_of(2) && words[next + packed - 1] >> 16 != 0 {
+                    return Err(bad);
+                }
+                let group = p.named_group(i).ok_or(bad)?;
+                for (j, point) in core::char::decode_utf16(group.name_units()).enumerate() {
+                    budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
+                    if !properties::identifier(point.map_err(|_| bad)? as u32, j == 0) {
+                        return Err(bad);
+                    }
+                }
+                let mut previous = 0;
+                for &capture in group.capture_indices() {
+                    budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
+                    if capture <= previous || capture >= words[3] {
+                        return Err(bad);
+                    }
+                    previous = capture;
+                }
+                next = end;
+            }
+            if next != words.len() {
+                return Err(bad);
+            }
+        }
         for pc in 0..p.instructions() {
             budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
             let [op, a, b] = p.instruction(pc);
@@ -90,6 +165,7 @@ impl<'a> Program<'a> {
                 JUMP => a < words[4] && b == 0,
                 WORD => a <= 1 && b == 0,
                 BACKREF => a > 0 && a < words[3] && b == 0,
+                NAMED_BACKREF => (a as usize) < p.name_count() && b == 0,
                 ASSERT => a < words[4] && b < 4,
                 REPEAT_INIT | REPEAT_CHOICE | REPEAT_BODY | REPEAT_NEXT => a < words[6] && b == 0,
                 _ => false,
@@ -138,6 +214,35 @@ impl<'a> Program<'a> {
     }
     pub fn size_bytes(self) -> usize {
         self.words.len() * 4
+    }
+    fn names_start(self) -> usize {
+        HEADER + self.instructions() * 3 + self.words[5] as usize * 2 + self.words[6] as usize * 8
+    }
+    pub fn name_count(self) -> usize {
+        if self.words[2] & NAMES == 0 {
+            0
+        } else {
+            self.words[self.names_start()] as usize
+        }
+    }
+    /// Names appear in first-declaration order, independently of references.
+    pub fn named_groups(self) -> impl ExactSizeIterator<Item = NamedGroup<'a>> + 'a {
+        (0..self.name_count()).map(move |i| self.named_group(i).unwrap())
+    }
+    pub fn named_group(self, index: usize) -> Option<NamedGroup<'a>> {
+        if index >= self.name_count() {
+            return None;
+        }
+        let at = self.names_start() + 1 + index * 3;
+        let units = self.words[at] as usize;
+        let members = self.words[at + 1] as usize;
+        let start = self.words[at + 2] as usize;
+        let end = start + units.div_ceil(2);
+        Some(NamedGroup {
+            words: &self.words[start..end],
+            units,
+            captures: &self.words[end..end + members],
+        })
     }
     pub(crate) fn instructions(self) -> usize {
         self.words[4] as usize

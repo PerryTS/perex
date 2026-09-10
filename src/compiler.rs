@@ -51,14 +51,22 @@ const ALT: u32 = 34;
 const GROUP: u32 = 35;
 const REPEAT: u32 = 36;
 const WRAP: u32 = 37;
+const NAME_META: u32 = 38;
+const NAME_DECL: u32 = 39;
+mod names;
 
 struct Parser<'a, 's> {
+    pattern: Input<'a>,
     cursor: Cursor<'a>,
     flags: u32,
     nodes: &'s mut [Node],
     used: usize,
     ranges: &'s mut [Range],
     range_used: usize,
+    name_chars: usize,
+    name_head: u32,
+    name_count: u32,
+    named_mode: Option<bool>,
     captures: u32,
     repeats: u32,
     budget: &'s mut Budget,
@@ -175,6 +183,7 @@ impl Parser<'_, '_> {
                 let mut flags = 0;
                 let first = self.captures;
                 let mut capture = first;
+                let mut declaration = None;
                 if self.eat(b'?')? {
                     if self.eat(b':')? {
                         kind = SEQ;
@@ -190,14 +199,19 @@ impl Parser<'_, '_> {
                         } else if self.eat(b'!')? {
                             flags = 3;
                         } else {
-                            return Err(self.unsupported("named captures"));
+                            kind = GROUP;
+                            flags = 0;
+                            self.named_mode = Some(true);
+                            let name = self.name()?;
+                            declaration = Some(self.declare_name(name, capture)?);
                         }
                     } else if matches!(self.peek(), Some(105 | 109 | 115 | 45)) {
                         return Err(self.unsupported("group modifiers or extension"));
                     } else {
                         return Err(self.error());
                     }
-                } else {
+                }
+                if kind == GROUP {
                     self.captures = self
                         .captures
                         .checked_add(1)
@@ -225,7 +239,7 @@ impl Parser<'_, '_> {
                     .len
                     .checked_add(2)
                     .ok_or(CompileError::SizeLimit)?;
-                self.add(Node {
+                let group = self.add(Node {
                     kind,
                     a: child,
                     b: capture,
@@ -234,7 +248,11 @@ impl Parser<'_, '_> {
                     end: self.captures,
                     len,
                     ..Node::default()
-                })
+                })?;
+                if let Some(id) = declaration {
+                    self.nodes[id as usize].c = group;
+                }
+                Ok(group)
             }
             46 => self.leaf(ANY, 0, 0),
             94 => self.leaf(START, 0, 0),
@@ -349,6 +367,9 @@ impl Parser<'_, '_> {
     }
     fn range(&mut self, lo: u32, hi: u32) -> Result<(), CompileError> {
         self.step()?;
+        if self.range_used == self.ranges.len() - self.name_chars {
+            return Err(CompileError::Ranges);
+        }
         *self
             .ranges
             .get_mut(self.range_used)
@@ -512,7 +533,12 @@ impl Parser<'_, '_> {
                     }
                 }
             }
-            107 => return Err(self.unsupported("named backreferences")),
+            107 => {
+                if self.has_named_mode()? {
+                    return Err(self.error());
+                }
+                107
+            }
             _ => {
                 if self.flags & U != 0
                     && !(matches!(
@@ -542,6 +568,13 @@ impl Parser<'_, '_> {
         let c = self.take()?.ok_or_else(|| self.error())?;
         if matches!(c, 98 | 66) {
             return self.leaf(WORD, u32::from(c == 66), 0);
+        }
+        if c == 107 && self.has_named_mode()? {
+            if !self.eat(b'<')? {
+                return Err(self.error());
+            }
+            let name = self.name()?;
+            return self.leaf(NAMED_BACKREF, name, 0);
         }
         if matches!(c, 49..=57) {
             let mut n = u32::from(c - 48);
@@ -688,12 +721,17 @@ pub fn compile<'p>(
         });
     }
     let mut parser = Parser {
+        pattern,
         cursor: pattern.cursor(),
         flags: bits,
         nodes,
         used: 0,
         ranges,
         range_used: 0,
+        name_chars: 0,
+        name_head: 0,
+        name_count: 0,
+        named_mode: if bits & U != 0 { Some(true) } else { None },
         captures: 1,
         repeats: 0,
         budget,
@@ -703,6 +741,7 @@ pub fn compile<'p>(
     if parser.peek().is_some() {
         return Err(parser.error());
     }
+    parser.check_names()?;
     for node in &parser.nodes[..parser.used] {
         parser
             .budget
@@ -720,7 +759,7 @@ pub fn compile<'p>(
         .len
         .checked_add(3)
         .ok_or(CompileError::SizeLimit)?;
-    let size = HEADER
+    let base_size = HEADER
         .checked_add(
             (count as usize)
                 .checked_mul(3)
@@ -729,6 +768,12 @@ pub fn compile<'p>(
         .and_then(|n| n.checked_add(parser.range_used.checked_mul(2)?))
         .and_then(|n| n.checked_add((parser.repeats as usize).checked_mul(8)?))
         .ok_or(CompileError::SizeLimit)?;
+    let size = base_size
+        .checked_add(parser.names_words()?)
+        .ok_or(CompileError::SizeLimit)?;
+    if size > u32::MAX as usize {
+        return Err(CompileError::SizeLimit);
+    }
     if parser
         .captures
         .checked_add(parser.repeats)
@@ -743,6 +788,7 @@ pub fn compile<'p>(
         });
     }
     let output = &mut output[..size];
+    parser.write_names(output, base_size)?;
     // Emitter walks the topologically ordered arena backwards. It does not use
     // the native stack for a long sequence or expand counted repetitions.
     parser.nodes[root as usize].start = 1;
@@ -760,7 +806,7 @@ pub fn compile<'p>(
             parser.nodes[id as usize].reverse = reverse;
         };
         match n.kind {
-            EMPTY => {}
+            EMPTY | NAME_META | NAME_DECL => {}
             WRAP => child(n.a, pc, n.reverse),
             SEQ => {
                 let (a, b) = if n.reverse { (n.b, n.a) } else { (n.a, n.b) };
@@ -837,7 +883,7 @@ pub fn compile<'p>(
     output[..HEADER].copy_from_slice(&[
         MAGIC,
         VERSION,
-        bits,
+        bits | if parser.name_count != 0 { NAMES } else { 0 },
         parser.captures,
         count,
         parser.range_used as u32,

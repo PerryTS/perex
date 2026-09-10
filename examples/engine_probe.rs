@@ -5,8 +5,28 @@ use perex::{
     compiler::{CompileError, Node, Range, compile},
     executor::{Frame, Scratch, Undo, find},
     input::Input,
+    span::Span,
 };
 use std::io::{self, BufRead, Write};
+fn capture(out: &mut impl Write, span: Option<Span>, input: Input<'_>) -> io::Result<()> {
+    if let Some(span) = span {
+        write!(
+            out,
+            "{{\"span\":[{},{}],\"units\":[",
+            span.start(),
+            span.end()
+        )?;
+        for (j, unit) in span.units(input).unwrap().enumerate() {
+            if j != 0 {
+                write!(out, ",")?;
+            }
+            write!(out, "{unit}")?;
+        }
+        write!(out, "]}}")
+    } else {
+        write!(out, "null")
+    }
+}
 fn bytes(hex: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     if !hex.len().is_multiple_of(2) || !hex.is_ascii() {
         return Err("invalid hex".into());
@@ -93,25 +113,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if i != 0 {
                         write!(out, ",")?;
                     }
-                    if let Some(span) = span {
-                        write!(
-                            out,
-                            "{{\"span\":[{},{}],\"units\":[",
-                            span.start(),
-                            span.end()
-                        )?;
-                        for (j, unit) in span.units(input).unwrap().enumerate() {
-                            if j != 0 {
-                                write!(out, ",")?;
-                            }
-                            write!(out, "{unit}")?;
-                        }
-                        write!(out, "]}}")?;
-                    } else {
-                        write!(out, "null")?;
-                    }
+                    capture(&mut out, *span, input)?;
                 }
-                writeln!(out, "],\"groups\":null}}")?;
+                write!(out, "],\"groups\":")?;
+                if program.name_count() == 0 {
+                    writeln!(out, "null}}")?;
+                } else {
+                    let mut groups: Vec<_> = program.named_groups().collect();
+                    groups.sort_by(|a, b| a.name_units().cmp(b.name_units()));
+                    write!(out, "[")?;
+                    for (i, group) in groups.into_iter().enumerate() {
+                        if i != 0 {
+                            write!(out, ",")?;
+                        }
+                        write!(out, "{{\"name\":\"")?;
+                        for unit in group.name_units() {
+                            write!(out, "\\u{unit:04x}")?;
+                        }
+                        write!(out, "\",\"capture\":")?;
+                        let span = group
+                            .capture_indices()
+                            .iter()
+                            .find_map(|&i| captures[i as usize]);
+                        capture(&mut out, span, input)?;
+                        write!(out, "}}")?;
+                    }
+                    writeln!(out, "]}}")?;
+                }
             }
         }
     }

@@ -2,6 +2,21 @@
 #[path = "property_data.rs"]
 mod data;
 
+pub(crate) fn identifier(c: u32, first: bool) -> bool {
+    if c < 128 {
+        return matches!(c, 36 | 65..=90 | 95 | 97..=122) || (!first && matches!(c, 48..=57));
+    }
+    (!first && matches!(c, 0x200c | 0x200d))
+        || contains(
+            if first {
+                data::ID_START
+            } else {
+                data::ID_CONTINUE
+            },
+            c,
+        )
+}
+
 pub(crate) fn valid(id: u32) -> bool {
     (id as usize) < data::PROPERTIES.len()
 }

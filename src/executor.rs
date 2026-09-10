@@ -226,7 +226,33 @@ impl Vm<'_, '_, '_, '_> {
                         != right.is_some_and(|c| casefold::word(c, ui)))
                         != (a != 0);
                 }
-                BACKREF => {
+                BACKREF | NAMED_BACKREF => {
+                    let a = if op == NAMED_BACKREF {
+                        let group = self
+                            .program
+                            .named_group(a as usize)
+                            .ok_or(ExecError::InvalidProgram)?;
+                        let mut selected = None;
+                        for &index in group.capture_indices() {
+                            self.charge(1)?;
+                            if self.scratch.registers[index as usize * 2] != UNSET
+                                && self.scratch.registers[index as usize * 2 + 1] != UNSET
+                            {
+                                if selected.is_some() {
+                                    return Err(ExecError::InvalidProgram);
+                                }
+                                selected = Some(index);
+                            }
+                        }
+                        // With no completed capture the reference matches empty,
+                        // including a forward or self reference.
+                        let Some(index) = selected else {
+                            continue;
+                        };
+                        index
+                    } else {
+                        a
+                    };
                     let start = self.scratch.registers[a as usize * 2];
                     let end = self.scratch.registers[a as usize * 2 + 1];
                     if start != UNSET && end != UNSET {

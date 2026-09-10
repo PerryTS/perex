@@ -1,20 +1,5 @@
 [
   {
-    "id": "named-captures",
-    "outcome": "unsupported",
-    "feature": "named captures"
-  },
-  {
-    "id": "named-unset",
-    "outcome": "unsupported",
-    "feature": "named captures"
-  },
-  {
-    "id": "duplicate-disjoint-names",
-    "outcome": "unsupported",
-    "feature": "named captures"
-  },
-  {
     "id": "scoped-modifiers",
     "outcome": "unsupported",
     "feature": "group modifiers or extension"
@@ -33,10 +18,5 @@
     "id": "v-subtraction-miss",
     "outcome": "unsupported",
     "feature": "Unicode sets"
-  },
-  {
-    "id": "invalid-duplicate-name",
-    "outcome": "unsupported",
-    "feature": "named captures"
   }
 ]

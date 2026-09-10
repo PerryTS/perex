@@ -36,6 +36,8 @@ jobs:
       - run: cargo +stable build --locked --release --example engine_probe
       - name: Partial engine differential with exact documented omissions
         run: node tools/check-engine.mjs target/release/examples/engine_probe --allow-listed-unsupported --allow-reviewed-reference-disagreements
+      - name: Named captures, Unicode identifiers and duplicate alternatives
+        run: node tools/check-names.mjs target/release/examples/engine_probe
       - name: Unicode and legacy case equivalence differential
         run: node tools/check-casefold.mjs target/release/examples/engine_probe
       - run: cargo +stable build --locked --release --example property_probe
