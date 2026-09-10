@@ -131,34 +131,67 @@ impl<'a> Input<'a> {
     /// O(1) for UTF-16 and ASCII. Other byte inputs walk from the nearer end in
     /// UTF-16 units, without constructing an index. Repeated random seeks need
     /// separate performance evaluation before choosing a host-owned index.
+    #[inline]
     pub fn cursor_at(self, utf16_offset: usize) -> Option<Cursor<'a>> {
         if utf16_offset > self.utf16_len {
             return None;
         }
-        if !matches!(self.storage, Storage::Bytes(_)) {
-            return Some(Cursor {
-                input: self,
-                offset: utf16_offset,
-                utf16_offset,
-            });
-        }
-        let mut cursor = self.cursor();
-        if utf16_offset <= self.utf16_len / 2 {
-            while cursor.utf16_offset < utf16_offset {
-                cursor.next_unit();
+        let offset = match self.storage {
+            Storage::Bytes(bytes) if utf16_offset != 0 => {
+                if utf16_offset == self.utf16_len {
+                    bytes.len()
+                } else {
+                    seek_byte_offset(bytes, self.utf16_len, utf16_offset)
+                }
             }
-        } else {
-            cursor.offset = match self.storage {
-                Storage::Bytes(bytes) => bytes.len(),
-                Storage::Ascii(_) | Storage::Units(_) => unreachable!(),
-            };
-            cursor.utf16_offset = self.utf16_len;
-            while cursor.utf16_offset > utf16_offset {
-                cursor.previous_unit();
-            }
-        }
-        Some(cursor)
+            _ => utf16_offset,
+        };
+        Some(Cursor {
+            input: self,
+            offset,
+            utf16_offset,
+        })
     }
+}
+
+// Keep the decoder loop out of the constant-time ASCII, UTF-16 and endpoint
+// paths. Its register saves otherwise burden even calls that do not scan.
+#[inline(never)]
+fn seek_byte_offset(bytes: &[u8], utf16_len: usize, utf16_offset: usize) -> usize {
+    // Decode each stored scalar once. Advancing unit-by-unit would decode
+    // a four-byte scalar twice and repeatedly pack a temporary half-pair
+    // position even when the destination is after the complete scalar.
+    let mut offset = 0;
+    let mut units = 0;
+    if utf16_offset <= utf16_len / 2 {
+        while units < utf16_offset {
+            let (point, width) = decode_valid(bytes, offset);
+            let count = if point > 0xffff { 2 } else { 1 };
+            if count > utf16_offset - units {
+                offset = pack_offset(offset, true);
+                break;
+            }
+            offset += width;
+            units += count;
+        }
+    } else {
+        offset = bytes.len();
+        units = utf16_len;
+        while units > utf16_offset {
+            offset -= 1;
+            while is_continuation(bytes[offset]) {
+                offset -= 1;
+            }
+            let point = decode_valid(bytes, offset).0;
+            let count = if point > 0xffff { 2 } else { 1 };
+            if count > units - utf16_offset {
+                offset = pack_offset(offset, true);
+                break;
+            }
+            units -= count;
+        }
+    }
+    offset
 }
 
 /// A scoped cursor. Clone/copy it for constant-time checkpoints while the same
@@ -298,7 +331,20 @@ impl Cursor<'_> {
                 self.utf16_offset += 1;
                 return Some(point);
             }
-            Storage::Units(_) => self.next_unit()?,
+            Storage::Units(units) => {
+                let first = *units.get(self.offset)?;
+                self.offset += 1;
+                self.utf16_offset += 1;
+                if is_high(first)
+                    && let Some(&second) = units.get(self.offset)
+                    && is_low(second)
+                {
+                    self.offset += 1;
+                    self.utf16_offset += 1;
+                    return Some(combine_pair(first, second));
+                }
+                return Some(u32::from(first));
+            }
             Storage::Bytes(bytes) => {
                 let offset = self.offset & !HALF;
                 if offset == bytes.len() {
@@ -346,7 +392,20 @@ impl Cursor<'_> {
                 self.utf16_offset -= 1;
                 return Some(u32::from(bytes[self.offset]));
             }
-            Storage::Units(_) => self.previous_unit()?,
+            Storage::Units(units) => {
+                self.offset -= 1;
+                self.utf16_offset -= 1;
+                let last = units[self.offset];
+                if is_low(last) && self.offset > 0 {
+                    let first = units[self.offset - 1];
+                    if is_high(first) {
+                        self.offset -= 1;
+                        self.utf16_offset -= 1;
+                        return Some(combine_pair(first, last));
+                    }
+                }
+                return Some(u32::from(last));
+            }
             Storage::Bytes(bytes) => {
                 if self.offset & HALF != 0 {
                     self.offset &= !HALF;
