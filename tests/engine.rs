@@ -50,6 +50,114 @@ fn run(
     })
 }
 #[test]
+fn unicode_properties_preserve_complements_scripts_and_original_captures() {
+    assert_eq!(
+        run("[\\p{L}\\p{N}_]+", "u", " Ω1_!", 0),
+        Some(vec![Some((1, 4))])
+    );
+    assert_eq!(run("\\P{Lowercase_Letter}", "u", "a", 0), None);
+    assert_eq!(
+        run("\\P{Lowercase_Letter}", "iu", "a", 0),
+        Some(vec![Some((0, 1))])
+    );
+    assert_eq!(run("[^\\P{Lowercase_Letter}]", "iu", "a", 0), None);
+    assert_eq!(run("\\p{Script=Hiragana}", "u", "ー", 0), None);
+    assert_eq!(
+        run("\\p{Script_Extensions=Hiragana}", "u", "ー", 0),
+        Some(vec![Some((0, 1))])
+    );
+    assert_eq!(run("\\p{Script_Extensions=Common}", "u", "ー", 0), None);
+    assert_eq!(
+        run("(\\p{L})\\1", "iu", "𐐀𐐨", 0),
+        Some(vec![Some((0, 4)), Some((0, 2))])
+    );
+    assert_eq!(
+        run("(?<=\\p{L})\\p{Nd}", "u", "α3", 0),
+        Some(vec![Some((1, 2))])
+    );
+    assert_eq!(run("\\p{Cs}", "u", "😀", 0), None);
+    assert_eq!(
+        run("\\p{Default_Ignorable_Code_Point}", "u", "\u{200d}", 0),
+        Some(vec![Some((0, 1))])
+    );
+}
+#[test]
+fn property_programs_use_bounded_references_and_validate_relocation() {
+    let mut nodes = [Node::default(); 8];
+    let mut ranges = [Range::default(); 1];
+    let mut words = [0; 32];
+    for pattern in ["\\p{Any}", "\\p{Alphabetic}", "\\p{L}", "\\p{Script=Han}"] {
+        let p = compile(
+            Input::utf8(pattern),
+            "u",
+            &mut nodes,
+            &mut ranges,
+            &mut words,
+            &mut Budget::new(10000),
+        )
+        .unwrap();
+        // Four instructions and one two-word property reference, regardless of
+        // how many Unicode intervals the property contains.
+        assert_eq!(p.size_bytes(), 84);
+        let mut moved = p.words().to_vec();
+        words.fill(0xdeadbeef);
+        let p = Program::from_words(&moved, &mut Budget::new(10000)).unwrap();
+        assert_eq!(p.size_bytes(), 84);
+        let mut registers = [0; 2];
+        let mut frames = [Frame::default(); 1];
+        let mut undo = [Undo::default(); 1];
+        let mut captures = [None; 1];
+        assert!(
+            find(
+                p,
+                Input::utf8("字"),
+                0,
+                Scratch {
+                    registers: &mut registers,
+                    frames: &mut frames,
+                    undo: &mut undo
+                },
+                &mut captures,
+                &mut Budget::new(100)
+            )
+            .unwrap()
+        );
+        assert_eq!(captures, [Span::new(0, 1)]);
+        let end = moved.len();
+        moved[end - 1] = 2; // Complement is a Boolean, not arbitrary flags.
+        assert_eq!(
+            Program::from_words(&moved, &mut Budget::new(10000)).unwrap_err(),
+            ProgramError::Invalid
+        );
+        moved[end - 1] = 0;
+        moved[end - 2] = u32::MAX;
+        assert_eq!(
+            Program::from_words(&moved, &mut Budget::new(10000)).unwrap_err(),
+            ProgramError::Invalid
+        );
+    }
+    for source in [
+        "\\p{Unknown}",
+        "\\p{sc=latin}",
+        "\\p{gc=Alphabetic}",
+        "\\p{Other_Alphabetic}",
+        "[a-\\p{L}]",
+        "\\p{Alphabetic=True}",
+    ] {
+        assert!(matches!(
+            compile(
+                Input::utf8(source),
+                "u",
+                &mut nodes,
+                &mut ranges,
+                &mut words,
+                &mut Budget::new(10000)
+            ),
+            Err(CompileError::Syntax { .. })
+        ));
+    }
+}
+#[test]
 fn case_equivalence_obeys_mode_and_keeps_original_capture_spans() {
     assert_eq!(
         run("(s)(k)\\1", "iu", "ſKS", 0),

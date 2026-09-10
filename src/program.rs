@@ -1,15 +1,18 @@
 //! Versioned, relocatable programs in caller-owned u32 storage.
-use crate::Budget;
+use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 7;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 2;
+pub(crate) const VERSION: u32 = 3;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
 pub(crate) const Y: u32 = 8;
 pub(crate) const I: u32 = 16;
 pub(crate) const NEGATED: u32 = 1 << 31;
+// A class-table record is either (literal low, literal high), or
+// (PROPERTY | shared property id, complemented). Both words are relocatable.
+pub(crate) const PROPERTY: u32 = 1 << 30;
 pub(crate) const MATCH: u32 = 0;
 pub(crate) const CHAR: u32 = 1;
 pub(crate) const ANY: u32 = 2;
@@ -98,7 +101,12 @@ impl<'a> Program<'a> {
         for i in 0..words[5] as usize {
             budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
             let [lo, hi] = p.range(i);
-            if lo > hi || hi > if p.unicode() { 0x10ffff } else { 0xffff } {
+            let valid = if lo & PROPERTY != 0 {
+                p.unicode() && properties::valid(lo & !PROPERTY) && hi <= 1
+            } else {
+                lo <= hi && hi <= if p.unicode() { 0x10ffff } else { 0xffff }
+            };
+            if !valid {
                 return Err(bad);
             }
         }

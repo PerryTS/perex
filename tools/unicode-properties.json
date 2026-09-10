@@ -1,0 +1,212 @@
+{
+  "ecma262_commit": "b7865f0eed2021720f84d561289401bc414874d0",
+  "source_url": "https://raw.githubusercontent.com/tc39/ecma262/b7865f0eed2021720f84d561289401bc414874d0/table-binary-unicode-properties.html",
+  "source_sha256": "bb09794cb0cf887f011f5d1a133b2a29734e432ba0cf87db9281afbd151b8ea0",
+  "retrieved_utc": "2026-09-10",
+  "binary": {
+    "ASCII": [
+      "ASCII"
+    ],
+    "ASCII_Hex_Digit": [
+      "ASCII_Hex_Digit",
+      "AHex"
+    ],
+    "Alphabetic": [
+      "Alphabetic",
+      "Alpha"
+    ],
+    "Any": [
+      "Any"
+    ],
+    "Assigned": [
+      "Assigned"
+    ],
+    "Bidi_Control": [
+      "Bidi_Control",
+      "Bidi_C"
+    ],
+    "Bidi_Mirrored": [
+      "Bidi_Mirrored",
+      "Bidi_M"
+    ],
+    "Case_Ignorable": [
+      "Case_Ignorable",
+      "CI"
+    ],
+    "Cased": [
+      "Cased"
+    ],
+    "Changes_When_Casefolded": [
+      "Changes_When_Casefolded",
+      "CWCF"
+    ],
+    "Changes_When_Casemapped": [
+      "Changes_When_Casemapped",
+      "CWCM"
+    ],
+    "Changes_When_Lowercased": [
+      "Changes_When_Lowercased",
+      "CWL"
+    ],
+    "Changes_When_NFKC_Casefolded": [
+      "Changes_When_NFKC_Casefolded",
+      "CWKCF"
+    ],
+    "Changes_When_Titlecased": [
+      "Changes_When_Titlecased",
+      "CWT"
+    ],
+    "Changes_When_Uppercased": [
+      "Changes_When_Uppercased",
+      "CWU"
+    ],
+    "Dash": [
+      "Dash"
+    ],
+    "Default_Ignorable_Code_Point": [
+      "Default_Ignorable_Code_Point",
+      "DI"
+    ],
+    "Deprecated": [
+      "Deprecated",
+      "Dep"
+    ],
+    "Diacritic": [
+      "Diacritic",
+      "Dia"
+    ],
+    "Emoji": [
+      "Emoji"
+    ],
+    "Emoji_Component": [
+      "Emoji_Component",
+      "EComp"
+    ],
+    "Emoji_Modifier": [
+      "Emoji_Modifier",
+      "EMod"
+    ],
+    "Emoji_Modifier_Base": [
+      "Emoji_Modifier_Base",
+      "EBase"
+    ],
+    "Emoji_Presentation": [
+      "Emoji_Presentation",
+      "EPres"
+    ],
+    "Extended_Pictographic": [
+      "Extended_Pictographic",
+      "ExtPict"
+    ],
+    "Extender": [
+      "Extender",
+      "Ext"
+    ],
+    "Grapheme_Base": [
+      "Grapheme_Base",
+      "Gr_Base"
+    ],
+    "Grapheme_Extend": [
+      "Grapheme_Extend",
+      "Gr_Ext"
+    ],
+    "Hex_Digit": [
+      "Hex_Digit",
+      "Hex"
+    ],
+    "IDS_Binary_Operator": [
+      "IDS_Binary_Operator",
+      "IDSB"
+    ],
+    "IDS_Trinary_Operator": [
+      "IDS_Trinary_Operator",
+      "IDST"
+    ],
+    "ID_Continue": [
+      "ID_Continue",
+      "IDC"
+    ],
+    "ID_Start": [
+      "ID_Start",
+      "IDS"
+    ],
+    "Ideographic": [
+      "Ideographic",
+      "Ideo"
+    ],
+    "Join_Control": [
+      "Join_Control",
+      "Join_C"
+    ],
+    "Logical_Order_Exception": [
+      "Logical_Order_Exception",
+      "LOE"
+    ],
+    "Lowercase": [
+      "Lowercase",
+      "Lower"
+    ],
+    "Math": [
+      "Math"
+    ],
+    "Noncharacter_Code_Point": [
+      "Noncharacter_Code_Point",
+      "NChar"
+    ],
+    "Pattern_Syntax": [
+      "Pattern_Syntax",
+      "Pat_Syn"
+    ],
+    "Pattern_White_Space": [
+      "Pattern_White_Space",
+      "Pat_WS"
+    ],
+    "Quotation_Mark": [
+      "Quotation_Mark",
+      "QMark"
+    ],
+    "Radical": [
+      "Radical"
+    ],
+    "Regional_Indicator": [
+      "Regional_Indicator",
+      "RI"
+    ],
+    "Sentence_Terminal": [
+      "Sentence_Terminal",
+      "STerm"
+    ],
+    "Soft_Dotted": [
+      "Soft_Dotted",
+      "SD"
+    ],
+    "Terminal_Punctuation": [
+      "Terminal_Punctuation",
+      "Term"
+    ],
+    "Unified_Ideograph": [
+      "Unified_Ideograph",
+      "UIdeo"
+    ],
+    "Uppercase": [
+      "Uppercase",
+      "Upper"
+    ],
+    "Variation_Selector": [
+      "Variation_Selector",
+      "VS"
+    ],
+    "White_Space": [
+      "White_Space",
+      "space"
+    ],
+    "XID_Continue": [
+      "XID_Continue",
+      "XIDC"
+    ],
+    "XID_Start": [
+      "XID_Start",
+      "XIDS"
+    ]
+  }
+}

@@ -20,6 +20,7 @@ mod casefold;
 pub mod compiler;
 pub mod executor;
 pub mod program;
+mod properties;
 
 /// Work allowance shared across an entire compile or search operation. It is
 /// never reset when trying another start position or entering an assertion.

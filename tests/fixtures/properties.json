@@ -1,0 +1,3956 @@
+{
+  "report": {
+    "unicode": "17.0.0",
+    "properties": 443,
+    "binary": 53,
+    "general_categories": 38,
+    "scripts": 176,
+    "category_bytes": 16576,
+    "descriptor_bytes": 10632,
+    "boundary_bytes": 118056,
+    "alias_bytes": 4832,
+    "name_bytes": 3707,
+    "shared_range_sets": 329,
+    "verified_category_values": 1114112,
+    "table_payload_bytes": 153803
+  },
+  "properties": [
+    {
+      "name": "General_Category=C",
+      "aliases": [
+        "C",
+        "General_Category=C",
+        "General_Category=Other",
+        "Other",
+        "gc=C",
+        "gc=Other"
+      ]
+    },
+    {
+      "name": "General_Category=Cc",
+      "aliases": [
+        "Cc",
+        "Control",
+        "General_Category=Cc",
+        "General_Category=Control",
+        "General_Category=cntrl",
+        "cntrl",
+        "gc=Cc",
+        "gc=Control",
+        "gc=cntrl"
+      ]
+    },
+    {
+      "name": "General_Category=Cf",
+      "aliases": [
+        "Cf",
+        "Format",
+        "General_Category=Cf",
+        "General_Category=Format",
+        "gc=Cf",
+        "gc=Format"
+      ]
+    },
+    {
+      "name": "General_Category=Cn",
+      "aliases": [
+        "Cn",
+        "General_Category=Cn",
+        "General_Category=Unassigned",
+        "Unassigned",
+        "gc=Cn",
+        "gc=Unassigned"
+      ]
+    },
+    {
+      "name": "General_Category=Co",
+      "aliases": [
+        "Co",
+        "General_Category=Co",
+        "General_Category=Private_Use",
+        "Private_Use",
+        "gc=Co",
+        "gc=Private_Use"
+      ]
+    },
+    {
+      "name": "General_Category=Cs",
+      "aliases": [
+        "Cs",
+        "General_Category=Cs",
+        "General_Category=Surrogate",
+        "Surrogate",
+        "gc=Cs",
+        "gc=Surrogate"
+      ]
+    },
+    {
+      "name": "General_Category=L",
+      "aliases": [
+        "General_Category=L",
+        "General_Category=Letter",
+        "L",
+        "Letter",
+        "gc=L",
+        "gc=Letter"
+      ]
+    },
+    {
+      "name": "General_Category=LC",
+      "aliases": [
+        "Cased_Letter",
+        "General_Category=Cased_Letter",
+        "General_Category=LC",
+        "LC",
+        "gc=Cased_Letter",
+        "gc=LC"
+      ]
+    },
+    {
+      "name": "General_Category=Ll",
+      "aliases": [
+        "General_Category=Ll",
+        "General_Category=Lowercase_Letter",
+        "Ll",
+        "Lowercase_Letter",
+        "gc=Ll",
+        "gc=Lowercase_Letter"
+      ]
+    },
+    {
+      "name": "General_Category=Lm",
+      "aliases": [
+        "General_Category=Lm",
+        "General_Category=Modifier_Letter",
+        "Lm",
+        "Modifier_Letter",
+        "gc=Lm",
+        "gc=Modifier_Letter"
+      ]
+    },
+    {
+      "name": "General_Category=Lo",
+      "aliases": [
+        "General_Category=Lo",
+        "General_Category=Other_Letter",
+        "Lo",
+        "Other_Letter",
+        "gc=Lo",
+        "gc=Other_Letter"
+      ]
+    },
+    {
+      "name": "General_Category=Lt",
+      "aliases": [
+        "General_Category=Lt",
+        "General_Category=Titlecase_Letter",
+        "Lt",
+        "Titlecase_Letter",
+        "gc=Lt",
+        "gc=Titlecase_Letter"
+      ]
+    },
+    {
+      "name": "General_Category=Lu",
+      "aliases": [
+        "General_Category=Lu",
+        "General_Category=Uppercase_Letter",
+        "Lu",
+        "Uppercase_Letter",
+        "gc=Lu",
+        "gc=Uppercase_Letter"
+      ]
+    },
+    {
+      "name": "General_Category=M",
+      "aliases": [
+        "Combining_Mark",
+        "General_Category=Combining_Mark",
+        "General_Category=M",
+        "General_Category=Mark",
+        "M",
+        "Mark",
+        "gc=Combining_Mark",
+        "gc=M",
+        "gc=Mark"
+      ]
+    },
+    {
+      "name": "General_Category=Mc",
+      "aliases": [
+        "General_Category=Mc",
+        "General_Category=Spacing_Mark",
+        "Mc",
+        "Spacing_Mark",
+        "gc=Mc",
+        "gc=Spacing_Mark"
+      ]
+    },
+    {
+      "name": "General_Category=Me",
+      "aliases": [
+        "Enclosing_Mark",
+        "General_Category=Enclosing_Mark",
+        "General_Category=Me",
+        "Me",
+        "gc=Enclosing_Mark",
+        "gc=Me"
+      ]
+    },
+    {
+      "name": "General_Category=Mn",
+      "aliases": [
+        "General_Category=Mn",
+        "General_Category=Nonspacing_Mark",
+        "Mn",
+        "Nonspacing_Mark",
+        "gc=Mn",
+        "gc=Nonspacing_Mark"
+      ]
+    },
+    {
+      "name": "General_Category=N",
+      "aliases": [
+        "General_Category=N",
+        "General_Category=Number",
+        "N",
+        "Number",
+        "gc=N",
+        "gc=Number"
+      ]
+    },
+    {
+      "name": "General_Category=Nd",
+      "aliases": [
+        "Decimal_Number",
+        "General_Category=Decimal_Number",
+        "General_Category=Nd",
+        "General_Category=digit",
+        "Nd",
+        "digit",
+        "gc=Decimal_Number",
+        "gc=Nd",
+        "gc=digit"
+      ]
+    },
+    {
+      "name": "General_Category=Nl",
+      "aliases": [
+        "General_Category=Letter_Number",
+        "General_Category=Nl",
+        "Letter_Number",
+        "Nl",
+        "gc=Letter_Number",
+        "gc=Nl"
+      ]
+    },
+    {
+      "name": "General_Category=No",
+      "aliases": [
+        "General_Category=No",
+        "General_Category=Other_Number",
+        "No",
+        "Other_Number",
+        "gc=No",
+        "gc=Other_Number"
+      ]
+    },
+    {
+      "name": "General_Category=P",
+      "aliases": [
+        "General_Category=P",
+        "General_Category=Punctuation",
+        "General_Category=punct",
+        "P",
+        "Punctuation",
+        "gc=P",
+        "gc=Punctuation",
+        "gc=punct",
+        "punct"
+      ]
+    },
+    {
+      "name": "General_Category=Pc",
+      "aliases": [
+        "Connector_Punctuation",
+        "General_Category=Connector_Punctuation",
+        "General_Category=Pc",
+        "Pc",
+        "gc=Connector_Punctuation",
+        "gc=Pc"
+      ]
+    },
+    {
+      "name": "General_Category=Pd",
+      "aliases": [
+        "Dash_Punctuation",
+        "General_Category=Dash_Punctuation",
+        "General_Category=Pd",
+        "Pd",
+        "gc=Dash_Punctuation",
+        "gc=Pd"
+      ]
+    },
+    {
+      "name": "General_Category=Pe",
+      "aliases": [
+        "Close_Punctuation",
+        "General_Category=Close_Punctuation",
+        "General_Category=Pe",
+        "Pe",
+        "gc=Close_Punctuation",
+        "gc=Pe"
+      ]
+    },
+    {
+      "name": "General_Category=Pf",
+      "aliases": [
+        "Final_Punctuation",
+        "General_Category=Final_Punctuation",
+        "General_Category=Pf",
+        "Pf",
+        "gc=Final_Punctuation",
+        "gc=Pf"
+      ]
+    },
+    {
+      "name": "General_Category=Pi",
+      "aliases": [
+        "General_Category=Initial_Punctuation",
+        "General_Category=Pi",
+        "Initial_Punctuation",
+        "Pi",
+        "gc=Initial_Punctuation",
+        "gc=Pi"
+      ]
+    },
+    {
+      "name": "General_Category=Po",
+      "aliases": [
+        "General_Category=Other_Punctuation",
+        "General_Category=Po",
+        "Other_Punctuation",
+        "Po",
+        "gc=Other_Punctuation",
+        "gc=Po"
+      ]
+    },
+    {
+      "name": "General_Category=Ps",
+      "aliases": [
+        "General_Category=Open_Punctuation",
+        "General_Category=Ps",
+        "Open_Punctuation",
+        "Ps",
+        "gc=Open_Punctuation",
+        "gc=Ps"
+      ]
+    },
+    {
+      "name": "General_Category=S",
+      "aliases": [
+        "General_Category=S",
+        "General_Category=Symbol",
+        "S",
+        "Symbol",
+        "gc=S",
+        "gc=Symbol"
+      ]
+    },
+    {
+      "name": "General_Category=Sc",
+      "aliases": [
+        "Currency_Symbol",
+        "General_Category=Currency_Symbol",
+        "General_Category=Sc",
+        "Sc",
+        "gc=Currency_Symbol",
+        "gc=Sc"
+      ]
+    },
+    {
+      "name": "General_Category=Sk",
+      "aliases": [
+        "General_Category=Modifier_Symbol",
+        "General_Category=Sk",
+        "Modifier_Symbol",
+        "Sk",
+        "gc=Modifier_Symbol",
+        "gc=Sk"
+      ]
+    },
+    {
+      "name": "General_Category=Sm",
+      "aliases": [
+        "General_Category=Math_Symbol",
+        "General_Category=Sm",
+        "Math_Symbol",
+        "Sm",
+        "gc=Math_Symbol",
+        "gc=Sm"
+      ]
+    },
+    {
+      "name": "General_Category=So",
+      "aliases": [
+        "General_Category=Other_Symbol",
+        "General_Category=So",
+        "Other_Symbol",
+        "So",
+        "gc=Other_Symbol",
+        "gc=So"
+      ]
+    },
+    {
+      "name": "General_Category=Z",
+      "aliases": [
+        "General_Category=Separator",
+        "General_Category=Z",
+        "Separator",
+        "Z",
+        "gc=Separator",
+        "gc=Z"
+      ]
+    },
+    {
+      "name": "General_Category=Zl",
+      "aliases": [
+        "General_Category=Line_Separator",
+        "General_Category=Zl",
+        "Line_Separator",
+        "Zl",
+        "gc=Line_Separator",
+        "gc=Zl"
+      ]
+    },
+    {
+      "name": "General_Category=Zp",
+      "aliases": [
+        "General_Category=Paragraph_Separator",
+        "General_Category=Zp",
+        "Paragraph_Separator",
+        "Zp",
+        "gc=Paragraph_Separator",
+        "gc=Zp"
+      ]
+    },
+    {
+      "name": "General_Category=Zs",
+      "aliases": [
+        "General_Category=Space_Separator",
+        "General_Category=Zs",
+        "Space_Separator",
+        "Zs",
+        "gc=Space_Separator",
+        "gc=Zs"
+      ]
+    },
+    {
+      "name": "ASCII",
+      "aliases": [
+        "ASCII"
+      ]
+    },
+    {
+      "name": "ASCII_Hex_Digit",
+      "aliases": [
+        "AHex",
+        "ASCII_Hex_Digit"
+      ]
+    },
+    {
+      "name": "Alphabetic",
+      "aliases": [
+        "Alpha",
+        "Alphabetic"
+      ]
+    },
+    {
+      "name": "Any",
+      "aliases": [
+        "Any"
+      ]
+    },
+    {
+      "name": "Assigned",
+      "aliases": [
+        "Assigned"
+      ]
+    },
+    {
+      "name": "Bidi_Control",
+      "aliases": [
+        "Bidi_C",
+        "Bidi_Control"
+      ]
+    },
+    {
+      "name": "Bidi_Mirrored",
+      "aliases": [
+        "Bidi_M",
+        "Bidi_Mirrored"
+      ]
+    },
+    {
+      "name": "Case_Ignorable",
+      "aliases": [
+        "CI",
+        "Case_Ignorable"
+      ]
+    },
+    {
+      "name": "Cased",
+      "aliases": [
+        "Cased"
+      ]
+    },
+    {
+      "name": "Changes_When_Casefolded",
+      "aliases": [
+        "CWCF",
+        "Changes_When_Casefolded"
+      ]
+    },
+    {
+      "name": "Changes_When_Casemapped",
+      "aliases": [
+        "CWCM",
+        "Changes_When_Casemapped"
+      ]
+    },
+    {
+      "name": "Changes_When_Lowercased",
+      "aliases": [
+        "CWL",
+        "Changes_When_Lowercased"
+      ]
+    },
+    {
+      "name": "Changes_When_NFKC_Casefolded",
+      "aliases": [
+        "CWKCF",
+        "Changes_When_NFKC_Casefolded"
+      ]
+    },
+    {
+      "name": "Changes_When_Titlecased",
+      "aliases": [
+        "CWT",
+        "Changes_When_Titlecased"
+      ]
+    },
+    {
+      "name": "Changes_When_Uppercased",
+      "aliases": [
+        "CWU",
+        "Changes_When_Uppercased"
+      ]
+    },
+    {
+      "name": "Dash",
+      "aliases": [
+        "Dash"
+      ]
+    },
+    {
+      "name": "Default_Ignorable_Code_Point",
+      "aliases": [
+        "DI",
+        "Default_Ignorable_Code_Point"
+      ]
+    },
+    {
+      "name": "Deprecated",
+      "aliases": [
+        "Dep",
+        "Deprecated"
+      ]
+    },
+    {
+      "name": "Diacritic",
+      "aliases": [
+        "Dia",
+        "Diacritic"
+      ]
+    },
+    {
+      "name": "Emoji",
+      "aliases": [
+        "Emoji"
+      ]
+    },
+    {
+      "name": "Emoji_Component",
+      "aliases": [
+        "EComp",
+        "Emoji_Component"
+      ]
+    },
+    {
+      "name": "Emoji_Modifier",
+      "aliases": [
+        "EMod",
+        "Emoji_Modifier"
+      ]
+    },
+    {
+      "name": "Emoji_Modifier_Base",
+      "aliases": [
+        "EBase",
+        "Emoji_Modifier_Base"
+      ]
+    },
+    {
+      "name": "Emoji_Presentation",
+      "aliases": [
+        "EPres",
+        "Emoji_Presentation"
+      ]
+    },
+    {
+      "name": "Extended_Pictographic",
+      "aliases": [
+        "ExtPict",
+        "Extended_Pictographic"
+      ]
+    },
+    {
+      "name": "Extender",
+      "aliases": [
+        "Ext",
+        "Extender"
+      ]
+    },
+    {
+      "name": "Grapheme_Base",
+      "aliases": [
+        "Gr_Base",
+        "Grapheme_Base"
+      ]
+    },
+    {
+      "name": "Grapheme_Extend",
+      "aliases": [
+        "Gr_Ext",
+        "Grapheme_Extend"
+      ]
+    },
+    {
+      "name": "Hex_Digit",
+      "aliases": [
+        "Hex",
+        "Hex_Digit"
+      ]
+    },
+    {
+      "name": "IDS_Binary_Operator",
+      "aliases": [
+        "IDSB",
+        "IDS_Binary_Operator"
+      ]
+    },
+    {
+      "name": "IDS_Trinary_Operator",
+      "aliases": [
+        "IDST",
+        "IDS_Trinary_Operator"
+      ]
+    },
+    {
+      "name": "ID_Continue",
+      "aliases": [
+        "IDC",
+        "ID_Continue"
+      ]
+    },
+    {
+      "name": "ID_Start",
+      "aliases": [
+        "IDS",
+        "ID_Start"
+      ]
+    },
+    {
+      "name": "Ideographic",
+      "aliases": [
+        "Ideo",
+        "Ideographic"
+      ]
+    },
+    {
+      "name": "Join_Control",
+      "aliases": [
+        "Join_C",
+        "Join_Control"
+      ]
+    },
+    {
+      "name": "Logical_Order_Exception",
+      "aliases": [
+        "LOE",
+        "Logical_Order_Exception"
+      ]
+    },
+    {
+      "name": "Lowercase",
+      "aliases": [
+        "Lower",
+        "Lowercase"
+      ]
+    },
+    {
+      "name": "Math",
+      "aliases": [
+        "Math"
+      ]
+    },
+    {
+      "name": "Noncharacter_Code_Point",
+      "aliases": [
+        "NChar",
+        "Noncharacter_Code_Point"
+      ]
+    },
+    {
+      "name": "Pattern_Syntax",
+      "aliases": [
+        "Pat_Syn",
+        "Pattern_Syntax"
+      ]
+    },
+    {
+      "name": "Pattern_White_Space",
+      "aliases": [
+        "Pat_WS",
+        "Pattern_White_Space"
+      ]
+    },
+    {
+      "name": "Quotation_Mark",
+      "aliases": [
+        "QMark",
+        "Quotation_Mark"
+      ]
+    },
+    {
+      "name": "Radical",
+      "aliases": [
+        "Radical"
+      ]
+    },
+    {
+      "name": "Regional_Indicator",
+      "aliases": [
+        "RI",
+        "Regional_Indicator"
+      ]
+    },
+    {
+      "name": "Sentence_Terminal",
+      "aliases": [
+        "STerm",
+        "Sentence_Terminal"
+      ]
+    },
+    {
+      "name": "Soft_Dotted",
+      "aliases": [
+        "SD",
+        "Soft_Dotted"
+      ]
+    },
+    {
+      "name": "Terminal_Punctuation",
+      "aliases": [
+        "Term",
+        "Terminal_Punctuation"
+      ]
+    },
+    {
+      "name": "Unified_Ideograph",
+      "aliases": [
+        "UIdeo",
+        "Unified_Ideograph"
+      ]
+    },
+    {
+      "name": "Uppercase",
+      "aliases": [
+        "Upper",
+        "Uppercase"
+      ]
+    },
+    {
+      "name": "Variation_Selector",
+      "aliases": [
+        "VS",
+        "Variation_Selector"
+      ]
+    },
+    {
+      "name": "White_Space",
+      "aliases": [
+        "White_Space",
+        "space"
+      ]
+    },
+    {
+      "name": "XID_Continue",
+      "aliases": [
+        "XIDC",
+        "XID_Continue"
+      ]
+    },
+    {
+      "name": "XID_Start",
+      "aliases": [
+        "XIDS",
+        "XID_Start"
+      ]
+    },
+    {
+      "name": "Script=Adlm",
+      "aliases": [
+        "Script=Adlam",
+        "Script=Adlm",
+        "sc=Adlam",
+        "sc=Adlm"
+      ]
+    },
+    {
+      "name": "Script=Aghb",
+      "aliases": [
+        "Script=Aghb",
+        "Script=Caucasian_Albanian",
+        "sc=Aghb",
+        "sc=Caucasian_Albanian"
+      ]
+    },
+    {
+      "name": "Script=Ahom",
+      "aliases": [
+        "Script=Ahom",
+        "sc=Ahom"
+      ]
+    },
+    {
+      "name": "Script=Arab",
+      "aliases": [
+        "Script=Arab",
+        "Script=Arabic",
+        "sc=Arab",
+        "sc=Arabic"
+      ]
+    },
+    {
+      "name": "Script=Armi",
+      "aliases": [
+        "Script=Armi",
+        "Script=Imperial_Aramaic",
+        "sc=Armi",
+        "sc=Imperial_Aramaic"
+      ]
+    },
+    {
+      "name": "Script=Armn",
+      "aliases": [
+        "Script=Armenian",
+        "Script=Armn",
+        "sc=Armenian",
+        "sc=Armn"
+      ]
+    },
+    {
+      "name": "Script=Avst",
+      "aliases": [
+        "Script=Avestan",
+        "Script=Avst",
+        "sc=Avestan",
+        "sc=Avst"
+      ]
+    },
+    {
+      "name": "Script=Bali",
+      "aliases": [
+        "Script=Bali",
+        "Script=Balinese",
+        "sc=Bali",
+        "sc=Balinese"
+      ]
+    },
+    {
+      "name": "Script=Bamu",
+      "aliases": [
+        "Script=Bamu",
+        "Script=Bamum",
+        "sc=Bamu",
+        "sc=Bamum"
+      ]
+    },
+    {
+      "name": "Script=Bass",
+      "aliases": [
+        "Script=Bass",
+        "Script=Bassa_Vah",
+        "sc=Bass",
+        "sc=Bassa_Vah"
+      ]
+    },
+    {
+      "name": "Script=Batk",
+      "aliases": [
+        "Script=Batak",
+        "Script=Batk",
+        "sc=Batak",
+        "sc=Batk"
+      ]
+    },
+    {
+      "name": "Script=Beng",
+      "aliases": [
+        "Script=Beng",
+        "Script=Bengali",
+        "sc=Beng",
+        "sc=Bengali"
+      ]
+    },
+    {
+      "name": "Script=Berf",
+      "aliases": [
+        "Script=Berf",
+        "Script=Beria_Erfe",
+        "sc=Berf",
+        "sc=Beria_Erfe"
+      ]
+    },
+    {
+      "name": "Script=Bhks",
+      "aliases": [
+        "Script=Bhaiksuki",
+        "Script=Bhks",
+        "sc=Bhaiksuki",
+        "sc=Bhks"
+      ]
+    },
+    {
+      "name": "Script=Bopo",
+      "aliases": [
+        "Script=Bopo",
+        "Script=Bopomofo",
+        "sc=Bopo",
+        "sc=Bopomofo"
+      ]
+    },
+    {
+      "name": "Script=Brah",
+      "aliases": [
+        "Script=Brah",
+        "Script=Brahmi",
+        "sc=Brah",
+        "sc=Brahmi"
+      ]
+    },
+    {
+      "name": "Script=Brai",
+      "aliases": [
+        "Script=Brai",
+        "Script=Braille",
+        "sc=Brai",
+        "sc=Braille"
+      ]
+    },
+    {
+      "name": "Script=Bugi",
+      "aliases": [
+        "Script=Bugi",
+        "Script=Buginese",
+        "sc=Bugi",
+        "sc=Buginese"
+      ]
+    },
+    {
+      "name": "Script=Buhd",
+      "aliases": [
+        "Script=Buhd",
+        "Script=Buhid",
+        "sc=Buhd",
+        "sc=Buhid"
+      ]
+    },
+    {
+      "name": "Script=Cakm",
+      "aliases": [
+        "Script=Cakm",
+        "Script=Chakma",
+        "sc=Cakm",
+        "sc=Chakma"
+      ]
+    },
+    {
+      "name": "Script=Cans",
+      "aliases": [
+        "Script=Canadian_Aboriginal",
+        "Script=Cans",
+        "sc=Canadian_Aboriginal",
+        "sc=Cans"
+      ]
+    },
+    {
+      "name": "Script=Cari",
+      "aliases": [
+        "Script=Cari",
+        "Script=Carian",
+        "sc=Cari",
+        "sc=Carian"
+      ]
+    },
+    {
+      "name": "Script=Cham",
+      "aliases": [
+        "Script=Cham",
+        "sc=Cham"
+      ]
+    },
+    {
+      "name": "Script=Cher",
+      "aliases": [
+        "Script=Cher",
+        "Script=Cherokee",
+        "sc=Cher",
+        "sc=Cherokee"
+      ]
+    },
+    {
+      "name": "Script=Chrs",
+      "aliases": [
+        "Script=Chorasmian",
+        "Script=Chrs",
+        "sc=Chorasmian",
+        "sc=Chrs"
+      ]
+    },
+    {
+      "name": "Script=Copt",
+      "aliases": [
+        "Script=Copt",
+        "Script=Coptic",
+        "Script=Qaac",
+        "sc=Copt",
+        "sc=Coptic",
+        "sc=Qaac"
+      ]
+    },
+    {
+      "name": "Script=Cpmn",
+      "aliases": [
+        "Script=Cpmn",
+        "Script=Cypro_Minoan",
+        "sc=Cpmn",
+        "sc=Cypro_Minoan"
+      ]
+    },
+    {
+      "name": "Script=Cprt",
+      "aliases": [
+        "Script=Cprt",
+        "Script=Cypriot",
+        "sc=Cprt",
+        "sc=Cypriot"
+      ]
+    },
+    {
+      "name": "Script=Cyrl",
+      "aliases": [
+        "Script=Cyrillic",
+        "Script=Cyrl",
+        "sc=Cyrillic",
+        "sc=Cyrl"
+      ]
+    },
+    {
+      "name": "Script=Deva",
+      "aliases": [
+        "Script=Deva",
+        "Script=Devanagari",
+        "sc=Deva",
+        "sc=Devanagari"
+      ]
+    },
+    {
+      "name": "Script=Diak",
+      "aliases": [
+        "Script=Diak",
+        "Script=Dives_Akuru",
+        "sc=Diak",
+        "sc=Dives_Akuru"
+      ]
+    },
+    {
+      "name": "Script=Dogr",
+      "aliases": [
+        "Script=Dogr",
+        "Script=Dogra",
+        "sc=Dogr",
+        "sc=Dogra"
+      ]
+    },
+    {
+      "name": "Script=Dsrt",
+      "aliases": [
+        "Script=Deseret",
+        "Script=Dsrt",
+        "sc=Deseret",
+        "sc=Dsrt"
+      ]
+    },
+    {
+      "name": "Script=Dupl",
+      "aliases": [
+        "Script=Dupl",
+        "Script=Duployan",
+        "sc=Dupl",
+        "sc=Duployan"
+      ]
+    },
+    {
+      "name": "Script=Egyp",
+      "aliases": [
+        "Script=Egyp",
+        "Script=Egyptian_Hieroglyphs",
+        "sc=Egyp",
+        "sc=Egyptian_Hieroglyphs"
+      ]
+    },
+    {
+      "name": "Script=Elba",
+      "aliases": [
+        "Script=Elba",
+        "Script=Elbasan",
+        "sc=Elba",
+        "sc=Elbasan"
+      ]
+    },
+    {
+      "name": "Script=Elym",
+      "aliases": [
+        "Script=Elym",
+        "Script=Elymaic",
+        "sc=Elym",
+        "sc=Elymaic"
+      ]
+    },
+    {
+      "name": "Script=Ethi",
+      "aliases": [
+        "Script=Ethi",
+        "Script=Ethiopic",
+        "sc=Ethi",
+        "sc=Ethiopic"
+      ]
+    },
+    {
+      "name": "Script=Gara",
+      "aliases": [
+        "Script=Gara",
+        "Script=Garay",
+        "sc=Gara",
+        "sc=Garay"
+      ]
+    },
+    {
+      "name": "Script=Geor",
+      "aliases": [
+        "Script=Geor",
+        "Script=Georgian",
+        "sc=Geor",
+        "sc=Georgian"
+      ]
+    },
+    {
+      "name": "Script=Glag",
+      "aliases": [
+        "Script=Glag",
+        "Script=Glagolitic",
+        "sc=Glag",
+        "sc=Glagolitic"
+      ]
+    },
+    {
+      "name": "Script=Gong",
+      "aliases": [
+        "Script=Gong",
+        "Script=Gunjala_Gondi",
+        "sc=Gong",
+        "sc=Gunjala_Gondi"
+      ]
+    },
+    {
+      "name": "Script=Gonm",
+      "aliases": [
+        "Script=Gonm",
+        "Script=Masaram_Gondi",
+        "sc=Gonm",
+        "sc=Masaram_Gondi"
+      ]
+    },
+    {
+      "name": "Script=Goth",
+      "aliases": [
+        "Script=Goth",
+        "Script=Gothic",
+        "sc=Goth",
+        "sc=Gothic"
+      ]
+    },
+    {
+      "name": "Script=Gran",
+      "aliases": [
+        "Script=Gran",
+        "Script=Grantha",
+        "sc=Gran",
+        "sc=Grantha"
+      ]
+    },
+    {
+      "name": "Script=Grek",
+      "aliases": [
+        "Script=Greek",
+        "Script=Grek",
+        "sc=Greek",
+        "sc=Grek"
+      ]
+    },
+    {
+      "name": "Script=Gujr",
+      "aliases": [
+        "Script=Gujarati",
+        "Script=Gujr",
+        "sc=Gujarati",
+        "sc=Gujr"
+      ]
+    },
+    {
+      "name": "Script=Gukh",
+      "aliases": [
+        "Script=Gukh",
+        "Script=Gurung_Khema",
+        "sc=Gukh",
+        "sc=Gurung_Khema"
+      ]
+    },
+    {
+      "name": "Script=Guru",
+      "aliases": [
+        "Script=Gurmukhi",
+        "Script=Guru",
+        "sc=Gurmukhi",
+        "sc=Guru"
+      ]
+    },
+    {
+      "name": "Script=Hang",
+      "aliases": [
+        "Script=Hang",
+        "Script=Hangul",
+        "sc=Hang",
+        "sc=Hangul"
+      ]
+    },
+    {
+      "name": "Script=Hani",
+      "aliases": [
+        "Script=Han",
+        "Script=Hani",
+        "sc=Han",
+        "sc=Hani"
+      ]
+    },
+    {
+      "name": "Script=Hano",
+      "aliases": [
+        "Script=Hano",
+        "Script=Hanunoo",
+        "sc=Hano",
+        "sc=Hanunoo"
+      ]
+    },
+    {
+      "name": "Script=Hatr",
+      "aliases": [
+        "Script=Hatr",
+        "Script=Hatran",
+        "sc=Hatr",
+        "sc=Hatran"
+      ]
+    },
+    {
+      "name": "Script=Hebr",
+      "aliases": [
+        "Script=Hebr",
+        "Script=Hebrew",
+        "sc=Hebr",
+        "sc=Hebrew"
+      ]
+    },
+    {
+      "name": "Script=Hira",
+      "aliases": [
+        "Script=Hira",
+        "Script=Hiragana",
+        "sc=Hira",
+        "sc=Hiragana"
+      ]
+    },
+    {
+      "name": "Script=Hluw",
+      "aliases": [
+        "Script=Anatolian_Hieroglyphs",
+        "Script=Hluw",
+        "sc=Anatolian_Hieroglyphs",
+        "sc=Hluw"
+      ]
+    },
+    {
+      "name": "Script=Hmng",
+      "aliases": [
+        "Script=Hmng",
+        "Script=Pahawh_Hmong",
+        "sc=Hmng",
+        "sc=Pahawh_Hmong"
+      ]
+    },
+    {
+      "name": "Script=Hmnp",
+      "aliases": [
+        "Script=Hmnp",
+        "Script=Nyiakeng_Puachue_Hmong",
+        "sc=Hmnp",
+        "sc=Nyiakeng_Puachue_Hmong"
+      ]
+    },
+    {
+      "name": "Script=Hrkt",
+      "aliases": [
+        "Script=Hrkt",
+        "Script=Katakana_Or_Hiragana",
+        "sc=Hrkt",
+        "sc=Katakana_Or_Hiragana"
+      ]
+    },
+    {
+      "name": "Script=Hung",
+      "aliases": [
+        "Script=Hung",
+        "Script=Old_Hungarian",
+        "sc=Hung",
+        "sc=Old_Hungarian"
+      ]
+    },
+    {
+      "name": "Script=Ital",
+      "aliases": [
+        "Script=Ital",
+        "Script=Old_Italic",
+        "sc=Ital",
+        "sc=Old_Italic"
+      ]
+    },
+    {
+      "name": "Script=Java",
+      "aliases": [
+        "Script=Java",
+        "Script=Javanese",
+        "sc=Java",
+        "sc=Javanese"
+      ]
+    },
+    {
+      "name": "Script=Kali",
+      "aliases": [
+        "Script=Kali",
+        "Script=Kayah_Li",
+        "sc=Kali",
+        "sc=Kayah_Li"
+      ]
+    },
+    {
+      "name": "Script=Kana",
+      "aliases": [
+        "Script=Kana",
+        "Script=Katakana",
+        "sc=Kana",
+        "sc=Katakana"
+      ]
+    },
+    {
+      "name": "Script=Kawi",
+      "aliases": [
+        "Script=Kawi",
+        "sc=Kawi"
+      ]
+    },
+    {
+      "name": "Script=Khar",
+      "aliases": [
+        "Script=Khar",
+        "Script=Kharoshthi",
+        "sc=Khar",
+        "sc=Kharoshthi"
+      ]
+    },
+    {
+      "name": "Script=Khmr",
+      "aliases": [
+        "Script=Khmer",
+        "Script=Khmr",
+        "sc=Khmer",
+        "sc=Khmr"
+      ]
+    },
+    {
+      "name": "Script=Khoj",
+      "aliases": [
+        "Script=Khoj",
+        "Script=Khojki",
+        "sc=Khoj",
+        "sc=Khojki"
+      ]
+    },
+    {
+      "name": "Script=Kits",
+      "aliases": [
+        "Script=Khitan_Small_Script",
+        "Script=Kits",
+        "sc=Khitan_Small_Script",
+        "sc=Kits"
+      ]
+    },
+    {
+      "name": "Script=Knda",
+      "aliases": [
+        "Script=Kannada",
+        "Script=Knda",
+        "sc=Kannada",
+        "sc=Knda"
+      ]
+    },
+    {
+      "name": "Script=Krai",
+      "aliases": [
+        "Script=Kirat_Rai",
+        "Script=Krai",
+        "sc=Kirat_Rai",
+        "sc=Krai"
+      ]
+    },
+    {
+      "name": "Script=Kthi",
+      "aliases": [
+        "Script=Kaithi",
+        "Script=Kthi",
+        "sc=Kaithi",
+        "sc=Kthi"
+      ]
+    },
+    {
+      "name": "Script=Lana",
+      "aliases": [
+        "Script=Lana",
+        "Script=Tai_Tham",
+        "sc=Lana",
+        "sc=Tai_Tham"
+      ]
+    },
+    {
+      "name": "Script=Laoo",
+      "aliases": [
+        "Script=Lao",
+        "Script=Laoo",
+        "sc=Lao",
+        "sc=Laoo"
+      ]
+    },
+    {
+      "name": "Script=Latn",
+      "aliases": [
+        "Script=Latin",
+        "Script=Latn",
+        "sc=Latin",
+        "sc=Latn"
+      ]
+    },
+    {
+      "name": "Script=Lepc",
+      "aliases": [
+        "Script=Lepc",
+        "Script=Lepcha",
+        "sc=Lepc",
+        "sc=Lepcha"
+      ]
+    },
+    {
+      "name": "Script=Limb",
+      "aliases": [
+        "Script=Limb",
+        "Script=Limbu",
+        "sc=Limb",
+        "sc=Limbu"
+      ]
+    },
+    {
+      "name": "Script=Lina",
+      "aliases": [
+        "Script=Lina",
+        "Script=Linear_A",
+        "sc=Lina",
+        "sc=Linear_A"
+      ]
+    },
+    {
+      "name": "Script=Linb",
+      "aliases": [
+        "Script=Linb",
+        "Script=Linear_B",
+        "sc=Linb",
+        "sc=Linear_B"
+      ]
+    },
+    {
+      "name": "Script=Lisu",
+      "aliases": [
+        "Script=Lisu",
+        "sc=Lisu"
+      ]
+    },
+    {
+      "name": "Script=Lyci",
+      "aliases": [
+        "Script=Lyci",
+        "Script=Lycian",
+        "sc=Lyci",
+        "sc=Lycian"
+      ]
+    },
+    {
+      "name": "Script=Lydi",
+      "aliases": [
+        "Script=Lydi",
+        "Script=Lydian",
+        "sc=Lydi",
+        "sc=Lydian"
+      ]
+    },
+    {
+      "name": "Script=Mahj",
+      "aliases": [
+        "Script=Mahajani",
+        "Script=Mahj",
+        "sc=Mahajani",
+        "sc=Mahj"
+      ]
+    },
+    {
+      "name": "Script=Maka",
+      "aliases": [
+        "Script=Maka",
+        "Script=Makasar",
+        "sc=Maka",
+        "sc=Makasar"
+      ]
+    },
+    {
+      "name": "Script=Mand",
+      "aliases": [
+        "Script=Mand",
+        "Script=Mandaic",
+        "sc=Mand",
+        "sc=Mandaic"
+      ]
+    },
+    {
+      "name": "Script=Mani",
+      "aliases": [
+        "Script=Mani",
+        "Script=Manichaean",
+        "sc=Mani",
+        "sc=Manichaean"
+      ]
+    },
+    {
+      "name": "Script=Marc",
+      "aliases": [
+        "Script=Marc",
+        "Script=Marchen",
+        "sc=Marc",
+        "sc=Marchen"
+      ]
+    },
+    {
+      "name": "Script=Medf",
+      "aliases": [
+        "Script=Medefaidrin",
+        "Script=Medf",
+        "sc=Medefaidrin",
+        "sc=Medf"
+      ]
+    },
+    {
+      "name": "Script=Mend",
+      "aliases": [
+        "Script=Mend",
+        "Script=Mende_Kikakui",
+        "sc=Mend",
+        "sc=Mende_Kikakui"
+      ]
+    },
+    {
+      "name": "Script=Merc",
+      "aliases": [
+        "Script=Merc",
+        "Script=Meroitic_Cursive",
+        "sc=Merc",
+        "sc=Meroitic_Cursive"
+      ]
+    },
+    {
+      "name": "Script=Mero",
+      "aliases": [
+        "Script=Mero",
+        "Script=Meroitic_Hieroglyphs",
+        "sc=Mero",
+        "sc=Meroitic_Hieroglyphs"
+      ]
+    },
+    {
+      "name": "Script=Mlym",
+      "aliases": [
+        "Script=Malayalam",
+        "Script=Mlym",
+        "sc=Malayalam",
+        "sc=Mlym"
+      ]
+    },
+    {
+      "name": "Script=Modi",
+      "aliases": [
+        "Script=Modi",
+        "sc=Modi"
+      ]
+    },
+    {
+      "name": "Script=Mong",
+      "aliases": [
+        "Script=Mong",
+        "Script=Mongolian",
+        "sc=Mong",
+        "sc=Mongolian"
+      ]
+    },
+    {
+      "name": "Script=Mroo",
+      "aliases": [
+        "Script=Mro",
+        "Script=Mroo",
+        "sc=Mro",
+        "sc=Mroo"
+      ]
+    },
+    {
+      "name": "Script=Mtei",
+      "aliases": [
+        "Script=Meetei_Mayek",
+        "Script=Mtei",
+        "sc=Meetei_Mayek",
+        "sc=Mtei"
+      ]
+    },
+    {
+      "name": "Script=Mult",
+      "aliases": [
+        "Script=Mult",
+        "Script=Multani",
+        "sc=Mult",
+        "sc=Multani"
+      ]
+    },
+    {
+      "name": "Script=Mymr",
+      "aliases": [
+        "Script=Myanmar",
+        "Script=Mymr",
+        "sc=Myanmar",
+        "sc=Mymr"
+      ]
+    },
+    {
+      "name": "Script=Nagm",
+      "aliases": [
+        "Script=Nag_Mundari",
+        "Script=Nagm",
+        "sc=Nag_Mundari",
+        "sc=Nagm"
+      ]
+    },
+    {
+      "name": "Script=Nand",
+      "aliases": [
+        "Script=Nand",
+        "Script=Nandinagari",
+        "sc=Nand",
+        "sc=Nandinagari"
+      ]
+    },
+    {
+      "name": "Script=Narb",
+      "aliases": [
+        "Script=Narb",
+        "Script=Old_North_Arabian",
+        "sc=Narb",
+        "sc=Old_North_Arabian"
+      ]
+    },
+    {
+      "name": "Script=Nbat",
+      "aliases": [
+        "Script=Nabataean",
+        "Script=Nbat",
+        "sc=Nabataean",
+        "sc=Nbat"
+      ]
+    },
+    {
+      "name": "Script=Newa",
+      "aliases": [
+        "Script=Newa",
+        "sc=Newa"
+      ]
+    },
+    {
+      "name": "Script=Nkoo",
+      "aliases": [
+        "Script=Nko",
+        "Script=Nkoo",
+        "sc=Nko",
+        "sc=Nkoo"
+      ]
+    },
+    {
+      "name": "Script=Nshu",
+      "aliases": [
+        "Script=Nshu",
+        "Script=Nushu",
+        "sc=Nshu",
+        "sc=Nushu"
+      ]
+    },
+    {
+      "name": "Script=Ogam",
+      "aliases": [
+        "Script=Ogam",
+        "Script=Ogham",
+        "sc=Ogam",
+        "sc=Ogham"
+      ]
+    },
+    {
+      "name": "Script=Olck",
+      "aliases": [
+        "Script=Ol_Chiki",
+        "Script=Olck",
+        "sc=Ol_Chiki",
+        "sc=Olck"
+      ]
+    },
+    {
+      "name": "Script=Onao",
+      "aliases": [
+        "Script=Ol_Onal",
+        "Script=Onao",
+        "sc=Ol_Onal",
+        "sc=Onao"
+      ]
+    },
+    {
+      "name": "Script=Orkh",
+      "aliases": [
+        "Script=Old_Turkic",
+        "Script=Orkh",
+        "sc=Old_Turkic",
+        "sc=Orkh"
+      ]
+    },
+    {
+      "name": "Script=Orya",
+      "aliases": [
+        "Script=Oriya",
+        "Script=Orya",
+        "sc=Oriya",
+        "sc=Orya"
+      ]
+    },
+    {
+      "name": "Script=Osge",
+      "aliases": [
+        "Script=Osage",
+        "Script=Osge",
+        "sc=Osage",
+        "sc=Osge"
+      ]
+    },
+    {
+      "name": "Script=Osma",
+      "aliases": [
+        "Script=Osma",
+        "Script=Osmanya",
+        "sc=Osma",
+        "sc=Osmanya"
+      ]
+    },
+    {
+      "name": "Script=Ougr",
+      "aliases": [
+        "Script=Old_Uyghur",
+        "Script=Ougr",
+        "sc=Old_Uyghur",
+        "sc=Ougr"
+      ]
+    },
+    {
+      "name": "Script=Palm",
+      "aliases": [
+        "Script=Palm",
+        "Script=Palmyrene",
+        "sc=Palm",
+        "sc=Palmyrene"
+      ]
+    },
+    {
+      "name": "Script=Pauc",
+      "aliases": [
+        "Script=Pau_Cin_Hau",
+        "Script=Pauc",
+        "sc=Pau_Cin_Hau",
+        "sc=Pauc"
+      ]
+    },
+    {
+      "name": "Script=Perm",
+      "aliases": [
+        "Script=Old_Permic",
+        "Script=Perm",
+        "sc=Old_Permic",
+        "sc=Perm"
+      ]
+    },
+    {
+      "name": "Script=Phag",
+      "aliases": [
+        "Script=Phag",
+        "Script=Phags_Pa",
+        "sc=Phag",
+        "sc=Phags_Pa"
+      ]
+    },
+    {
+      "name": "Script=Phli",
+      "aliases": [
+        "Script=Inscriptional_Pahlavi",
+        "Script=Phli",
+        "sc=Inscriptional_Pahlavi",
+        "sc=Phli"
+      ]
+    },
+    {
+      "name": "Script=Phlp",
+      "aliases": [
+        "Script=Phlp",
+        "Script=Psalter_Pahlavi",
+        "sc=Phlp",
+        "sc=Psalter_Pahlavi"
+      ]
+    },
+    {
+      "name": "Script=Phnx",
+      "aliases": [
+        "Script=Phnx",
+        "Script=Phoenician",
+        "sc=Phnx",
+        "sc=Phoenician"
+      ]
+    },
+    {
+      "name": "Script=Plrd",
+      "aliases": [
+        "Script=Miao",
+        "Script=Plrd",
+        "sc=Miao",
+        "sc=Plrd"
+      ]
+    },
+    {
+      "name": "Script=Prti",
+      "aliases": [
+        "Script=Inscriptional_Parthian",
+        "Script=Prti",
+        "sc=Inscriptional_Parthian",
+        "sc=Prti"
+      ]
+    },
+    {
+      "name": "Script=Rjng",
+      "aliases": [
+        "Script=Rejang",
+        "Script=Rjng",
+        "sc=Rejang",
+        "sc=Rjng"
+      ]
+    },
+    {
+      "name": "Script=Rohg",
+      "aliases": [
+        "Script=Hanifi_Rohingya",
+        "Script=Rohg",
+        "sc=Hanifi_Rohingya",
+        "sc=Rohg"
+      ]
+    },
+    {
+      "name": "Script=Runr",
+      "aliases": [
+        "Script=Runic",
+        "Script=Runr",
+        "sc=Runic",
+        "sc=Runr"
+      ]
+    },
+    {
+      "name": "Script=Samr",
+      "aliases": [
+        "Script=Samaritan",
+        "Script=Samr",
+        "sc=Samaritan",
+        "sc=Samr"
+      ]
+    },
+    {
+      "name": "Script=Sarb",
+      "aliases": [
+        "Script=Old_South_Arabian",
+        "Script=Sarb",
+        "sc=Old_South_Arabian",
+        "sc=Sarb"
+      ]
+    },
+    {
+      "name": "Script=Saur",
+      "aliases": [
+        "Script=Saur",
+        "Script=Saurashtra",
+        "sc=Saur",
+        "sc=Saurashtra"
+      ]
+    },
+    {
+      "name": "Script=Sgnw",
+      "aliases": [
+        "Script=Sgnw",
+        "Script=SignWriting",
+        "sc=Sgnw",
+        "sc=SignWriting"
+      ]
+    },
+    {
+      "name": "Script=Shaw",
+      "aliases": [
+        "Script=Shavian",
+        "Script=Shaw",
+        "sc=Shavian",
+        "sc=Shaw"
+      ]
+    },
+    {
+      "name": "Script=Shrd",
+      "aliases": [
+        "Script=Sharada",
+        "Script=Shrd",
+        "sc=Sharada",
+        "sc=Shrd"
+      ]
+    },
+    {
+      "name": "Script=Sidd",
+      "aliases": [
+        "Script=Sidd",
+        "Script=Siddham",
+        "sc=Sidd",
+        "sc=Siddham"
+      ]
+    },
+    {
+      "name": "Script=Sidt",
+      "aliases": [
+        "Script=Sidetic",
+        "Script=Sidt",
+        "sc=Sidetic",
+        "sc=Sidt"
+      ]
+    },
+    {
+      "name": "Script=Sind",
+      "aliases": [
+        "Script=Khudawadi",
+        "Script=Sind",
+        "sc=Khudawadi",
+        "sc=Sind"
+      ]
+    },
+    {
+      "name": "Script=Sinh",
+      "aliases": [
+        "Script=Sinh",
+        "Script=Sinhala",
+        "sc=Sinh",
+        "sc=Sinhala"
+      ]
+    },
+    {
+      "name": "Script=Sogd",
+      "aliases": [
+        "Script=Sogd",
+        "Script=Sogdian",
+        "sc=Sogd",
+        "sc=Sogdian"
+      ]
+    },
+    {
+      "name": "Script=Sogo",
+      "aliases": [
+        "Script=Old_Sogdian",
+        "Script=Sogo",
+        "sc=Old_Sogdian",
+        "sc=Sogo"
+      ]
+    },
+    {
+      "name": "Script=Sora",
+      "aliases": [
+        "Script=Sora",
+        "Script=Sora_Sompeng",
+        "sc=Sora",
+        "sc=Sora_Sompeng"
+      ]
+    },
+    {
+      "name": "Script=Soyo",
+      "aliases": [
+        "Script=Soyo",
+        "Script=Soyombo",
+        "sc=Soyo",
+        "sc=Soyombo"
+      ]
+    },
+    {
+      "name": "Script=Sund",
+      "aliases": [
+        "Script=Sund",
+        "Script=Sundanese",
+        "sc=Sund",
+        "sc=Sundanese"
+      ]
+    },
+    {
+      "name": "Script=Sunu",
+      "aliases": [
+        "Script=Sunu",
+        "Script=Sunuwar",
+        "sc=Sunu",
+        "sc=Sunuwar"
+      ]
+    },
+    {
+      "name": "Script=Sylo",
+      "aliases": [
+        "Script=Sylo",
+        "Script=Syloti_Nagri",
+        "sc=Sylo",
+        "sc=Syloti_Nagri"
+      ]
+    },
+    {
+      "name": "Script=Syrc",
+      "aliases": [
+        "Script=Syrc",
+        "Script=Syriac",
+        "sc=Syrc",
+        "sc=Syriac"
+      ]
+    },
+    {
+      "name": "Script=Tagb",
+      "aliases": [
+        "Script=Tagb",
+        "Script=Tagbanwa",
+        "sc=Tagb",
+        "sc=Tagbanwa"
+      ]
+    },
+    {
+      "name": "Script=Takr",
+      "aliases": [
+        "Script=Takr",
+        "Script=Takri",
+        "sc=Takr",
+        "sc=Takri"
+      ]
+    },
+    {
+      "name": "Script=Tale",
+      "aliases": [
+        "Script=Tai_Le",
+        "Script=Tale",
+        "sc=Tai_Le",
+        "sc=Tale"
+      ]
+    },
+    {
+      "name": "Script=Talu",
+      "aliases": [
+        "Script=New_Tai_Lue",
+        "Script=Talu",
+        "sc=New_Tai_Lue",
+        "sc=Talu"
+      ]
+    },
+    {
+      "name": "Script=Taml",
+      "aliases": [
+        "Script=Tamil",
+        "Script=Taml",
+        "sc=Tamil",
+        "sc=Taml"
+      ]
+    },
+    {
+      "name": "Script=Tang",
+      "aliases": [
+        "Script=Tang",
+        "Script=Tangut",
+        "sc=Tang",
+        "sc=Tangut"
+      ]
+    },
+    {
+      "name": "Script=Tavt",
+      "aliases": [
+        "Script=Tai_Viet",
+        "Script=Tavt",
+        "sc=Tai_Viet",
+        "sc=Tavt"
+      ]
+    },
+    {
+      "name": "Script=Tayo",
+      "aliases": [
+        "Script=Tai_Yo",
+        "Script=Tayo",
+        "sc=Tai_Yo",
+        "sc=Tayo"
+      ]
+    },
+    {
+      "name": "Script=Telu",
+      "aliases": [
+        "Script=Telu",
+        "Script=Telugu",
+        "sc=Telu",
+        "sc=Telugu"
+      ]
+    },
+    {
+      "name": "Script=Tfng",
+      "aliases": [
+        "Script=Tfng",
+        "Script=Tifinagh",
+        "sc=Tfng",
+        "sc=Tifinagh"
+      ]
+    },
+    {
+      "name": "Script=Tglg",
+      "aliases": [
+        "Script=Tagalog",
+        "Script=Tglg",
+        "sc=Tagalog",
+        "sc=Tglg"
+      ]
+    },
+    {
+      "name": "Script=Thaa",
+      "aliases": [
+        "Script=Thaa",
+        "Script=Thaana",
+        "sc=Thaa",
+        "sc=Thaana"
+      ]
+    },
+    {
+      "name": "Script=Thai",
+      "aliases": [
+        "Script=Thai",
+        "sc=Thai"
+      ]
+    },
+    {
+      "name": "Script=Tibt",
+      "aliases": [
+        "Script=Tibetan",
+        "Script=Tibt",
+        "sc=Tibetan",
+        "sc=Tibt"
+      ]
+    },
+    {
+      "name": "Script=Tirh",
+      "aliases": [
+        "Script=Tirh",
+        "Script=Tirhuta",
+        "sc=Tirh",
+        "sc=Tirhuta"
+      ]
+    },
+    {
+      "name": "Script=Tnsa",
+      "aliases": [
+        "Script=Tangsa",
+        "Script=Tnsa",
+        "sc=Tangsa",
+        "sc=Tnsa"
+      ]
+    },
+    {
+      "name": "Script=Todr",
+      "aliases": [
+        "Script=Todhri",
+        "Script=Todr",
+        "sc=Todhri",
+        "sc=Todr"
+      ]
+    },
+    {
+      "name": "Script=Tols",
+      "aliases": [
+        "Script=Tolong_Siki",
+        "Script=Tols",
+        "sc=Tolong_Siki",
+        "sc=Tols"
+      ]
+    },
+    {
+      "name": "Script=Toto",
+      "aliases": [
+        "Script=Toto",
+        "sc=Toto"
+      ]
+    },
+    {
+      "name": "Script=Tutg",
+      "aliases": [
+        "Script=Tulu_Tigalari",
+        "Script=Tutg",
+        "sc=Tulu_Tigalari",
+        "sc=Tutg"
+      ]
+    },
+    {
+      "name": "Script=Ugar",
+      "aliases": [
+        "Script=Ugar",
+        "Script=Ugaritic",
+        "sc=Ugar",
+        "sc=Ugaritic"
+      ]
+    },
+    {
+      "name": "Script=Vaii",
+      "aliases": [
+        "Script=Vai",
+        "Script=Vaii",
+        "sc=Vai",
+        "sc=Vaii"
+      ]
+    },
+    {
+      "name": "Script=Vith",
+      "aliases": [
+        "Script=Vith",
+        "Script=Vithkuqi",
+        "sc=Vith",
+        "sc=Vithkuqi"
+      ]
+    },
+    {
+      "name": "Script=Wara",
+      "aliases": [
+        "Script=Wara",
+        "Script=Warang_Citi",
+        "sc=Wara",
+        "sc=Warang_Citi"
+      ]
+    },
+    {
+      "name": "Script=Wcho",
+      "aliases": [
+        "Script=Wancho",
+        "Script=Wcho",
+        "sc=Wancho",
+        "sc=Wcho"
+      ]
+    },
+    {
+      "name": "Script=Xpeo",
+      "aliases": [
+        "Script=Old_Persian",
+        "Script=Xpeo",
+        "sc=Old_Persian",
+        "sc=Xpeo"
+      ]
+    },
+    {
+      "name": "Script=Xsux",
+      "aliases": [
+        "Script=Cuneiform",
+        "Script=Xsux",
+        "sc=Cuneiform",
+        "sc=Xsux"
+      ]
+    },
+    {
+      "name": "Script=Yezi",
+      "aliases": [
+        "Script=Yezi",
+        "Script=Yezidi",
+        "sc=Yezi",
+        "sc=Yezidi"
+      ]
+    },
+    {
+      "name": "Script=Yiii",
+      "aliases": [
+        "Script=Yi",
+        "Script=Yiii",
+        "sc=Yi",
+        "sc=Yiii"
+      ]
+    },
+    {
+      "name": "Script=Zanb",
+      "aliases": [
+        "Script=Zanabazar_Square",
+        "Script=Zanb",
+        "sc=Zanabazar_Square",
+        "sc=Zanb"
+      ]
+    },
+    {
+      "name": "Script=Zinh",
+      "aliases": [
+        "Script=Inherited",
+        "Script=Qaai",
+        "Script=Zinh",
+        "sc=Inherited",
+        "sc=Qaai",
+        "sc=Zinh"
+      ]
+    },
+    {
+      "name": "Script=Zyyy",
+      "aliases": [
+        "Script=Common",
+        "Script=Zyyy",
+        "sc=Common",
+        "sc=Zyyy"
+      ]
+    },
+    {
+      "name": "Script=Zzzz",
+      "aliases": [
+        "Script=Unknown",
+        "Script=Zzzz",
+        "sc=Unknown",
+        "sc=Zzzz"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Adlm",
+      "aliases": [
+        "Script_Extensions=Adlam",
+        "Script_Extensions=Adlm",
+        "scx=Adlam",
+        "scx=Adlm"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Aghb",
+      "aliases": [
+        "Script_Extensions=Aghb",
+        "Script_Extensions=Caucasian_Albanian",
+        "scx=Aghb",
+        "scx=Caucasian_Albanian"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Ahom",
+      "aliases": [
+        "Script_Extensions=Ahom",
+        "scx=Ahom"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Arab",
+      "aliases": [
+        "Script_Extensions=Arab",
+        "Script_Extensions=Arabic",
+        "scx=Arab",
+        "scx=Arabic"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Armi",
+      "aliases": [
+        "Script_Extensions=Armi",
+        "Script_Extensions=Imperial_Aramaic",
+        "scx=Armi",
+        "scx=Imperial_Aramaic"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Armn",
+      "aliases": [
+        "Script_Extensions=Armenian",
+        "Script_Extensions=Armn",
+        "scx=Armenian",
+        "scx=Armn"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Avst",
+      "aliases": [
+        "Script_Extensions=Avestan",
+        "Script_Extensions=Avst",
+        "scx=Avestan",
+        "scx=Avst"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Bali",
+      "aliases": [
+        "Script_Extensions=Bali",
+        "Script_Extensions=Balinese",
+        "scx=Bali",
+        "scx=Balinese"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Bamu",
+      "aliases": [
+        "Script_Extensions=Bamu",
+        "Script_Extensions=Bamum",
+        "scx=Bamu",
+        "scx=Bamum"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Bass",
+      "aliases": [
+        "Script_Extensions=Bass",
+        "Script_Extensions=Bassa_Vah",
+        "scx=Bass",
+        "scx=Bassa_Vah"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Batk",
+      "aliases": [
+        "Script_Extensions=Batak",
+        "Script_Extensions=Batk",
+        "scx=Batak",
+        "scx=Batk"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Beng",
+      "aliases": [
+        "Script_Extensions=Beng",
+        "Script_Extensions=Bengali",
+        "scx=Beng",
+        "scx=Bengali"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Berf",
+      "aliases": [
+        "Script_Extensions=Berf",
+        "Script_Extensions=Beria_Erfe",
+        "scx=Berf",
+        "scx=Beria_Erfe"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Bhks",
+      "aliases": [
+        "Script_Extensions=Bhaiksuki",
+        "Script_Extensions=Bhks",
+        "scx=Bhaiksuki",
+        "scx=Bhks"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Bopo",
+      "aliases": [
+        "Script_Extensions=Bopo",
+        "Script_Extensions=Bopomofo",
+        "scx=Bopo",
+        "scx=Bopomofo"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Brah",
+      "aliases": [
+        "Script_Extensions=Brah",
+        "Script_Extensions=Brahmi",
+        "scx=Brah",
+        "scx=Brahmi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Brai",
+      "aliases": [
+        "Script_Extensions=Brai",
+        "Script_Extensions=Braille",
+        "scx=Brai",
+        "scx=Braille"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Bugi",
+      "aliases": [
+        "Script_Extensions=Bugi",
+        "Script_Extensions=Buginese",
+        "scx=Bugi",
+        "scx=Buginese"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Buhd",
+      "aliases": [
+        "Script_Extensions=Buhd",
+        "Script_Extensions=Buhid",
+        "scx=Buhd",
+        "scx=Buhid"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Cakm",
+      "aliases": [
+        "Script_Extensions=Cakm",
+        "Script_Extensions=Chakma",
+        "scx=Cakm",
+        "scx=Chakma"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Cans",
+      "aliases": [
+        "Script_Extensions=Canadian_Aboriginal",
+        "Script_Extensions=Cans",
+        "scx=Canadian_Aboriginal",
+        "scx=Cans"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Cari",
+      "aliases": [
+        "Script_Extensions=Cari",
+        "Script_Extensions=Carian",
+        "scx=Cari",
+        "scx=Carian"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Cham",
+      "aliases": [
+        "Script_Extensions=Cham",
+        "scx=Cham"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Cher",
+      "aliases": [
+        "Script_Extensions=Cher",
+        "Script_Extensions=Cherokee",
+        "scx=Cher",
+        "scx=Cherokee"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Chrs",
+      "aliases": [
+        "Script_Extensions=Chorasmian",
+        "Script_Extensions=Chrs",
+        "scx=Chorasmian",
+        "scx=Chrs"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Copt",
+      "aliases": [
+        "Script_Extensions=Copt",
+        "Script_Extensions=Coptic",
+        "Script_Extensions=Qaac",
+        "scx=Copt",
+        "scx=Coptic",
+        "scx=Qaac"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Cpmn",
+      "aliases": [
+        "Script_Extensions=Cpmn",
+        "Script_Extensions=Cypro_Minoan",
+        "scx=Cpmn",
+        "scx=Cypro_Minoan"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Cprt",
+      "aliases": [
+        "Script_Extensions=Cprt",
+        "Script_Extensions=Cypriot",
+        "scx=Cprt",
+        "scx=Cypriot"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Cyrl",
+      "aliases": [
+        "Script_Extensions=Cyrillic",
+        "Script_Extensions=Cyrl",
+        "scx=Cyrillic",
+        "scx=Cyrl"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Deva",
+      "aliases": [
+        "Script_Extensions=Deva",
+        "Script_Extensions=Devanagari",
+        "scx=Deva",
+        "scx=Devanagari"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Diak",
+      "aliases": [
+        "Script_Extensions=Diak",
+        "Script_Extensions=Dives_Akuru",
+        "scx=Diak",
+        "scx=Dives_Akuru"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Dogr",
+      "aliases": [
+        "Script_Extensions=Dogr",
+        "Script_Extensions=Dogra",
+        "scx=Dogr",
+        "scx=Dogra"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Dsrt",
+      "aliases": [
+        "Script_Extensions=Deseret",
+        "Script_Extensions=Dsrt",
+        "scx=Deseret",
+        "scx=Dsrt"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Dupl",
+      "aliases": [
+        "Script_Extensions=Dupl",
+        "Script_Extensions=Duployan",
+        "scx=Dupl",
+        "scx=Duployan"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Egyp",
+      "aliases": [
+        "Script_Extensions=Egyp",
+        "Script_Extensions=Egyptian_Hieroglyphs",
+        "scx=Egyp",
+        "scx=Egyptian_Hieroglyphs"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Elba",
+      "aliases": [
+        "Script_Extensions=Elba",
+        "Script_Extensions=Elbasan",
+        "scx=Elba",
+        "scx=Elbasan"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Elym",
+      "aliases": [
+        "Script_Extensions=Elym",
+        "Script_Extensions=Elymaic",
+        "scx=Elym",
+        "scx=Elymaic"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Ethi",
+      "aliases": [
+        "Script_Extensions=Ethi",
+        "Script_Extensions=Ethiopic",
+        "scx=Ethi",
+        "scx=Ethiopic"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Gara",
+      "aliases": [
+        "Script_Extensions=Gara",
+        "Script_Extensions=Garay",
+        "scx=Gara",
+        "scx=Garay"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Geor",
+      "aliases": [
+        "Script_Extensions=Geor",
+        "Script_Extensions=Georgian",
+        "scx=Geor",
+        "scx=Georgian"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Glag",
+      "aliases": [
+        "Script_Extensions=Glag",
+        "Script_Extensions=Glagolitic",
+        "scx=Glag",
+        "scx=Glagolitic"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Gong",
+      "aliases": [
+        "Script_Extensions=Gong",
+        "Script_Extensions=Gunjala_Gondi",
+        "scx=Gong",
+        "scx=Gunjala_Gondi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Gonm",
+      "aliases": [
+        "Script_Extensions=Gonm",
+        "Script_Extensions=Masaram_Gondi",
+        "scx=Gonm",
+        "scx=Masaram_Gondi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Goth",
+      "aliases": [
+        "Script_Extensions=Goth",
+        "Script_Extensions=Gothic",
+        "scx=Goth",
+        "scx=Gothic"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Gran",
+      "aliases": [
+        "Script_Extensions=Gran",
+        "Script_Extensions=Grantha",
+        "scx=Gran",
+        "scx=Grantha"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Grek",
+      "aliases": [
+        "Script_Extensions=Greek",
+        "Script_Extensions=Grek",
+        "scx=Greek",
+        "scx=Grek"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Gujr",
+      "aliases": [
+        "Script_Extensions=Gujarati",
+        "Script_Extensions=Gujr",
+        "scx=Gujarati",
+        "scx=Gujr"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Gukh",
+      "aliases": [
+        "Script_Extensions=Gukh",
+        "Script_Extensions=Gurung_Khema",
+        "scx=Gukh",
+        "scx=Gurung_Khema"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Guru",
+      "aliases": [
+        "Script_Extensions=Gurmukhi",
+        "Script_Extensions=Guru",
+        "scx=Gurmukhi",
+        "scx=Guru"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hang",
+      "aliases": [
+        "Script_Extensions=Hang",
+        "Script_Extensions=Hangul",
+        "scx=Hang",
+        "scx=Hangul"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hani",
+      "aliases": [
+        "Script_Extensions=Han",
+        "Script_Extensions=Hani",
+        "scx=Han",
+        "scx=Hani"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hano",
+      "aliases": [
+        "Script_Extensions=Hano",
+        "Script_Extensions=Hanunoo",
+        "scx=Hano",
+        "scx=Hanunoo"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hatr",
+      "aliases": [
+        "Script_Extensions=Hatr",
+        "Script_Extensions=Hatran",
+        "scx=Hatr",
+        "scx=Hatran"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hebr",
+      "aliases": [
+        "Script_Extensions=Hebr",
+        "Script_Extensions=Hebrew",
+        "scx=Hebr",
+        "scx=Hebrew"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hira",
+      "aliases": [
+        "Script_Extensions=Hira",
+        "Script_Extensions=Hiragana",
+        "scx=Hira",
+        "scx=Hiragana"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hluw",
+      "aliases": [
+        "Script_Extensions=Anatolian_Hieroglyphs",
+        "Script_Extensions=Hluw",
+        "scx=Anatolian_Hieroglyphs",
+        "scx=Hluw"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hmng",
+      "aliases": [
+        "Script_Extensions=Hmng",
+        "Script_Extensions=Pahawh_Hmong",
+        "scx=Hmng",
+        "scx=Pahawh_Hmong"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hmnp",
+      "aliases": [
+        "Script_Extensions=Hmnp",
+        "Script_Extensions=Nyiakeng_Puachue_Hmong",
+        "scx=Hmnp",
+        "scx=Nyiakeng_Puachue_Hmong"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hrkt",
+      "aliases": [
+        "Script_Extensions=Hrkt",
+        "Script_Extensions=Katakana_Or_Hiragana",
+        "scx=Hrkt",
+        "scx=Katakana_Or_Hiragana"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Hung",
+      "aliases": [
+        "Script_Extensions=Hung",
+        "Script_Extensions=Old_Hungarian",
+        "scx=Hung",
+        "scx=Old_Hungarian"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Ital",
+      "aliases": [
+        "Script_Extensions=Ital",
+        "Script_Extensions=Old_Italic",
+        "scx=Ital",
+        "scx=Old_Italic"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Java",
+      "aliases": [
+        "Script_Extensions=Java",
+        "Script_Extensions=Javanese",
+        "scx=Java",
+        "scx=Javanese"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Kali",
+      "aliases": [
+        "Script_Extensions=Kali",
+        "Script_Extensions=Kayah_Li",
+        "scx=Kali",
+        "scx=Kayah_Li"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Kana",
+      "aliases": [
+        "Script_Extensions=Kana",
+        "Script_Extensions=Katakana",
+        "scx=Kana",
+        "scx=Katakana"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Kawi",
+      "aliases": [
+        "Script_Extensions=Kawi",
+        "scx=Kawi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Khar",
+      "aliases": [
+        "Script_Extensions=Khar",
+        "Script_Extensions=Kharoshthi",
+        "scx=Khar",
+        "scx=Kharoshthi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Khmr",
+      "aliases": [
+        "Script_Extensions=Khmer",
+        "Script_Extensions=Khmr",
+        "scx=Khmer",
+        "scx=Khmr"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Khoj",
+      "aliases": [
+        "Script_Extensions=Khoj",
+        "Script_Extensions=Khojki",
+        "scx=Khoj",
+        "scx=Khojki"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Kits",
+      "aliases": [
+        "Script_Extensions=Khitan_Small_Script",
+        "Script_Extensions=Kits",
+        "scx=Khitan_Small_Script",
+        "scx=Kits"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Knda",
+      "aliases": [
+        "Script_Extensions=Kannada",
+        "Script_Extensions=Knda",
+        "scx=Kannada",
+        "scx=Knda"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Krai",
+      "aliases": [
+        "Script_Extensions=Kirat_Rai",
+        "Script_Extensions=Krai",
+        "scx=Kirat_Rai",
+        "scx=Krai"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Kthi",
+      "aliases": [
+        "Script_Extensions=Kaithi",
+        "Script_Extensions=Kthi",
+        "scx=Kaithi",
+        "scx=Kthi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Lana",
+      "aliases": [
+        "Script_Extensions=Lana",
+        "Script_Extensions=Tai_Tham",
+        "scx=Lana",
+        "scx=Tai_Tham"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Laoo",
+      "aliases": [
+        "Script_Extensions=Lao",
+        "Script_Extensions=Laoo",
+        "scx=Lao",
+        "scx=Laoo"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Latn",
+      "aliases": [
+        "Script_Extensions=Latin",
+        "Script_Extensions=Latn",
+        "scx=Latin",
+        "scx=Latn"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Lepc",
+      "aliases": [
+        "Script_Extensions=Lepc",
+        "Script_Extensions=Lepcha",
+        "scx=Lepc",
+        "scx=Lepcha"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Limb",
+      "aliases": [
+        "Script_Extensions=Limb",
+        "Script_Extensions=Limbu",
+        "scx=Limb",
+        "scx=Limbu"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Lina",
+      "aliases": [
+        "Script_Extensions=Lina",
+        "Script_Extensions=Linear_A",
+        "scx=Lina",
+        "scx=Linear_A"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Linb",
+      "aliases": [
+        "Script_Extensions=Linb",
+        "Script_Extensions=Linear_B",
+        "scx=Linb",
+        "scx=Linear_B"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Lisu",
+      "aliases": [
+        "Script_Extensions=Lisu",
+        "scx=Lisu"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Lyci",
+      "aliases": [
+        "Script_Extensions=Lyci",
+        "Script_Extensions=Lycian",
+        "scx=Lyci",
+        "scx=Lycian"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Lydi",
+      "aliases": [
+        "Script_Extensions=Lydi",
+        "Script_Extensions=Lydian",
+        "scx=Lydi",
+        "scx=Lydian"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mahj",
+      "aliases": [
+        "Script_Extensions=Mahajani",
+        "Script_Extensions=Mahj",
+        "scx=Mahajani",
+        "scx=Mahj"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Maka",
+      "aliases": [
+        "Script_Extensions=Maka",
+        "Script_Extensions=Makasar",
+        "scx=Maka",
+        "scx=Makasar"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mand",
+      "aliases": [
+        "Script_Extensions=Mand",
+        "Script_Extensions=Mandaic",
+        "scx=Mand",
+        "scx=Mandaic"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mani",
+      "aliases": [
+        "Script_Extensions=Mani",
+        "Script_Extensions=Manichaean",
+        "scx=Mani",
+        "scx=Manichaean"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Marc",
+      "aliases": [
+        "Script_Extensions=Marc",
+        "Script_Extensions=Marchen",
+        "scx=Marc",
+        "scx=Marchen"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Medf",
+      "aliases": [
+        "Script_Extensions=Medefaidrin",
+        "Script_Extensions=Medf",
+        "scx=Medefaidrin",
+        "scx=Medf"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mend",
+      "aliases": [
+        "Script_Extensions=Mend",
+        "Script_Extensions=Mende_Kikakui",
+        "scx=Mend",
+        "scx=Mende_Kikakui"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Merc",
+      "aliases": [
+        "Script_Extensions=Merc",
+        "Script_Extensions=Meroitic_Cursive",
+        "scx=Merc",
+        "scx=Meroitic_Cursive"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mero",
+      "aliases": [
+        "Script_Extensions=Mero",
+        "Script_Extensions=Meroitic_Hieroglyphs",
+        "scx=Mero",
+        "scx=Meroitic_Hieroglyphs"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mlym",
+      "aliases": [
+        "Script_Extensions=Malayalam",
+        "Script_Extensions=Mlym",
+        "scx=Malayalam",
+        "scx=Mlym"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Modi",
+      "aliases": [
+        "Script_Extensions=Modi",
+        "scx=Modi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mong",
+      "aliases": [
+        "Script_Extensions=Mong",
+        "Script_Extensions=Mongolian",
+        "scx=Mong",
+        "scx=Mongolian"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mroo",
+      "aliases": [
+        "Script_Extensions=Mro",
+        "Script_Extensions=Mroo",
+        "scx=Mro",
+        "scx=Mroo"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mtei",
+      "aliases": [
+        "Script_Extensions=Meetei_Mayek",
+        "Script_Extensions=Mtei",
+        "scx=Meetei_Mayek",
+        "scx=Mtei"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mult",
+      "aliases": [
+        "Script_Extensions=Mult",
+        "Script_Extensions=Multani",
+        "scx=Mult",
+        "scx=Multani"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Mymr",
+      "aliases": [
+        "Script_Extensions=Myanmar",
+        "Script_Extensions=Mymr",
+        "scx=Myanmar",
+        "scx=Mymr"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Nagm",
+      "aliases": [
+        "Script_Extensions=Nag_Mundari",
+        "Script_Extensions=Nagm",
+        "scx=Nag_Mundari",
+        "scx=Nagm"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Nand",
+      "aliases": [
+        "Script_Extensions=Nand",
+        "Script_Extensions=Nandinagari",
+        "scx=Nand",
+        "scx=Nandinagari"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Narb",
+      "aliases": [
+        "Script_Extensions=Narb",
+        "Script_Extensions=Old_North_Arabian",
+        "scx=Narb",
+        "scx=Old_North_Arabian"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Nbat",
+      "aliases": [
+        "Script_Extensions=Nabataean",
+        "Script_Extensions=Nbat",
+        "scx=Nabataean",
+        "scx=Nbat"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Newa",
+      "aliases": [
+        "Script_Extensions=Newa",
+        "scx=Newa"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Nkoo",
+      "aliases": [
+        "Script_Extensions=Nko",
+        "Script_Extensions=Nkoo",
+        "scx=Nko",
+        "scx=Nkoo"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Nshu",
+      "aliases": [
+        "Script_Extensions=Nshu",
+        "Script_Extensions=Nushu",
+        "scx=Nshu",
+        "scx=Nushu"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Ogam",
+      "aliases": [
+        "Script_Extensions=Ogam",
+        "Script_Extensions=Ogham",
+        "scx=Ogam",
+        "scx=Ogham"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Olck",
+      "aliases": [
+        "Script_Extensions=Ol_Chiki",
+        "Script_Extensions=Olck",
+        "scx=Ol_Chiki",
+        "scx=Olck"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Onao",
+      "aliases": [
+        "Script_Extensions=Ol_Onal",
+        "Script_Extensions=Onao",
+        "scx=Ol_Onal",
+        "scx=Onao"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Orkh",
+      "aliases": [
+        "Script_Extensions=Old_Turkic",
+        "Script_Extensions=Orkh",
+        "scx=Old_Turkic",
+        "scx=Orkh"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Orya",
+      "aliases": [
+        "Script_Extensions=Oriya",
+        "Script_Extensions=Orya",
+        "scx=Oriya",
+        "scx=Orya"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Osge",
+      "aliases": [
+        "Script_Extensions=Osage",
+        "Script_Extensions=Osge",
+        "scx=Osage",
+        "scx=Osge"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Osma",
+      "aliases": [
+        "Script_Extensions=Osma",
+        "Script_Extensions=Osmanya",
+        "scx=Osma",
+        "scx=Osmanya"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Ougr",
+      "aliases": [
+        "Script_Extensions=Old_Uyghur",
+        "Script_Extensions=Ougr",
+        "scx=Old_Uyghur",
+        "scx=Ougr"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Palm",
+      "aliases": [
+        "Script_Extensions=Palm",
+        "Script_Extensions=Palmyrene",
+        "scx=Palm",
+        "scx=Palmyrene"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Pauc",
+      "aliases": [
+        "Script_Extensions=Pau_Cin_Hau",
+        "Script_Extensions=Pauc",
+        "scx=Pau_Cin_Hau",
+        "scx=Pauc"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Perm",
+      "aliases": [
+        "Script_Extensions=Old_Permic",
+        "Script_Extensions=Perm",
+        "scx=Old_Permic",
+        "scx=Perm"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Phag",
+      "aliases": [
+        "Script_Extensions=Phag",
+        "Script_Extensions=Phags_Pa",
+        "scx=Phag",
+        "scx=Phags_Pa"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Phli",
+      "aliases": [
+        "Script_Extensions=Inscriptional_Pahlavi",
+        "Script_Extensions=Phli",
+        "scx=Inscriptional_Pahlavi",
+        "scx=Phli"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Phlp",
+      "aliases": [
+        "Script_Extensions=Phlp",
+        "Script_Extensions=Psalter_Pahlavi",
+        "scx=Phlp",
+        "scx=Psalter_Pahlavi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Phnx",
+      "aliases": [
+        "Script_Extensions=Phnx",
+        "Script_Extensions=Phoenician",
+        "scx=Phnx",
+        "scx=Phoenician"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Plrd",
+      "aliases": [
+        "Script_Extensions=Miao",
+        "Script_Extensions=Plrd",
+        "scx=Miao",
+        "scx=Plrd"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Prti",
+      "aliases": [
+        "Script_Extensions=Inscriptional_Parthian",
+        "Script_Extensions=Prti",
+        "scx=Inscriptional_Parthian",
+        "scx=Prti"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Rjng",
+      "aliases": [
+        "Script_Extensions=Rejang",
+        "Script_Extensions=Rjng",
+        "scx=Rejang",
+        "scx=Rjng"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Rohg",
+      "aliases": [
+        "Script_Extensions=Hanifi_Rohingya",
+        "Script_Extensions=Rohg",
+        "scx=Hanifi_Rohingya",
+        "scx=Rohg"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Runr",
+      "aliases": [
+        "Script_Extensions=Runic",
+        "Script_Extensions=Runr",
+        "scx=Runic",
+        "scx=Runr"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Samr",
+      "aliases": [
+        "Script_Extensions=Samaritan",
+        "Script_Extensions=Samr",
+        "scx=Samaritan",
+        "scx=Samr"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sarb",
+      "aliases": [
+        "Script_Extensions=Old_South_Arabian",
+        "Script_Extensions=Sarb",
+        "scx=Old_South_Arabian",
+        "scx=Sarb"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Saur",
+      "aliases": [
+        "Script_Extensions=Saur",
+        "Script_Extensions=Saurashtra",
+        "scx=Saur",
+        "scx=Saurashtra"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sgnw",
+      "aliases": [
+        "Script_Extensions=Sgnw",
+        "Script_Extensions=SignWriting",
+        "scx=Sgnw",
+        "scx=SignWriting"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Shaw",
+      "aliases": [
+        "Script_Extensions=Shavian",
+        "Script_Extensions=Shaw",
+        "scx=Shavian",
+        "scx=Shaw"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Shrd",
+      "aliases": [
+        "Script_Extensions=Sharada",
+        "Script_Extensions=Shrd",
+        "scx=Sharada",
+        "scx=Shrd"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sidd",
+      "aliases": [
+        "Script_Extensions=Sidd",
+        "Script_Extensions=Siddham",
+        "scx=Sidd",
+        "scx=Siddham"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sidt",
+      "aliases": [
+        "Script_Extensions=Sidetic",
+        "Script_Extensions=Sidt",
+        "scx=Sidetic",
+        "scx=Sidt"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sind",
+      "aliases": [
+        "Script_Extensions=Khudawadi",
+        "Script_Extensions=Sind",
+        "scx=Khudawadi",
+        "scx=Sind"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sinh",
+      "aliases": [
+        "Script_Extensions=Sinh",
+        "Script_Extensions=Sinhala",
+        "scx=Sinh",
+        "scx=Sinhala"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sogd",
+      "aliases": [
+        "Script_Extensions=Sogd",
+        "Script_Extensions=Sogdian",
+        "scx=Sogd",
+        "scx=Sogdian"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sogo",
+      "aliases": [
+        "Script_Extensions=Old_Sogdian",
+        "Script_Extensions=Sogo",
+        "scx=Old_Sogdian",
+        "scx=Sogo"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sora",
+      "aliases": [
+        "Script_Extensions=Sora",
+        "Script_Extensions=Sora_Sompeng",
+        "scx=Sora",
+        "scx=Sora_Sompeng"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Soyo",
+      "aliases": [
+        "Script_Extensions=Soyo",
+        "Script_Extensions=Soyombo",
+        "scx=Soyo",
+        "scx=Soyombo"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sund",
+      "aliases": [
+        "Script_Extensions=Sund",
+        "Script_Extensions=Sundanese",
+        "scx=Sund",
+        "scx=Sundanese"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sunu",
+      "aliases": [
+        "Script_Extensions=Sunu",
+        "Script_Extensions=Sunuwar",
+        "scx=Sunu",
+        "scx=Sunuwar"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Sylo",
+      "aliases": [
+        "Script_Extensions=Sylo",
+        "Script_Extensions=Syloti_Nagri",
+        "scx=Sylo",
+        "scx=Syloti_Nagri"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Syrc",
+      "aliases": [
+        "Script_Extensions=Syrc",
+        "Script_Extensions=Syriac",
+        "scx=Syrc",
+        "scx=Syriac"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tagb",
+      "aliases": [
+        "Script_Extensions=Tagb",
+        "Script_Extensions=Tagbanwa",
+        "scx=Tagb",
+        "scx=Tagbanwa"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Takr",
+      "aliases": [
+        "Script_Extensions=Takr",
+        "Script_Extensions=Takri",
+        "scx=Takr",
+        "scx=Takri"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tale",
+      "aliases": [
+        "Script_Extensions=Tai_Le",
+        "Script_Extensions=Tale",
+        "scx=Tai_Le",
+        "scx=Tale"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Talu",
+      "aliases": [
+        "Script_Extensions=New_Tai_Lue",
+        "Script_Extensions=Talu",
+        "scx=New_Tai_Lue",
+        "scx=Talu"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Taml",
+      "aliases": [
+        "Script_Extensions=Tamil",
+        "Script_Extensions=Taml",
+        "scx=Tamil",
+        "scx=Taml"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tang",
+      "aliases": [
+        "Script_Extensions=Tang",
+        "Script_Extensions=Tangut",
+        "scx=Tang",
+        "scx=Tangut"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tavt",
+      "aliases": [
+        "Script_Extensions=Tai_Viet",
+        "Script_Extensions=Tavt",
+        "scx=Tai_Viet",
+        "scx=Tavt"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tayo",
+      "aliases": [
+        "Script_Extensions=Tai_Yo",
+        "Script_Extensions=Tayo",
+        "scx=Tai_Yo",
+        "scx=Tayo"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Telu",
+      "aliases": [
+        "Script_Extensions=Telu",
+        "Script_Extensions=Telugu",
+        "scx=Telu",
+        "scx=Telugu"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tfng",
+      "aliases": [
+        "Script_Extensions=Tfng",
+        "Script_Extensions=Tifinagh",
+        "scx=Tfng",
+        "scx=Tifinagh"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tglg",
+      "aliases": [
+        "Script_Extensions=Tagalog",
+        "Script_Extensions=Tglg",
+        "scx=Tagalog",
+        "scx=Tglg"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Thaa",
+      "aliases": [
+        "Script_Extensions=Thaa",
+        "Script_Extensions=Thaana",
+        "scx=Thaa",
+        "scx=Thaana"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Thai",
+      "aliases": [
+        "Script_Extensions=Thai",
+        "scx=Thai"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tibt",
+      "aliases": [
+        "Script_Extensions=Tibetan",
+        "Script_Extensions=Tibt",
+        "scx=Tibetan",
+        "scx=Tibt"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tirh",
+      "aliases": [
+        "Script_Extensions=Tirh",
+        "Script_Extensions=Tirhuta",
+        "scx=Tirh",
+        "scx=Tirhuta"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tnsa",
+      "aliases": [
+        "Script_Extensions=Tangsa",
+        "Script_Extensions=Tnsa",
+        "scx=Tangsa",
+        "scx=Tnsa"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Todr",
+      "aliases": [
+        "Script_Extensions=Todhri",
+        "Script_Extensions=Todr",
+        "scx=Todhri",
+        "scx=Todr"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tols",
+      "aliases": [
+        "Script_Extensions=Tolong_Siki",
+        "Script_Extensions=Tols",
+        "scx=Tolong_Siki",
+        "scx=Tols"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Toto",
+      "aliases": [
+        "Script_Extensions=Toto",
+        "scx=Toto"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Tutg",
+      "aliases": [
+        "Script_Extensions=Tulu_Tigalari",
+        "Script_Extensions=Tutg",
+        "scx=Tulu_Tigalari",
+        "scx=Tutg"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Ugar",
+      "aliases": [
+        "Script_Extensions=Ugar",
+        "Script_Extensions=Ugaritic",
+        "scx=Ugar",
+        "scx=Ugaritic"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Vaii",
+      "aliases": [
+        "Script_Extensions=Vai",
+        "Script_Extensions=Vaii",
+        "scx=Vai",
+        "scx=Vaii"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Vith",
+      "aliases": [
+        "Script_Extensions=Vith",
+        "Script_Extensions=Vithkuqi",
+        "scx=Vith",
+        "scx=Vithkuqi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Wara",
+      "aliases": [
+        "Script_Extensions=Wara",
+        "Script_Extensions=Warang_Citi",
+        "scx=Wara",
+        "scx=Warang_Citi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Wcho",
+      "aliases": [
+        "Script_Extensions=Wancho",
+        "Script_Extensions=Wcho",
+        "scx=Wancho",
+        "scx=Wcho"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Xpeo",
+      "aliases": [
+        "Script_Extensions=Old_Persian",
+        "Script_Extensions=Xpeo",
+        "scx=Old_Persian",
+        "scx=Xpeo"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Xsux",
+      "aliases": [
+        "Script_Extensions=Cuneiform",
+        "Script_Extensions=Xsux",
+        "scx=Cuneiform",
+        "scx=Xsux"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Yezi",
+      "aliases": [
+        "Script_Extensions=Yezi",
+        "Script_Extensions=Yezidi",
+        "scx=Yezi",
+        "scx=Yezidi"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Yiii",
+      "aliases": [
+        "Script_Extensions=Yi",
+        "Script_Extensions=Yiii",
+        "scx=Yi",
+        "scx=Yiii"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Zanb",
+      "aliases": [
+        "Script_Extensions=Zanabazar_Square",
+        "Script_Extensions=Zanb",
+        "scx=Zanabazar_Square",
+        "scx=Zanb"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Zinh",
+      "aliases": [
+        "Script_Extensions=Inherited",
+        "Script_Extensions=Qaai",
+        "Script_Extensions=Zinh",
+        "scx=Inherited",
+        "scx=Qaai",
+        "scx=Zinh"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Zyyy",
+      "aliases": [
+        "Script_Extensions=Common",
+        "Script_Extensions=Zyyy",
+        "scx=Common",
+        "scx=Zyyy"
+      ]
+    },
+    {
+      "name": "Script_Extensions=Zzzz",
+      "aliases": [
+        "Script_Extensions=Unknown",
+        "Script_Extensions=Zzzz",
+        "scx=Unknown",
+        "scx=Zzzz"
+      ]
+    }
+  ]
+}

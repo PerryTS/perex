@@ -3,6 +3,7 @@ use crate::{
     Budget,
     input::{Cursor, Input},
     program::*,
+    properties,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -356,6 +357,10 @@ impl Parser<'_, '_> {
         Ok(())
     }
     fn builtin(&mut self, c: u16) -> Result<bool, CompileError> {
+        if matches!(c, 112 | 80) && self.flags & U != 0 {
+            self.property(c == 80)?;
+            return Ok(true);
+        }
         let ranges: &[(u32, u32)] = match c | 32 {
             100 => &[(48, 57)],
             119 if self.flags & (U | I) == U | I => &[
@@ -403,6 +408,39 @@ impl Parser<'_, '_> {
             )?;
         }
         Ok(true)
+    }
+    fn property_name(&mut self, bytes: &mut [u8; 64]) -> Result<usize, CompileError> {
+        let mut length = 0;
+        while let Some(c @ (48..=57 | 65..=90 | 95 | 97..=122)) = self.peek() {
+            if length == bytes.len() {
+                // Every accepted property/value name is <=64 ASCII bytes,
+                // verified by the generator; a longer name cannot be valid.
+                return Err(self.error());
+            }
+            self.take()?;
+            bytes[length] = c as u8;
+            length += 1;
+        }
+        Ok(length)
+    }
+    fn property(&mut self, negative: bool) -> Result<(), CompileError> {
+        if !self.eat(b'{')? {
+            return Err(self.error());
+        }
+        let mut name = [0; 64];
+        let mut value = [0; 64];
+        let name_len = self.property_name(&mut name)?;
+        let value = if self.eat(b'=')? {
+            let length = self.property_name(&mut value)?;
+            Some(&value[..length])
+        } else {
+            None
+        };
+        let id = properties::resolve(&name[..name_len], value).ok_or_else(|| self.error())?;
+        if !self.eat(b'}')? {
+            return Err(self.error());
+        }
+        self.range(PROPERTY | id, u32::from(negative))
     }
     fn hex(&mut self, n: usize) -> Result<Option<u32>, CompileError> {
         let saved = self.cursor;
@@ -474,7 +512,6 @@ impl Parser<'_, '_> {
                     }
                 }
             }
-            112 | 80 if self.flags & U != 0 => return Err(self.unsupported("Unicode properties")),
             107 => return Err(self.unsupported("named backreferences")),
             _ => {
                 if self.flags & U != 0

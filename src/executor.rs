@@ -3,6 +3,7 @@ use crate::{
     Budget, casefold,
     input::{Cursor, Input, Mark},
     program::*,
+    properties,
     span::Span,
 };
 const UNSET: usize = usize::MAX;
@@ -169,7 +170,13 @@ impl Vm<'_, '_, '_, '_> {
                         for i in a..a + (b & !NEGATED) {
                             self.charge(1)?;
                             let [lo, hi] = self.program.range(i as usize);
-                            if values.iter().any(|&value| value >= lo && value <= hi) {
+                            if values.iter().any(|&value| {
+                                if lo & PROPERTY != 0 {
+                                    properties::contains(lo & !PROPERTY, value) != (hi != 0)
+                                } else {
+                                    value >= lo && value <= hi
+                                }
+                            }) {
                                 found = true;
                                 break;
                             }

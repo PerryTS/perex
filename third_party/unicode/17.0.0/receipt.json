@@ -24,6 +24,54 @@
       "url": "https://www.unicode.org/license.txt",
       "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96",
       "bytes": 1995
+    },
+    {
+      "path": "PropertyAliases.txt",
+      "url": "https://www.unicode.org/Public/17.0.0/ucd/PropertyAliases.txt",
+      "sha256": "4441f573caf952ffece1d7c892e7715bd7136dfc26f96eb6f268bf1e474715fb",
+      "bytes": 9619
+    },
+    {
+      "path": "PropertyValueAliases.txt",
+      "url": "https://www.unicode.org/Public/17.0.0/ucd/PropertyValueAliases.txt",
+      "sha256": "64e9a5f76f7a1e8b5a47d6a1f9a26522a251208f5276bdfa1559dac7cf2e827a",
+      "bytes": 81858
+    },
+    {
+      "path": "DerivedCoreProperties.txt",
+      "url": "https://www.unicode.org/Public/17.0.0/ucd/DerivedCoreProperties.txt",
+      "sha256": "24c7fed1195c482faaefd5c1e7eb821c5ee1fb6de07ecdbaa64b56a99da22c08",
+      "bytes": 1134783
+    },
+    {
+      "path": "PropList.txt",
+      "url": "https://www.unicode.org/Public/17.0.0/ucd/PropList.txt",
+      "sha256": "130dcddcaadaf071008bdfce1e7743e04fdfbc910886f017d9f9ac931d8c64dd",
+      "bytes": 145465
+    },
+    {
+      "path": "DerivedNormalizationProps.txt",
+      "url": "https://www.unicode.org/Public/17.0.0/ucd/DerivedNormalizationProps.txt",
+      "sha256": "71fd6a206a2c0cdd41feb6b7f656aa31091db45e9cedc926985d718397f9e488",
+      "bytes": 1377582
+    },
+    {
+      "path": "Scripts.txt",
+      "url": "https://www.unicode.org/Public/17.0.0/ucd/Scripts.txt",
+      "sha256": "9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf",
+      "bytes": 192460
+    },
+    {
+      "path": "ScriptExtensions.txt",
+      "url": "https://www.unicode.org/Public/17.0.0/ucd/ScriptExtensions.txt",
+      "sha256": "ec2107e58825a1586acee8e0911ce18260394ac8b87e535ca325f1ccbeb06bc6",
+      "bytes": 20707
+    },
+    {
+      "path": "emoji/emoji-data.txt",
+      "url": "https://www.unicode.org/Public/17.0.0/ucd/emoji/emoji-data.txt",
+      "sha256": "2cb2bb9455cda83e8481541ecf5b6dfda66a3bb89efa3fa7c5297eccf607b72b",
+      "bytes": 107324
     }
   ],
   "retrieved_utc": "2026-09-10"

@@ -35,11 +35,6 @@
     "feature": "Unicode sets"
   },
   {
-    "id": "unicode-property",
-    "outcome": "unsupported",
-    "feature": "Unicode properties"
-  },
-  {
     "id": "invalid-duplicate-name",
     "outcome": "unsupported",
     "feature": "named captures"
