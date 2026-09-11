@@ -23,3 +23,9 @@ The work budget covers the check and subsequent VM execution. Byte scanning char
 `examples/engine_cost.rs` measures repeated compilation into reusable buffers or repeated execution on one validated borrowed subject. It reports elapsed loop time, checksums, work consumption, exact program size and nominal buffer capacities. Use an identical driver against exact revisions and an external process CPU/RSS tool. Input validation, initial allocation and the first compilation occur before the internal loop timer; external process CPU/RSS includes them. These scopes must remain separate from complete host-operation and GC measurements.
 
 Admission alone does not establish faster matching across all cases. It can add work to successful searches, fail to help when required text appears in the wrong position, and increase compilation work. Those cases and program/scratch/RSS costs must remain visible in comparisons. No whole-application CPU/RSS or production-adoption claim follows from this optimization.
+
+Single ASCII-range admission scans use bounded eight-byte comparisons directly
+on the original storage. High-byte UTF-8/WTF-8 lanes cannot satisfy an ASCII
+range. Admission still charges the same complete chunk before scanning and
+enters the ordinary evaluator whenever the required range is present. No
+program-format or scratch-layout change is needed.

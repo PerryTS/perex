@@ -90,7 +90,14 @@ impl Vm<'_, '_, '_, '_> {
                 } else {
                     let end = bytes.len().min(offset + 256);
                     self.charge(end - offset)?;
-                    self.state.phase = if bytes[offset..end].iter().any(|&b| b >= lo && b <= hi) {
+                    self.state.phase = if super::candidate::first_in_range::<true, false>(
+                        &bytes[offset..end],
+                        lo,
+                        hi,
+                    )
+                    .0
+                    .is_some()
+                    {
                         Phase::Start
                     } else {
                         Phase::AdmitByteClass {

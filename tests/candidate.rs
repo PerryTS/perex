@@ -148,3 +148,49 @@ fn descriptors_are_validated_and_old_formats_rejected() {
         ProgramError::Invalid
     );
 }
+
+#[test]
+fn mixed_subject_starts_preserve_half_pairs_and_utf16_capture_offsets() {
+    for (source, flags) in [
+        ("(needle)", ""),
+        ("(needle)", "uy"),
+        ("[^\\x00-\\x7f]", ""),
+        ("[^\\x00-\\x7f]", "u"),
+        ("\\uDC00", ""),
+        ("\\uDC00", "y"),
+        ("(?i:K)", "u"),
+        ("(?<=éx{8})(needle)", "u"),
+        ("(?<x>needle)\\k<x>", ""),
+    ] {
+        let enabled = words(source, flags);
+        let mut disabled = enabled.clone();
+        disabled[7] = 0;
+        for prefix in ["é", "😀", "𐀀", "K"] {
+            for size in [0, 7, 8, 9, 255, 256, 257] {
+                let subject = format!("{prefix}{}needleneedle{prefix}", "x".repeat(size));
+                let units: Vec<_> = subject.encode_utf16().collect();
+                for start in [0, 1, 2, size + 1, size + 2, units.len()] {
+                    let expected = run(&disabled, Input::utf8(&subject), start, 2_000_000);
+                    assert_eq!(
+                        run(&enabled, Input::utf8(&subject), start, 2_000_000),
+                        expected,
+                        "{source}/{flags}, {subject:?}, start={start}"
+                    );
+                    assert_eq!(
+                        run(&enabled, Input::utf16(&units), start, 2_000_000),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+    let enabled = words("needle", "");
+    let mut disabled = enabled.clone();
+    disabled[7] = 0;
+    let text = format!("é{}", "x".repeat(4096));
+    assert_eq!(run(&enabled, Input::utf8(&text), 0, 4300), Ok(None));
+    assert_eq!(
+        run(&disabled, Input::utf8(&text), 0, 4300),
+        Err(ExecError::WorkLimit)
+    );
+}
