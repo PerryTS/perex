@@ -4,7 +4,13 @@ use super::*;
 impl Vm<'_, '_, '_, '_> {
     fn needle(&self) -> &[u8] {
         match &self.state.work {
-            Work::Needle { bytes, len } => &bytes[..*len as usize],
+            Work::Needle { bytes, len, .. } => &bytes[..*len as usize],
+            _ => unreachable!("admission literal buffer is not active"),
+        }
+    }
+    fn needle_fold(&self) -> bool {
+        match self.state.work {
+            Work::Needle { fold, .. } => fold,
             _ => unreachable!("admission literal buffer is not active"),
         }
     }
@@ -27,8 +33,8 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
                 let [op, a, b] = self.program.instruction(pc);
-                if op == CLASS {
-                    if b == 1 && self.program.words[2] & I == 0 {
+                if matches!(op, CLASS | CLASS_I) {
+                    if b == 1 && op == CLASS {
                         let [lo, hi] = self.program.range(a as usize);
                         if hi < 128 && lo <= hi && self.input.original_bytes().is_some() {
                             self.state.phase = Phase::AdmitByteClass {
@@ -48,6 +54,7 @@ impl Vm<'_, '_, '_, '_> {
                 self.state.work = Work::Needle {
                     bytes: [0; ADMISSION_MAX],
                     len: len as u8,
+                    fold: op == CHAR_I,
                 };
                 let mut ascii = true;
                 for i in 0..len {
@@ -61,7 +68,7 @@ impl Vm<'_, '_, '_, '_> {
                     };
                     bytes[i] = c as u8;
                 }
-                let bytes = if self.program.words[2] & I != 0 {
+                let bytes = if op == CHAR_I {
                     self.input.ascii_bytes()
                 } else {
                     self.input.original_bytes()
@@ -95,7 +102,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
             }
             Phase::AdmitBytes { offset } => {
-                let fold = self.program.words[2] & I != 0;
+                let fold = self.needle_fold();
                 let bytes = if fold {
                     self.input.ascii_bytes()
                 } else {
@@ -138,8 +145,8 @@ impl Vm<'_, '_, '_, '_> {
                 if let Some(c) = read(&mut self.cursor, self.program.unicode(), false) {
                     self.charge(1)?;
                     let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
-                    let [_, a, b] = self.program.instruction(pc);
-                    self.begin_class(a, b, c, ClassUse::Admission);
+                    let [op, a, b] = self.program.instruction(pc);
+                    self.begin_class(a, b, c, ClassUse::Admission, op == CLASS_I);
                     self.class_step(available.saturating_sub(1))?;
                 } else {
                     self.state.phase = Phase::Finished(false);
@@ -152,7 +159,7 @@ impl Vm<'_, '_, '_, '_> {
                     self.charge(1)?;
                     let required = self.required(index - 1);
                     let c = read(&mut self.cursor, self.program.unicode(), true);
-                    if c.is_some_and(|c| equal(self.program, c, required)) {
+                    if c.is_some_and(|c| equal(self.program, c, required, self.needle_fold())) {
                         self.state.phase = Phase::AdmitSuffix(index - 1);
                     } else {
                         self.cursor = self.input.cursor();
@@ -163,7 +170,7 @@ impl Vm<'_, '_, '_, '_> {
             Phase::AdmitScan => {
                 if let Some(c) = read(&mut self.cursor, self.program.unicode(), false) {
                     self.charge(1)?;
-                    if equal(self.program, c, self.required(0)) {
+                    if equal(self.program, c, self.required(0), self.needle_fold()) {
                         self.state.phase = Phase::AdmitProbe {
                             index: 1,
                             scan: self.cursor.mark(),
@@ -180,7 +187,7 @@ impl Vm<'_, '_, '_, '_> {
                     self.charge(1)?;
                     let required = self.required(index);
                     if read(&mut self.cursor, self.program.unicode(), false)
-                        .is_some_and(|c| equal(self.program, c, required))
+                        .is_some_and(|c| equal(self.program, c, required, self.needle_fold()))
                     {
                         self.state.phase = Phase::AdmitProbe {
                             index: index + 1,

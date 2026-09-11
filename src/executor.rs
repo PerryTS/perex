@@ -12,8 +12,8 @@ mod state;
 use state::*;
 const UNSET: usize = usize::MAX;
 
-fn equal(program: Program<'_>, left: u32, right: u32) -> bool {
-    left == right || (program.words[2] & I != 0 && casefold::equal(left, right, program.unicode()))
+fn equal(program: Program<'_>, left: u32, right: u32, fold: bool) -> bool {
+    left == right || (fold && casefold::equal(left, right, program.unicode()))
 }
 fn line_terminator(c: u32) -> bool {
     matches!(c, 10 | 13 | 0x2028 | 0x2029)
@@ -468,6 +468,12 @@ impl Vm<'_, '_, '_, '_> {
                     start,
                     end,
                     captured,
+                    // The saved next PC still identifies the initiating
+                    // backreference after a paused seek or named-group scan.
+                    fold: matches!(
+                        self.program.instruction(self.state.pc - 1)[0],
+                        BACKREF_I | NAMED_BACKREF_I
+                    ),
                 };
             }
         }
@@ -495,8 +501,8 @@ impl Vm<'_, '_, '_, '_> {
         }
         Ok(())
     }
-    fn begin_class(&mut self, a: u32, b: u32, c: u32, context: ClassUse) {
-        let values = if self.program.words[2] & I != 0 {
+    fn begin_class(&mut self, a: u32, b: u32, c: u32, context: ClassUse, fold: bool) {
+        let values = if fold {
             casefold::equivalents(c, self.program.unicode())
         } else {
             [c; 4]
@@ -726,6 +732,7 @@ impl Vm<'_, '_, '_, '_> {
                     start,
                     end,
                     captured,
+                    fold,
                 } => {
                     let mut left = self.cursor;
                     left.restore(captured);
@@ -741,12 +748,13 @@ impl Vm<'_, '_, '_, '_> {
                         }
                         if self
                             .read()
-                            .is_some_and(|right| equal(self.program, point, right))
+                            .is_some_and(|right| equal(self.program, point, right, fold))
                         {
                             self.state.phase = Phase::Backref {
                                 start,
                                 end,
                                 captured: left.mark(),
+                                fold,
                             };
                         } else {
                             self.state.phase = Phase::Fail;
@@ -895,15 +903,19 @@ impl Vm<'_, '_, '_, '_> {
                 self.state.phase = Phase::Validate(0);
                 return Ok(Step::Phase);
             }
-            CHAR => success = self.read().is_some_and(|c| equal(self.program, c, a)),
-            ANY => {
+            CHAR | CHAR_I => {
                 success = self
                     .read()
-                    .is_some_and(|c| self.program.words[2] & S != 0 || !line_terminator(c))
+                    .is_some_and(|c| equal(self.program, c, a, op == CHAR_I))
             }
-            CLASS => {
+            ANY | ANY_S => {
+                success = self
+                    .read()
+                    .is_some_and(|c| op == ANY_S || !line_terminator(c))
+            }
+            CLASS | CLASS_I => {
                 if let Some(c) = self.read() {
-                    self.begin_class(a, b, c, ClassUse::Trial);
+                    self.begin_class(a, b, c, ClassUse::Trial, op == CLASS_I);
                     self.class_step(available)?;
                     return Ok(match self.state.phase {
                         Phase::Trial => Step::Next,
@@ -919,37 +931,37 @@ impl Vm<'_, '_, '_, '_> {
                 self.state.pc = a as usize;
             }
             JUMP => self.state.pc = a as usize,
-            START => {
+            START | START_M => {
                 let mut before = self.cursor;
                 success = self.cursor.position() == 0
-                    || (self.program.words[2] & M != 0
+                    || (op == START_M
                         && before
                             .previous_unit()
                             .is_some_and(|u| line_terminator(u32::from(u))));
             }
-            END => {
+            END | END_M => {
                 let mut after = self.cursor;
                 success = self.cursor.position() == self.input.len_utf16()
-                    || (self.program.words[2] & M != 0
+                    || (op == END_M
                         && after
                             .next_unit()
                             .is_some_and(|u| line_terminator(u32::from(u))));
             }
-            WORD => {
+            WORD | WORD_I => {
                 let mut before = self.cursor;
                 let mut after = self.cursor;
-                let ui = self.program.words[2] & (U | I) == U | I;
+                let ui = op == WORD_I && self.program.unicode();
                 let left = read(&mut before, self.program.unicode(), true);
                 let right = read(&mut after, self.program.unicode(), false);
                 success = (left.is_some_and(|c| casefold::word(c, ui))
                     != right.is_some_and(|c| casefold::word(c, ui)))
                     != (a != 0);
             }
-            BACKREF => {
+            BACKREF | BACKREF_I => {
                 self.backref(a as usize, available)?;
                 return Ok(Step::Phase);
             }
-            NAMED_BACKREF => {
+            NAMED_BACKREF | NAMED_BACKREF_I => {
                 self.state.phase = Phase::Named {
                     group: a as usize,
                     next: 0,

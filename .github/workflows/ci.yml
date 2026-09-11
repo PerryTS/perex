@@ -53,6 +53,8 @@ jobs:
         run: node tools/check-admission.mjs target/release/examples/engine_probe
       - name: Nested repetition ordering and complete captures
         run: node tools/check-repetition.mjs target/release/examples/engine_probe
+      - name: Lexical flags, nested scopes and complete captures
+        run: node tools/check-modifiers.mjs target/release/examples/engine_probe
       - name: Unicode and legacy case equivalence differential
         run: node tools/check-casefold.mjs target/release/examples/engine_probe
       - run: cargo +stable build --locked --release --example property_probe

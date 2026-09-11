@@ -36,9 +36,9 @@ impl Vm<'_, '_, '_, '_> {
         let [op, a, b] = self.program.instruction(self.state.pc + 3);
         let matched = if let Some(c) = self.read() {
             match op {
-                CHAR => equal(self.program, c, a),
-                ANY => self.program.words[2] & S != 0 || !line_terminator(c),
-                CLASS => {
+                CHAR | CHAR_I => equal(self.program, c, a, op == CHAR_I),
+                ANY | ANY_S => op == ANY_S || !line_terminator(c),
+                CLASS | CLASS_I => {
                     self.begin_class(
                         a,
                         b,
@@ -48,6 +48,7 @@ impl Vm<'_, '_, '_, '_> {
                         } else {
                             ClassUse::AtomScan
                         },
+                        op == CLASS_I,
                     );
                     return Ok(());
                 }

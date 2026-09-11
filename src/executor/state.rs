@@ -13,7 +13,11 @@ pub(super) struct AtomState {
 #[derive(Clone, Copy)]
 pub(super) enum Work {
     Idle,
-    Needle { bytes: [u8; ADMISSION_MAX], len: u8 },
+    Needle {
+        bytes: [u8; ADMISSION_MAX],
+        len: u8,
+        fold: bool,
+    },
     Atom(AtomState),
 }
 
@@ -114,6 +118,7 @@ pub(super) enum Phase {
         start: usize,
         end: usize,
         captured: Mark,
+        fold: bool,
     },
     Clear {
         next: usize,

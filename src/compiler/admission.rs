@@ -21,7 +21,7 @@ impl Parser<'_, '_> {
         if kind != Ordering::Equal {
             return Ok(kind);
         }
-        if li[0] == CHAR {
+        if matches!(li[0], CHAR | CHAR_I) {
             let len = ADMISSION_MAX - left.end as usize;
             for i in 0..len {
                 self.step()?;
@@ -58,6 +58,7 @@ impl Parser<'_, '_> {
             let candidate = match n.kind {
                 CHAR => {
                     let pc = n.start as usize;
+                    let op = p.instruction(pc)[0];
                     if pc < literal_start || pc >= literal_end {
                         // Cache the entire instruction run, including reverse
                         // bodies. Rescanning up to 32 successors for every
@@ -65,12 +66,11 @@ impl Parser<'_, '_> {
                         // expensive. AST literal leaves visit each run together.
                         literal_start = pc;
                         literal_end = pc + 1;
-                        while literal_start > 0 && p.instruction(literal_start - 1)[0] == CHAR {
+                        while literal_start > 0 && p.instruction(literal_start - 1)[0] == op {
                             self.step()?;
                             literal_start -= 1;
                         }
-                        while literal_end < p.instructions()
-                            && p.instruction(literal_end)[0] == CHAR
+                        while literal_end < p.instructions() && p.instruction(literal_end)[0] == op
                         {
                             self.step()?;
                             literal_end += 1;

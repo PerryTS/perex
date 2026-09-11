@@ -328,6 +328,15 @@ fn every_small_quantum_preserves_captures_and_half_pairs_after_relocation() {
         (r"^(.{1,3})(.)$", "u", "😀a😀", 0),
         (r"(?<=^(.)(.{1,3}))$", "u", "😀a😀", 0),
         (r"^(\ud83d*)(\ude00)$", "", "😀", 0),
+        (r"(?i:(a+))(?-i:\1)", "", "aAAA", 0),
+        (r"(a+)(?i:\1)", "", "aaAA", 0),
+        (r"(?<=(?i:\1)(a+))$", "", "AAaa", 0),
+        (r"(?:(?<x>a)|(?<x>b))(?i:\k<x>)", "", "bB", 0),
+        (r"(?i:(?<x>a)|(?<x>b))(?-i:\k<x>)", "i", "aA", 0),
+        (r"((?i:a)|(?-i:b))*c", "i", "AaBbc", 0),
+        (r"(?s:(.))(?-s:.)", "s", "\nA", 0),
+        (r"(?m:^(a)$)", "", "x\na\ny", 0),
+        (r"(?i:\bſ+\b)(?-i:\W)", "u", "ſSſ", 0),
     ];
     for (pattern, flags, subject, start) in cases {
         for storage in [
@@ -382,6 +391,24 @@ fn long_operations_pause_without_repeating_prefix_work() {
             96,
         ),
         ("(a?){40}b".to_owned(), "", "aaaab".to_owned(), 0),
+        (
+            r"(a{24})(?i:\1)".to_owned(),
+            "",
+            format!("{}{}", "a".repeat(24), "A".repeat(24)),
+            0,
+        ),
+        (
+            r"(?<=^(?i:\1)(a{24}))$".to_owned(),
+            "",
+            format!("{}{}", "A".repeat(24), "a".repeat(24)),
+            0,
+        ),
+        (
+            r"(K{24})(?i:\1)".to_owned(),
+            "u",
+            format!("{}{}", "K".repeat(24), "k".repeat(24)),
+            0,
+        ),
     ];
     for (pattern, flags, subject, start) in cases {
         let owner = Owner::new(&pattern, flags, Subject::Bytes(subject.as_bytes().to_vec()));
@@ -691,6 +718,9 @@ fn growing_owned_scratch_preserves_partial_updates_and_releases_previous_owners(
         ("((a?){2})+b", "", "aaaab"),
         ("(?=(a+))a*b\\1", "", "baaabac"),
         ("^(a|aa)+b$", "", "aaaaaa"),
+        (r"(?i:(a+))(?-i:\1)", "", "aAAA"),
+        (r"(a+)(?i:\1)", "", "aaAA"),
+        (r"(?<=(?i:\1)(a+))$", "", "AAaa"),
         (r"\ud83d((?:X|\ude00)+)", "", "😀"),
         (r"^([a-z]+)([a-z]{2})$", "", "abcdefghijklmnopqrstuvwxyz"),
         (r"^([a-z]+?)([a-z]{2})$", "", "abcdefghijklmnopqrstuvwxyz"),

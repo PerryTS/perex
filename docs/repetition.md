@@ -11,7 +11,7 @@ literal, class or dot, with no captures inside it. Its entry becomes
 `ATOM_REPEAT` (opcode 18), and word 7 of its existing eight-word repeat record
 becomes mode 1. The remaining four instructions and all program offsets stay
 in place. Mode 0 continues to execute the general repeat instructions. Format
-version 6 validates the optimized record's exact shape, consuming instruction,
+version 7 validates the optimized record's exact shape, consuming instruction,
 empty capture range and entry/continuation relationship. This pass charges the
 compiler's work budget. It does not yet reduce program size or register count.
 

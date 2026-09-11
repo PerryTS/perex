@@ -82,12 +82,6 @@ impl Parser<'_, '_> {
             utf16_offset: self.cursor.position(),
         }
     }
-    fn unsupported(&self, feature: &'static str) -> CompileError {
-        CompileError::Unsupported {
-            feature,
-            utf16_offset: self.cursor.position(),
-        }
-    }
     fn step(&mut self) -> Result<(), CompileError> {
         self.budget.charge(1).map_err(|_| CompileError::WorkLimit)
     }
@@ -122,6 +116,7 @@ impl Parser<'_, '_> {
             kind,
             a,
             b,
+            flags: self.flags,
             first: self.captures,
             end: self.captures,
             ..Node::default()
@@ -178,6 +173,41 @@ impl Parser<'_, '_> {
             }),
         }
     }
+    fn modifiers(&mut self) -> Result<(), CompileError> {
+        let (mut add, mut remove, mut seen) = (0, 0, 0);
+        let mut subtract = false;
+        loop {
+            let flag = match self.peek() {
+                Some(105) => I,
+                Some(109) => M,
+                Some(115) => S,
+                Some(45) if !subtract => {
+                    self.take()?;
+                    subtract = true;
+                    continue;
+                }
+                Some(58) => {
+                    self.take()?;
+                    if seen == 0 {
+                        return Err(self.error());
+                    }
+                    self.flags = (self.flags | add) & !remove;
+                    return Ok(());
+                }
+                _ => return Err(self.error()),
+            };
+            self.take()?;
+            if seen & flag != 0 {
+                return Err(self.error());
+            }
+            seen |= flag;
+            if subtract {
+                remove |= flag;
+            } else {
+                add |= flag;
+            }
+        }
+    }
     fn atom(&mut self) -> Result<u32, CompileError> {
         let before = self.cursor;
         let c = self.take()?.ok_or_else(|| self.error())?;
@@ -185,6 +215,7 @@ impl Parser<'_, '_> {
             40 => {
                 let mut kind = GROUP;
                 let mut flags = 0;
+                let outer_flags = self.flags;
                 let first = self.captures;
                 let mut capture = first;
                 let mut declaration = None;
@@ -210,7 +241,8 @@ impl Parser<'_, '_> {
                             declaration = Some(self.declare_name(name, capture)?);
                         }
                     } else if matches!(self.peek(), Some(105 | 109 | 115 | 45)) {
-                        return Err(self.unsupported("group modifiers or extension"));
+                        self.modifiers()?;
+                        kind = SEQ;
                     } else {
                         return Err(self.error());
                     }
@@ -221,7 +253,9 @@ impl Parser<'_, '_> {
                         .checked_add(1)
                         .ok_or(CompileError::SizeLimit)?;
                 }
-                let child = self.disjunction()?;
+                let child = self.disjunction();
+                self.flags = outer_flags;
+                let child = child?;
                 if !self.eat(b')')? {
                     return Err(self.error());
                 }
@@ -863,7 +897,7 @@ pub fn compile<'p>(
                 ]);
                 repeat_id += 1;
             }
-            op => write(output, pc, op, n.a, n.b),
+            op => write(output, pc, modified(op, n.flags), n.a, n.b),
         }
     }
     write(output, 0, SAVE, 0, 0);
@@ -894,10 +928,7 @@ pub fn compile<'p>(
         let p = Program { words: output };
         let r = p.repeat(i);
         let entry = r[3] as usize - 2;
-        if r[4] as usize == entry + 5
-            && r[5] == r[6]
-            && matches!(p.instruction(entry + 3)[0], CHAR | CLASS | ANY)
-        {
+        if r[4] as usize == entry + 5 && r[5] == r[6] && consuming(p.instruction(entry + 3)[0]) {
             output[HEADER + entry * 3] = ATOM_REPEAT;
             let at = HEADER + count as usize * 3 + parser.range_used * 2 + i * 8;
             output[at + 7] = 1;

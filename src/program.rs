@@ -3,7 +3,7 @@ use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 7;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 6;
+pub(crate) const VERSION: u32 = 7;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -36,6 +36,33 @@ pub(crate) const REPEAT_BODY: u32 = 15;
 pub(crate) const REPEAT_NEXT: u32 = 16;
 pub(crate) const NAMED_BACKREF: u32 = 17;
 pub(crate) const ATOM_REPEAT: u32 = 18;
+// Lexical i/m/s choices live in instructions, never in mutable match state.
+pub(crate) const CHAR_I: u32 = 19;
+pub(crate) const CLASS_I: u32 = 20;
+pub(crate) const ANY_S: u32 = 21;
+pub(crate) const START_M: u32 = 22;
+pub(crate) const END_M: u32 = 23;
+pub(crate) const WORD_I: u32 = 24;
+pub(crate) const BACKREF_I: u32 = 25;
+pub(crate) const NAMED_BACKREF_I: u32 = 26;
+
+pub(crate) fn consuming(op: u32) -> bool {
+    matches!(op, CHAR | CHAR_I | CLASS | CLASS_I | ANY | ANY_S)
+}
+
+pub(crate) fn modified(op: u32, flags: u32) -> u32 {
+    match op {
+        CHAR if flags & I != 0 => CHAR_I,
+        CLASS if flags & I != 0 => CLASS_I,
+        WORD if flags & I != 0 => WORD_I,
+        BACKREF if flags & I != 0 => BACKREF_I,
+        NAMED_BACKREF if flags & I != 0 => NAMED_BACKREF_I,
+        ANY if flags & S != 0 => ANY_S,
+        START if flags & M != 0 => START_M,
+        END if flags & M != 0 => END_M,
+        _ => op,
+    }
+}
 
 /// One name and its numeric capture slots, borrowed from the same program.
 /// Duplicate declarations in disjoint alternatives share one entry.
@@ -100,7 +127,8 @@ impl<'a> Program<'a> {
         }
         let p = Self { words };
         if let Some((pc, _)) = p.admission()
-            && (pc >= p.instructions() || !matches!(p.instruction(pc)[0], CHAR | CLASS))
+            && (pc >= p.instructions()
+                || !matches!(p.instruction(pc)[0], CHAR | CHAR_I | CLASS | CLASS_I))
         {
             return Err(bad);
         }
@@ -164,17 +192,19 @@ impl<'a> Program<'a> {
             budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
             let [op, a, b] = p.instruction(pc);
             let valid = match op {
-                MATCH | ANY | START | END | ASSERT_END => a == 0 && b == 0,
-                CHAR => a <= if p.unicode() { 0x10ffff } else { 0xffff } && b == 0,
-                CLASS => a
+                MATCH | ANY | ANY_S | START | START_M | END | END_M | ASSERT_END => {
+                    a == 0 && b == 0
+                }
+                CHAR | CHAR_I => a <= if p.unicode() { 0x10ffff } else { 0xffff } && b == 0,
+                CLASS | CLASS_I => a
                     .checked_add(b & !NEGATED)
                     .is_some_and(|end| end <= words[5]),
                 SAVE => a < words[3] * 2 && b == 0,
                 SPLIT => a < words[4] && b < words[4],
                 JUMP => a < words[4] && b == 0,
-                WORD => a <= 1 && b == 0,
-                BACKREF => a > 0 && a < words[3] && b == 0,
-                NAMED_BACKREF => (a as usize) < p.name_count() && b == 0,
+                WORD | WORD_I => a <= 1 && b == 0,
+                BACKREF | BACKREF_I => a > 0 && a < words[3] && b == 0,
+                NAMED_BACKREF | NAMED_BACKREF_I => (a as usize) < p.name_count() && b == 0,
                 ASSERT => a < words[4] && b < 4,
                 REPEAT_INIT | REPEAT_CHOICE | REPEAT_BODY | REPEAT_NEXT => a < words[6] && b == 0,
                 ATOM_REPEAT => {
@@ -225,7 +255,7 @@ impl<'a> Program<'a> {
                     || p.instruction(entry) != [ATOM_REPEAT, i as u32, 0]
                     || p.instruction(entry + 1) != [REPEAT_CHOICE, i as u32, 0]
                     || p.instruction(entry + 2) != [REPEAT_BODY, i as u32, 0]
-                    || !matches!(p.instruction(entry + 3)[0], CHAR | CLASS | ANY)
+                    || !consuming(p.instruction(entry + 3)[0])
                     || p.instruction(entry + 4) != [REPEAT_NEXT, i as u32, 0]
                 {
                     return Err(bad);
@@ -255,9 +285,10 @@ impl<'a> Program<'a> {
         ))
     }
     pub(crate) fn literal_run(self, pc: usize) -> usize {
+        let op = self.instruction(pc)[0];
         (pc..self.instructions())
             .take(ADMISSION_MAX)
-            .take_while(|&at| self.instruction(at)[0] == CHAR)
+            .take_while(|&at| matches!(op, CHAR | CHAR_I) && self.instruction(at)[0] == op)
             .count()
     }
     fn names_start(self) -> usize {

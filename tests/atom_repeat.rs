@@ -213,12 +213,12 @@ fn every_insufficient_work_allowance_preserves_output() {
 #[test]
 fn optimized_record_validation_rejects_shape_and_version_corruption() {
     let w = words("^([a-z]+)$", "");
-    assert_eq!(w[1], 6);
+    assert_eq!(w[1], 7);
     let table = 7 + w[4] as usize * 3 + w[5] as usize * 2;
     assert_eq!(w[table + 7], 1);
     let entry = w[table + 3] as usize - 2;
     for (index, value) in [
-        (1, 5),
+        (1, 6),
         (table + 7, 0),
         (table + 7, 2),
         (table + 3, 1),

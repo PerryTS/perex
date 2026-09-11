@@ -1,10 +1,5 @@
 [
   {
-    "id": "scoped-modifiers",
-    "outcome": "unsupported",
-    "feature": "group modifiers or extension"
-  },
-  {
     "id": "v-string-set",
     "outcome": "unsupported",
     "feature": "Unicode sets"

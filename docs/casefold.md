@@ -10,4 +10,9 @@ Literals, ranges, negated classes and backreferences use this equivalence relati
 
 `tools/check-casefold.mjs` obtains complete expected answers from Node, independently of the generated table. Inputs exercise Unicode folding and uppercase edges in both directions, nearby non-equivalents, classes/complements, captures/backreferences in both directions, built-in classes, boundaries, surrogate values, astral letters and interacting assertions/repetitions. The Unicode files choose inputs, not expected answers. Failures remain strict; this check has no exception list.
 
-The program format is now version 2 and carries the ignore-case bit. Programs from version 1 must be recompiled. The format version also binds Unicode semantics; a later Unicode update must explicitly version compatibility. Unicode property escapes, Unicode sets (`v`) and scoped modifiers remain unfinished; case folding alone does not establish full ECMAScript conformance. Host integration, efficient suspension/resumption and per-case CPU/RSS acceptance also remain outstanding.
+The current [program format](engine.md) encodes case folding in each literal,
+class, boundary and backreference instruction, including [scoped modifiers](modifiers.md).
+The format version also binds Unicode semantics; a later Unicode update must
+explicitly version compatibility. Unicode character properties are implemented,
+while Unicode sets/string properties (`v`), full conformance, host integration,
+efficient suspension/resumption and per-case CPU/RSS acceptance remain outstanding.
