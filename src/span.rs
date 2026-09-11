@@ -2,6 +2,9 @@
 
 use crate::input::{Cursor, Input};
 
+mod bound;
+pub use bound::{BoundSpan, ReadError, ReadProgress};
+
 /// A half-open interval of UTF-16 code units. A capture may bisect a surrogate
 /// pair. An unset capture is `None`, distinct from `Some(Span::new(n, n)?)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

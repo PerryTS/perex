@@ -1,0 +1,144 @@
+//! Bounded traversal of a capture across relocations of its original owner.
+use super::Span;
+use crate::{
+    Budget,
+    binding::{BoundSubject, ImmutableSubject, SubjectError},
+    input::Mark,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadProgress {
+    Pending,
+    Complete,
+}
+
+#[derive(Debug)]
+pub enum ReadError<S, E> {
+    Subject(SubjectError<S>),
+    InvalidSpan,
+    InvalidQuantum,
+    ChangedPosition,
+    WorkLimit,
+    Consumer(E),
+    Failed,
+}
+
+/// An offset-only cursor tied to one immutable subject binding. It traverses
+/// the original representation, including surrogate halves, without an index
+/// or conversion buffer. Initial non-ASCII seeking is bounded too.
+///
+/// The host can collect, relocate, allocate or cancel between `try_fold` calls.
+/// Consumers run inside the subject borrow and must not collect or mutate it.
+/// A returned consumer error or an unwind invalidates this reader; partial
+/// consumer effects must never be replayed by resuming it.
+pub struct BoundSpan<'a, S: ImmutableSubject> {
+    subject: &'a BoundSubject<S>,
+    span: Span,
+    mark: Mark,
+    seeking: bool,
+    complete: bool,
+    failed: bool,
+}
+
+impl<'a, S: ImmutableSubject> BoundSpan<'a, S> {
+    /// Constant-work setup after subject binding. ASCII and original UTF-16
+    /// seek directly; other byte strings begin at the nearer endpoint.
+    /// No pattern or subject pointer is retained in continuation state.
+    pub fn new(
+        subject: &'a BoundSubject<S>,
+        span: Span,
+    ) -> Result<Self, ReadError<S::Error, core::convert::Infallible>> {
+        let (mark, position) = subject
+            .with_view(|input| {
+                if span.end() > input.len_utf16() {
+                    return Err(ReadError::InvalidSpan);
+                }
+                let position = if span.is_empty() {
+                    0
+                } else if input.seek_work(span.start()) == 1 {
+                    span.start()
+                } else if span.start() <= input.len_utf16() - span.start() {
+                    0
+                } else {
+                    input.len_utf16()
+                };
+                let cursor = input
+                    .cursor_at(position)
+                    .ok_or(ReadError::ChangedPosition)?;
+                Ok((cursor.mark(), position))
+            })
+            .map_err(ReadError::Subject)??;
+        Ok(Self {
+            subject,
+            span,
+            mark,
+            seeking: position != span.start(),
+            complete: span.is_empty(),
+            failed: false,
+        })
+    }
+
+    /// Visit at most `quantum` UTF-16 units, counting both initial seeking and
+    /// delivered units against that limit and the caller's shared work budget.
+    /// A Pending step can deliver no units while seeking. No allocation occurs.
+    /// Complete is repeatable without reacquiring a view or charging more work.
+    pub fn try_fold<E>(
+        &mut self,
+        quantum: usize,
+        budget: &mut Budget,
+        mut consume: impl FnMut(u16) -> Result<(), E>,
+    ) -> Result<ReadProgress, ReadError<S::Error, E>> {
+        if self.failed {
+            return Err(ReadError::Failed);
+        }
+        if quantum == 0 {
+            return Err(ReadError::InvalidQuantum);
+        }
+        if self.complete {
+            return Ok(ReadProgress::Complete);
+        }
+        // Poison before entering either the owner or consumer callback. This
+        // also covers unwinding, when no returned error can update the state.
+        self.failed = true;
+        let result = self
+            .subject
+            .with_view(|input| {
+                let mut cursor = input
+                    .resume_cursor(self.mark)
+                    .ok_or(ReadError::ChangedPosition)?;
+                let mut work = 0;
+                while self.seeking && cursor.position() != self.span.start() {
+                    if work == quantum {
+                        return Ok((cursor.mark(), false, false));
+                    }
+                    budget.charge(1).map_err(|_| ReadError::WorkLimit)?;
+                    work += 1;
+                    if cursor.position() < self.span.start() {
+                        cursor.next_unit().ok_or(ReadError::ChangedPosition)?;
+                    } else {
+                        cursor.previous_unit().ok_or(ReadError::ChangedPosition)?;
+                    }
+                }
+                while cursor.position() < self.span.end() {
+                    if work == quantum {
+                        return Ok((cursor.mark(), true, false));
+                    }
+                    budget.charge(1).map_err(|_| ReadError::WorkLimit)?;
+                    work += 1;
+                    let unit = cursor.next_unit().ok_or(ReadError::ChangedPosition)?;
+                    consume(unit).map_err(ReadError::Consumer)?;
+                }
+                Ok((cursor.mark(), true, true))
+            })
+            .map_err(ReadError::Subject)??;
+        self.mark = result.0;
+        self.seeking = !result.1;
+        self.complete = result.2;
+        self.failed = false;
+        Ok(if self.complete {
+            ReadProgress::Complete
+        } else {
+            ReadProgress::Pending
+        })
+    }
+}

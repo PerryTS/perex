@@ -31,7 +31,7 @@ Start with the [implemented engine and its limits](docs/engine.md), [architectur
 The [compilation plan](docs/compilation-plan.md) separates parsing from final
 storage allocation without retaining the original pattern view or resetting work.
 
-The experimental [input API](docs/input.md) reads the original string, including individual surrogate halves inside four-byte UTF-8 characters. Capture spans borrow those units without constructing substrings. Validation, seeking and relocation costs are documented explicitly. The [performance requirements](docs/performance.md) preserve per-case CPU and RSS results alongside complete host measurements.
+The experimental [input API](docs/input.md) reads the original string, including individual surrogate halves inside four-byte UTF-8 characters. Capture spans borrow those units without constructing substrings. `span::BoundSpan` traverses captures in bounded steps across owner relocation, including initial seeking, so a host can allocate exact output strings without a subject conversion buffer. Its consumer callback runs inside the input borrow; allocation and collection belong between steps. Validation, seeking and relocation costs are documented explicitly. The [performance requirements](docs/performance.md) preserve per-case CPU and RSS results alongside complete host measurements.
 
 ## Development
 
