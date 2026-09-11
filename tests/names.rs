@@ -126,7 +126,7 @@ fn unnamed_programs_do_not_pay_for_name_metadata() {
     let named = program("(?<x>a)\\k<x>", "");
     // One count, one 3-word descriptor, one packed name word, one capture index.
     assert_eq!(named.len(), plain.len() + 6);
-    assert_eq!(&plain[8..], &named[8..plain.len()]);
+    assert_eq!(&plain[9..], &named[9..plain.len()]);
 }
 
 #[test]

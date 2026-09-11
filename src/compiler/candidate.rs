@@ -1,6 +1,6 @@
-//! Conservative first-consumed ASCII range. Zero-width operations contribute
-//! no characters; nullable prefixes union the following child's possibilities.
-//! Reuse the emitted AST's capture bounds/direction, never allocate a new arena.
+//! Conservative first/last-consumed ASCII ranges. The last range is useful only
+//! when every successful path consumes input and ends at the subject boundary.
+//! Reuse emitted AST slots; no extra arena or second matching program is needed.
 use super::*;
 use crate::casefold;
 
@@ -9,6 +9,13 @@ struct First {
     lo: u32,
     hi: u32,
     nullable: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Last {
+    range: First,
+    consumes: bool,
+    anchored: bool,
 }
 impl First {
     const EMPTY: Self = Self {
@@ -37,6 +44,18 @@ impl Prepared<'_> {
             lo: n.first,
             hi: n.end,
             nullable: n.reverse,
+        }
+    }
+    fn last(&self, id: u32) -> Last {
+        let n = self.nodes[id as usize];
+        Last {
+            range: First {
+                lo: n.c,
+                hi: n.start,
+                nullable: n.reverse,
+            },
+            consumes: n.len & 1 != 0,
+            anchored: n.len & 2 != 0,
         }
     }
     pub(super) fn candidate(&mut self) -> Result<(), CompileError> {
@@ -132,14 +151,59 @@ impl Prepared<'_> {
                 }
                 _ => first.nullable = true,
             }
+            let mut last = Last {
+                range: first,
+                consumes: matches!(n.kind, CHAR | ANY | CLASS | BACKREF | NAMED_BACKREF),
+                anchored: n.kind == END && n.flags & M == 0,
+            };
+            match n.kind {
+                GROUP | WRAP => last = self.last(n.a),
+                REPEAT => {
+                    last = self.last(n.a);
+                    last.anchored &= n.b != 0;
+                }
+                ALT => {
+                    let (left, right) = (self.last(n.a), self.last(n.b));
+                    last.range = left.range.union(right.range);
+                    last.consumes = left.consumes || right.consumes;
+                    last.anchored = left.anchored && right.anchored;
+                }
+                SEQ => {
+                    let (left, right) = (self.last(n.a), self.last(n.b));
+                    last.range = right.range;
+                    if right.range.nullable {
+                        last.range = last.range.union(left.range);
+                    }
+                    last.consumes = left.consumes || right.consumes;
+                    // A nullable suffix can still consume input. Only a suffix
+                    // that cannot consume preserves an earlier end assertion.
+                    last.anchored = right.anchored || (left.anchored && !right.consumes);
+                }
+                _ => {}
+            }
             self.nodes[i].first = first.lo;
             self.nodes[i].end = first.hi;
             self.nodes[i].reverse = first.nullable;
+            // All instruction/table emission and required-text admission have
+            // finished. Repeat maxima, starts and lengths are now dead fields.
+            self.nodes[i].c = last.range.lo;
+            self.nodes[i].start = last.range.hi;
+            self.nodes[i].len = u32::from(last.consumes) | (u32::from(last.anchored) << 1);
         }
         Ok(())
     }
     pub(super) fn candidate_descriptor(&self, root: u32) -> u32 {
-        let first = self.first(root);
+        Self::range_descriptor(self.first(root))
+    }
+    pub(super) fn end_candidate_descriptor(&self, root: u32) -> u32 {
+        let last = self.last(root);
+        if last.anchored {
+            Self::range_descriptor(last.range)
+        } else {
+            0
+        }
+    }
+    fn range_descriptor(first: First) -> u32 {
         if first.nullable || (first.lo == 0 && first.hi == 127) {
             0
         } else if first.lo > first.hi {

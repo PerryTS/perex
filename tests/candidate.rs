@@ -133,19 +133,147 @@ fn candidate_skipping_is_required_for_the_bounded_long_miss() {
 #[test]
 fn descriptors_are_validated_and_old_formats_rejected() {
     let original = words("needle", "");
-    for descriptor in [3, 2 | (9 << 8) | (8 << 16), 2 | (128 << 16), 2 | (1 << 24)] {
+    for slot in [7, 8] {
+        for descriptor in [3, 2 | (9 << 8) | (8 << 16), 2 | (128 << 16), 2 | (1 << 24)] {
+            let mut bad = original.clone();
+            bad[slot] = descriptor;
+            assert_eq!(
+                Program::from_words(&bad, &mut Budget::new(1000)).unwrap_err(),
+                ProgramError::Invalid
+            );
+        }
+    }
+    for version in [7, 8, 9] {
         let mut bad = original.clone();
-        bad[7] = descriptor;
+        bad[1] = version;
         assert_eq!(
             Program::from_words(&bad, &mut Budget::new(1000)).unwrap_err(),
             ProgramError::Invalid
         );
     }
-    let mut old = original.clone();
-    old[1] = 7;
+}
+
+#[test]
+fn end_candidate_preserves_all_captures_and_optional_or_multiline_endings() {
+    for source in [
+        "^(a+)+$",
+        "(a+)$",
+        "(a)?$",
+        "(?:a$|b$)",
+        "(?:a$|b)",
+        "a$(?:b?)",
+        "a$(?:)",
+        "a$(?=)",
+        "a$(?!b)",
+        "(?:a$)+",
+        "(?:a$)*",
+        "a{0}$",
+        "(?:a{0})+$",
+        "a(b)?$",
+        "(a)?b$",
+        "(a)?\\1$",
+        "(?<x>a)?\\k<x>$",
+        "(?=(a))\\1$",
+        "(?<=a)(b)$",
+        "(?m:a$)",
+        "(?-m:a$)",
+        "(?i:K)$",
+        "(?i:[Kſ])$",
+        "[^a-z]$",
+        "[]$",
+        "[^]$",
+        "[^\\x00-\\x7f]$",
+        "(?:a$|)$",
+        "(?:a|)$",
+        "\\uDC00$",
+        "\\uD800$",
+        "(😀)$",
+    ] {
+        for flags in ["", "m", "i", "u", "ui", "y", "uy"] {
+            let enabled = words(source, flags);
+            let mut disabled = enabled.clone();
+            disabled[8] = 0;
+            for subject in [
+                "",
+                "a",
+                "b",
+                "aa",
+                "ab",
+                "aab",
+                "aa!",
+                "a\n",
+                "a\r\n",
+                "a\u{2028}",
+                "A",
+                "K",
+                "ſ",
+                "K",
+                "😀",
+                "a😀",
+            ] {
+                let units: Vec<_> = subject.encode_utf16().collect();
+                for start in [0, 1, units.len(), units.len() + 1] {
+                    let expected = run(&disabled, Input::utf16(&units), start, 100_000);
+                    assert!(expected.is_ok(), "{source}/{flags}, {subject:?}, {start}");
+                    assert_eq!(
+                        run(&enabled, Input::utf16(&units), start, 100_000),
+                        expected,
+                        "original UTF16 {source}/{flags}, {subject:?}, {start}"
+                    );
+                    assert_eq!(
+                        run(&enabled, Input::utf8(subject), start, 100_000),
+                        expected,
+                        "original UTF8 {source}/{flags}, {subject:?}, {start}"
+                    );
+                }
+            }
+            for units in [&[0xd800][..], &[0xdc00], &[0x61, 0xd800], &[0xd800, 0xdc00]] {
+                let expected = run(&disabled, Input::utf16(units), 0, 100_000);
+                assert_eq!(
+                    run(&enabled, Input::utf16(units), 0, 100_000),
+                    expected,
+                    "surrogates {source}/{flags}, {units:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn impossible_anchored_repeat_finishes_with_one_unit_of_work_and_no_stack() {
+    // Keep this witness bounded even if the necessary-condition check regresses.
+    let enabled = words("^(a+)+$", "");
+    let mut disabled = enabled.clone();
+    disabled[8] = 0;
+    let text = "a".repeat(40) + "!";
+    for input in [Input::utf8(&text), Input::utf16(&[0x61, 0x21])] {
+        let program = Program::from_words(&enabled, &mut Budget::new(1000)).unwrap();
+        let mut registers = vec![0; program.register_count()];
+        let mut captures = vec![Span::new(7, 9); program.capture_count()];
+        assert_eq!(
+            find(
+                program,
+                input,
+                0,
+                Scratch {
+                    registers: &mut registers,
+                    frames: &mut [],
+                    undo: &mut []
+                },
+                &mut captures,
+                &mut Budget::new(1)
+            ),
+            Ok(false)
+        );
+        assert!(captures.iter().all(|c| *c == Span::new(7, 9)));
+    }
     assert_eq!(
-        Program::from_words(&old, &mut Budget::new(1000)).unwrap_err(),
-        ProgramError::Invalid
+        run(&enabled, Input::utf8(&text), 0, 0),
+        Err(ExecError::WorkLimit)
+    );
+    assert_eq!(
+        run(&disabled, Input::utf8(&text), 0, 1000),
+        Err(ExecError::WorkLimit)
     );
 }
 

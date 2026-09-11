@@ -60,6 +60,11 @@ jobs:
           node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate
           node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q1 --quantum 1 --relocate --grow
           node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q17 --quantum 17 --relocate --grow
+      - name: Strict end conditions, complete captures and relocation
+        run: |
+          node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate
+          node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate-q1 --quantum 1 --relocate --grow
+          node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate-q17 --quantum 17 --relocate --grow
       - name: Large classes, complete captures and relocation
         run: |
           node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes

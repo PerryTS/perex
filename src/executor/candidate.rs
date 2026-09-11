@@ -3,6 +3,28 @@
 use super::*;
 
 impl Vm<'_, '_, '_, '_> {
+    pub(super) fn end_candidate(&mut self) -> Result<bool, ExecError> {
+        let descriptor = self.program.words[8];
+        if descriptor == 0 {
+            return Ok(true);
+        }
+        self.charge(1)?;
+        // The endpoint is O(1) in every representation. Decode only the last
+        // original unit; retain neither a new subject nor an interior pointer.
+        let mut end = self
+            .input
+            .cursor_at(self.input.len_utf16())
+            .ok_or(ExecError::InvalidProgram)?;
+        let Some(unit) = end.previous_unit() else {
+            return Ok(false);
+        };
+        // Non-ASCII, including either surrogate half, always reaches the VM.
+        Ok(unit >= 128
+            || (descriptor != 1
+                && u32::from(unit) >= (descriptor >> 8) & 255
+                && u32::from(unit) <= (descriptor >> 16) & 255))
+    }
+
     pub(super) fn start_candidate(&mut self) {
         self.state.phase = if self.program.words[7] != 0 && self.input.original_bytes().is_some() {
             Phase::Candidate

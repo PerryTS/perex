@@ -31,11 +31,11 @@ An exhaustive Rust check compares those bounds against the pinned equivalence
 tables for every code point in both modes. This avoids walking non-ASCII case
 families merely to discover that they contain no ASCII start.
 
-Program formats 8 and 9 have eight header words; format 9 retains this descriptor. Word 7 is zero when disabled, one when
+Program format 10 has nine header words, retaining the first-character descriptor from formats 8 and 9. Word 7 is zero when disabled, one when
 no ASCII start is possible, or `2 | (lo << 8) | (hi << 16)` for an inclusive
 interval with `0 <= lo <= hi <= 127`. Reserved bits, malformed bounds and old
 format versions are rejected. The additional word costs four used program bytes.
-Bindings check the full eight-word header when reacquiring a view. AOT and runtime
+Bindings check the full nine-word header when reacquiring a view. AOT and runtime
 programs must use this same format and its version checks.
 
 The validator checks the descriptor's representation, not a proof that it follows
@@ -86,3 +86,30 @@ property, folding, name, legacy, repetition and modifier checks remain required.
 These checks do not establish a CPU/RSS win. Measure every existing search and
 compilation case against the exact previous binary and compatible alternatives,
 including short direct hits where the new analysis/phase can add overhead.
+
+
+## Strict end condition
+
+Format 10 adds word 8, encoded like word 7, for possible last-consumed ASCII
+characters. The compiler enables it only if every successful path consumes at
+least one character and ends at a non-multiline end assertion. Alternation must
+preserve the assertion on both paths. A later nullable expression is not enough
+to preserve an earlier assertion: it must be unable to consume input. Assertions
+contribute no consumed characters; their internal matches and captures stay in
+the ordinary evaluator. Scoped multiline flags govern each end assertion.
+
+Before searching, the evaluator charges one work unit, borrows an endpoint cursor
+in the original input and reads one unit backwards. An absent unit or impossible
+ASCII value proves no match. Non-ASCII values, including surrogate halves, always
+continue through the evaluator. This check supports original UTF-16 and UTF-8/WTF-8
+storage without a copy, index or new scratch. The descriptor adds four bytes to
+each program; binding/header metadata follows the versioned header size. Existing
+program versions are rejected.
+
+This removes a class of impossible end-anchored searches before backtracking.
+It does not give arbitrary backtracking expressions a linear-time guarantee.
+Capture answers, errors and resource limits remain the evaluator's responsibility.
+`tools/check-end-candidate.mjs` compares complete answers against Node in ordinary
+and one-/seventeen-work-unit advances with relocation and scratch replacement.
+The bounded Rust witness also removes the descriptor and requires work exhaustion,
+so a missing check cannot make the test itself run without a bound.

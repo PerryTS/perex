@@ -63,6 +63,9 @@ node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/
 node tools/check-modifiers.mjs target/release/examples/engine_probe
 node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate
+node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate
+node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate-q1 --quantum 1 --relocate --grow
+node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate-q17 --quantum 17 --relocate --grow
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q1 --quantum 1 --relocate --grow
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q17 --quantum 17 --relocate --grow
 node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes

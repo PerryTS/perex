@@ -736,6 +736,11 @@ fn growing_owned_scratch_preserves_partial_updates_and_releases_previous_owners(
         ),
     ] {
         let owner = Owner::new(pattern, flags, Subject::Bytes(subject.as_bytes().to_vec()));
+        // This witness must enter the VM and request scratch, even when an
+        // optional necessary-condition hint can prove the original miss first.
+        // Remove that hint before binding either run; keep every original input,
+        // complete-answer, growth, relocation and lifetime assertion below.
+        owner.data.borrow_mut().0[8] = 0;
         let counts = BufferCounts {
             alive: Cell::new(0),
             drops: Cell::new(0),

@@ -154,6 +154,7 @@ impl Prepared<'_> {
             parser.range_used as u32,
             parser.repeats,
             0,
+            0,
         ]);
         // Preserve the existing atom instruction and its admission-hint address.
         // The entry selects a bounded retry record in the same evaluator; keeping
@@ -176,6 +177,7 @@ impl Prepared<'_> {
         }
         parser.candidate()?;
         output[7] = parser.candidate_descriptor(root);
+        output[8] = parser.end_candidate_descriptor(root);
         Program::from_words(output, parser.budget)
             .map(|_| ())
             .map_err(|e| match e {

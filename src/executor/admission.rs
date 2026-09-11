@@ -27,6 +27,10 @@ impl Vm<'_, '_, '_, '_> {
     pub(super) fn admit_step(&mut self, available: usize) -> Result<(), ExecError> {
         match self.state.phase {
             Phase::Admission => {
+                if !self.end_candidate()? {
+                    self.state.phase = Phase::Finished(false);
+                    return Ok(());
+                }
                 if self.input.len_utf16() < 64 || self.program.words[2] & ADMISSION == 0 {
                     self.state.phase = Phase::Start;
                     return Ok(());

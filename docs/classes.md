@@ -12,7 +12,7 @@ membership representation.
 At least eight remaining disjoint intervals select a sorted-class instruction.
 Smaller results use the existing linear instruction, often with fewer program
 words. Format 9 adds opcodes 27 and 28 for sorted membership without/with lexical
-case folding. It retains format 8's eight-word header and candidate descriptor.
+case folding. It retained format 8's candidate descriptor; format 10 adds a ninth header word for the final-character condition.
 Validation checks that a sorted class has nonempty bounds, literal ranges only,
 and strictly ordered, disjoint intervals. General range validation still checks
 character bounds. Older program versions are rejected.
