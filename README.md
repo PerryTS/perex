@@ -53,6 +53,9 @@ node tools/check-modifiers.mjs target/release/examples/engine_probe
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q1 --quantum 1 --relocate --grow
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q17 --quantum 17 --relocate --grow
+node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes
+node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes-q1 --quantum 1 --relocate --grow
+node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes-q17 --quantum 17 --relocate --grow
 cargo build --locked --release --example property_probe
 node tools/check-properties.mjs target/release/examples/property_probe target/release/examples/engine_probe --allow-reviewed-reference-disagreements
 node tools/reference.mjs --check

@@ -26,7 +26,12 @@ intervals into a temporary 128-bit value; complement and legacy ASCII folding us
 bit operations. Unicode case folding still checks the full equivalence families,
 including their non-ASCII members. No additional shared property table is stored.
 
-Program format 8 has eight header words. Word 7 is zero when disabled, one when
+Folded literal inference uses the ASCII bounds of its case family directly.
+An exhaustive Rust check compares those bounds against the pinned equivalence
+tables for every code point in both modes. This avoids walking non-ASCII case
+families merely to discover that they contain no ASCII start.
+
+Program formats 8 and 9 have eight header words; format 9 retains this descriptor. Word 7 is zero when disabled, one when
 no ASCII start is possible, or `2 | (lo << 8) | (hi << 16)` for an inclusive
 interval with `0 <= lo <= hi <= 127`. Reserved bits, malformed bounds and old
 format versions are rejected. The additional word costs four used program bytes.

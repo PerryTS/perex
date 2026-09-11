@@ -99,6 +99,7 @@ pub(super) enum Phase {
         index: u32,
         end: u32,
         negated: bool,
+        sorted: bool,
         values: [u32; 4],
         context: ClassUse,
     },
@@ -194,5 +195,7 @@ mod tests {
     fn scan_storage_reuses_the_admission_buffer_without_expanding_frames() {
         assert!(core::mem::size_of::<Work>() <= 40);
         assert_eq!(core::mem::size_of::<Frame>(), 48);
+        assert_eq!(core::mem::size_of::<Phase>(), 48);
+        assert_eq!(core::mem::size_of::<State>(), 168);
     }
 }

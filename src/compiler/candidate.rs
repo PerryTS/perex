@@ -47,9 +47,8 @@ impl Parser<'_, '_> {
             match n.kind {
                 CHAR => {
                     if n.flags & I != 0 {
-                        for c in casefold::equivalents(n.a, n.flags & U != 0) {
-                            self.step()?;
-                            first.include(c, c);
+                        if let Some((lo, hi)) = casefold::ascii_bounds(n.a, n.flags & U != 0) {
+                            first.include(lo, hi);
                         }
                     } else {
                         first.include(n.a, n.a);

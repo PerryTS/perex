@@ -1047,3 +1047,33 @@ fn candidate_scans_keep_work_and_captures_across_relocation_boundaries() {
         }
     }
 }
+
+#[test]
+fn sorted_class_searches_preserve_work_at_relocation_boundaries() {
+    let members: String = (0..128)
+        .rev()
+        .map(|i| format!("\\u{:04x}", 0x100 + i * 3))
+        .collect();
+    for class in [format!("[{members}]"), format!("[^{members}]")] {
+        for pattern in [
+            format!("({class}+)({class}?)"),
+            format!("(?<=({class}+))({class})"),
+            format!("({class})\\1"),
+            format!("(?=({class}))\\1"),
+        ] {
+            for units in [
+                vec![0x100, 0x100, 0x103],
+                vec![0x17f, 0x53, 0x73, 0x212a, 0x4b],
+                vec![0xd800, 0xdc00, 0xdfff],
+            ] {
+                for quantum in [1, 2, 7, 17, 127, 128] {
+                    compare(
+                        &Owner::new(&pattern, "iu", Subject::Units(units.clone())),
+                        0,
+                        quantum,
+                    );
+                }
+            }
+        }
+    }
+}

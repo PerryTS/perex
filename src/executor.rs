@@ -176,8 +176,9 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
     /// Run toward a requested work quantum, then release every view. Zero
     /// performs no work. Atomic bounded steps may exceed the quantum: at most
     /// one 256-byte admission chunk plus 32 comparisons per candidate (8,448
-    /// work units). Long seeks, register operations, classes and backreferences
-    /// are incremental. View acquisition/validation belongs to `Resources` and
+    /// work units). A sorted-class lookup costs at most 128 comparisons. Long
+    /// seeks, register operations, linear classes and backreferences are
+    /// incremental. View acquisition/validation belongs to `Resources` and
     /// is outside this quantum; it is not yet an efficient host reborrow API.
     pub fn advance(&mut self, quantum: usize) -> Result<Progress, SearchError<R::Error>> {
         if let Some(error) = self.state.blocked {
@@ -502,7 +503,7 @@ impl Vm<'_, '_, '_, '_> {
         }
         Ok(())
     }
-    fn begin_class(&mut self, a: u32, b: u32, c: u32, context: ClassUse, fold: bool) {
+    fn begin_class(&mut self, a: u32, b: u32, c: u32, context: ClassUse, fold: bool, sorted: bool) {
         let values = if fold {
             casefold::equivalents(c, self.program.unicode())
         } else {
@@ -512,6 +513,7 @@ impl Vm<'_, '_, '_, '_> {
             index: a,
             end: a + (b & !NEGATED),
             negated: b & NEGATED != 0,
+            sorted,
             values,
             context,
         };
@@ -548,12 +550,42 @@ impl Vm<'_, '_, '_, '_> {
             index,
             end,
             negated,
+            sorted,
             values,
             context,
         } = self.state.phase
         else {
             return Err(ExecError::InvalidProgram);
         };
+        if sorted {
+            if available == 0 {
+                return Ok(());
+            }
+            // At most four unique equivalence values and 32 comparisons each.
+            // This bounded step may exceed a tiny quantum, but every comparison
+            // pays work and no cursor or table pointer survives the borrow.
+            for (i, value) in values.into_iter().enumerate() {
+                if values[..i].contains(&value) {
+                    continue;
+                }
+                let (mut low, mut high) = (index, end);
+                while low < high {
+                    self.charge(1)?;
+                    let middle = low + (high - low) / 2;
+                    let [lo, hi] = self.program.range(middle as usize);
+                    if value < lo {
+                        high = middle;
+                    } else if value > hi {
+                        low = middle + 1;
+                    } else {
+                        self.class_result(true, negated, context);
+                        return Ok(());
+                    }
+                }
+            }
+            self.class_result(false, negated, context);
+            return Ok(());
+        }
         // Keep the table cursor local through a bounded batch. Every visited
         // range still pays separately, preserving early-match/work-limit order.
         let stop = end.min(index.saturating_add(available.min(256) as u32));
@@ -579,6 +611,7 @@ impl Vm<'_, '_, '_, '_> {
                 index: stop,
                 end,
                 negated,
+                sorted,
                 values,
                 context,
             };
@@ -915,9 +948,16 @@ impl Vm<'_, '_, '_, '_> {
                     .read()
                     .is_some_and(|c| op == ANY_S || !line_terminator(c))
             }
-            CLASS | CLASS_I => {
+            CLASS | CLASS_I | CLASS_SORTED | CLASS_SORTED_I => {
                 if let Some(c) = self.read() {
-                    self.begin_class(a, b, c, ClassUse::Trial, op == CLASS_I);
+                    self.begin_class(
+                        a,
+                        b,
+                        c,
+                        ClassUse::Trial,
+                        matches!(op, CLASS_I | CLASS_SORTED_I),
+                        matches!(op, CLASS_SORTED | CLASS_SORTED_I),
+                    );
                     self.class_step(available)?;
                     return Ok(match self.state.phase {
                         Phase::Trial => Step::Next,

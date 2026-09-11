@@ -55,6 +55,7 @@ const NAME_META: u32 = 38;
 const NAME_DECL: u32 = 39;
 mod admission;
 mod candidate;
+mod classes;
 mod escapes;
 mod names;
 mod repetition;
@@ -112,12 +113,21 @@ impl Parser<'_, '_> {
         self.used += 1;
         Ok(id)
     }
-    fn leaf(&mut self, kind: u32, a: u32, b: u32) -> Result<u32, CompileError> {
+    fn leaf(&mut self, kind: u32, a: u32, mut b: u32) -> Result<u32, CompileError> {
+        let mut flags = self.flags;
+        if kind == CLASS
+            && let Some(count) = self.normalize_class(a as usize, (b & !NEGATED) as usize)?
+        {
+            b = (b & NEGATED) | count as u32;
+            if count >= 8 {
+                flags |= SORTED_CLASS;
+            }
+        }
         self.add(Node {
             kind,
             a,
             b,
-            flags: self.flags,
+            flags,
             first: self.captures,
             end: self.captures,
             ..Node::default()

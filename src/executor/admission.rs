@@ -33,7 +33,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
                 let [op, a, b] = self.program.instruction(pc);
-                if matches!(op, CLASS | CLASS_I) {
+                if matches!(op, CLASS | CLASS_I | CLASS_SORTED | CLASS_SORTED_I) {
                     if b == 1 && op == CLASS {
                         let [lo, hi] = self.program.range(a as usize);
                         if hi < 128 && lo <= hi && self.input.original_bytes().is_some() {
@@ -146,7 +146,14 @@ impl Vm<'_, '_, '_, '_> {
                     self.charge(1)?;
                     let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
                     let [op, a, b] = self.program.instruction(pc);
-                    self.begin_class(a, b, c, ClassUse::Admission, op == CLASS_I);
+                    self.begin_class(
+                        a,
+                        b,
+                        c,
+                        ClassUse::Admission,
+                        matches!(op, CLASS_I | CLASS_SORTED_I),
+                        matches!(op, CLASS_SORTED | CLASS_SORTED_I),
+                    );
                     self.class_step(available.saturating_sub(1))?;
                 } else {
                     self.state.phase = Phase::Finished(false);

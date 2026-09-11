@@ -38,7 +38,7 @@ impl Vm<'_, '_, '_, '_> {
             match op {
                 CHAR | CHAR_I => equal(self.program, c, a, op == CHAR_I),
                 ANY | ANY_S => op == ANY_S || !line_terminator(c),
-                CLASS | CLASS_I => {
+                CLASS | CLASS_I | CLASS_SORTED | CLASS_SORTED_I => {
                     self.begin_class(
                         a,
                         b,
@@ -48,7 +48,8 @@ impl Vm<'_, '_, '_, '_> {
                         } else {
                             ClassUse::AtomScan
                         },
-                        op == CLASS_I,
+                        matches!(op, CLASS_I | CLASS_SORTED_I),
+                        matches!(op, CLASS_SORTED | CLASS_SORTED_I),
                     );
                     return Ok(());
                 }

@@ -3,7 +3,7 @@ use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 8;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 8;
+pub(crate) const VERSION: u32 = 9;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -45,14 +45,28 @@ pub(crate) const END_M: u32 = 23;
 pub(crate) const WORD_I: u32 = 24;
 pub(crate) const BACKREF_I: u32 = 25;
 pub(crate) const NAMED_BACKREF_I: u32 = 26;
+pub(crate) const CLASS_SORTED: u32 = 27;
+pub(crate) const CLASS_SORTED_I: u32 = 28;
+// Compiler node flag only; the emitted opcode carries the sorted-class choice.
+pub(crate) const SORTED_CLASS: u32 = 1 << 8;
 
 pub(crate) fn consuming(op: u32) -> bool {
-    matches!(op, CHAR | CHAR_I | CLASS | CLASS_I | ANY | ANY_S)
+    matches!(
+        op,
+        CHAR | CHAR_I | CLASS | CLASS_I | CLASS_SORTED | CLASS_SORTED_I | ANY | ANY_S
+    )
 }
 
 pub(crate) fn modified(op: u32, flags: u32) -> u32 {
     match op {
         CHAR if flags & I != 0 => CHAR_I,
+        CLASS if flags & SORTED_CLASS != 0 => {
+            if flags & I != 0 {
+                CLASS_SORTED_I
+            } else {
+                CLASS_SORTED
+            }
+        }
         CLASS if flags & I != 0 => CLASS_I,
         WORD if flags & I != 0 => WORD_I,
         BACKREF if flags & I != 0 => BACKREF_I,
@@ -134,7 +148,10 @@ impl<'a> Program<'a> {
         let p = Self { words };
         if let Some((pc, _)) = p.admission()
             && (pc >= p.instructions()
-                || !matches!(p.instruction(pc)[0], CHAR | CHAR_I | CLASS | CLASS_I))
+                || !matches!(
+                    p.instruction(pc)[0],
+                    CHAR | CHAR_I | CLASS | CLASS_I | CLASS_SORTED | CLASS_SORTED_I
+                ))
         {
             return Err(bad);
         }
@@ -205,6 +222,22 @@ impl<'a> Program<'a> {
                 CLASS | CLASS_I => a
                     .checked_add(b & !NEGATED)
                     .is_some_and(|end| end <= words[5]),
+                CLASS_SORTED | CLASS_SORTED_I => {
+                    let end = a.checked_add(b & !NEGATED).ok_or(bad)?;
+                    if end > words[5] || end == a {
+                        return Err(bad);
+                    }
+                    let mut previous = None;
+                    for index in a..end {
+                        budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
+                        let [lo, hi] = p.range(index as usize);
+                        if lo & PROPERTY != 0 || previous.is_some_and(|last| last >= lo) {
+                            return Err(bad);
+                        }
+                        previous = Some(hi);
+                    }
+                    true
+                }
                 SAVE => a < words[3] * 2 && b == 0,
                 SPLIT => a < words[4] && b < words[4],
                 JUMP => a < words[4] && b == 0,
