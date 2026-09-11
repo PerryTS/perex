@@ -175,6 +175,70 @@ fn initial_seek_can_pause_without_delivering_units() {
 }
 
 #[test]
+fn retarget_preserves_half_pairs_and_linear_adjacent_work_across_relocation() {
+    let units = "é😀Z".encode_utf16().collect::<Vec<_>>();
+    for storage in [
+        Storage::Bytes("é😀Z".as_bytes().to_vec()),
+        Storage::Units(units.clone()),
+    ] {
+        let owner = Moving::new(storage);
+        let subject = BoundSubject::new(&owner).unwrap();
+        let mut reader = BoundSpan::new(&subject, Span::new(0, 0).unwrap()).unwrap();
+        let mut budget = Budget::new(1000);
+        for (index, &expected) in units.iter().enumerate() {
+            owner.relocate();
+            reader
+                .retarget(Span::new(index, index + 1).unwrap())
+                .unwrap();
+            let before = budget.remaining();
+            let mut seen = None;
+            assert_eq!(
+                reader
+                    .try_fold(1, &mut budget, |unit| {
+                        seen = Some(unit);
+                        Ok::<_, Infallible>(())
+                    })
+                    .unwrap(),
+                ReadProgress::Complete
+            );
+            assert_eq!(seen, Some(expected));
+            assert_eq!(
+                before - budget.remaining(),
+                1,
+                "adjacent reads must not rescan the prefix"
+            );
+        }
+        for index in (0..units.len()).rev() {
+            owner.relocate();
+            reader
+                .retarget(Span::new(index, index + 1).unwrap())
+                .unwrap();
+            let mut seen = None;
+            while reader
+                .try_fold(1, &mut budget, |unit| {
+                    seen = Some(unit);
+                    Ok::<_, Infallible>(())
+                })
+                .unwrap()
+                == ReadProgress::Pending
+            {
+                owner.relocate();
+            }
+            assert_eq!(seen, Some(units[index]));
+        }
+        reader.retarget(Span::new(0, 1).unwrap()).unwrap();
+        assert!(matches!(
+            reader.try_fold(10, &mut budget, |_| Err::<(), _>("stop")),
+            Err(ReadError::Consumer("stop"))
+        ));
+        assert!(matches!(
+            reader.retarget(Span::new(0, 0).unwrap()),
+            Err(ReadError::Failed)
+        ));
+    }
+}
+
+#[test]
 fn exhaustion_consumer_failure_and_unwind_cannot_replay_partial_output() {
     let owner = Moving::new(Storage::Bytes(b"abcdef".to_vec()));
     let subject = BoundSubject::new(&owner).unwrap();
@@ -245,4 +309,28 @@ fn bounds_empty_spans_and_invalid_quantum_are_explicit() {
         ReadProgress::Complete
     );
     assert_eq!(owner.calls.get(), calls);
+    reader.retarget(Span::new(1, 2).unwrap()).unwrap();
+    assert!(matches!(
+        reader.try_fold(0, &mut Budget::new(1), |_| Ok::<_, Infallible>(())),
+        Err(ReadError::InvalidQuantum)
+    ));
+    let mut seen = None;
+    assert_eq!(
+        reader
+            .try_fold(1, &mut Budget::new(1), |u| {
+                seen = Some(u);
+                Ok::<_, Infallible>(())
+            })
+            .unwrap(),
+        ReadProgress::Complete
+    );
+    assert_eq!(seen, Some(b'b' as u16));
+    assert!(matches!(
+        reader.retarget(Span::new(4, 4).unwrap()),
+        Err(ReadError::InvalidSpan)
+    ));
+    assert!(matches!(
+        reader.retarget(Span::new(0, 0).unwrap()),
+        Err(ReadError::Failed)
+    ));
 }

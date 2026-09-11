@@ -41,6 +41,57 @@ pub struct BoundSpan<'a, S: ImmutableSubject> {
 }
 
 impl<'a, S: ImmutableSubject> BoundSpan<'a, S> {
+    /// Select another span of the SAME binding, retaining the current offset
+    /// when it is nearer than either endpoint. This avoids repeated scans of
+    /// an original byte string when a host visits adjacent spans. Seeking is
+    /// still charged and bounded by subsequent `try_fold` calls. A failed or
+    /// unwound reader cannot be revived by selecting a new span.
+    pub fn retarget(
+        &mut self,
+        span: Span,
+    ) -> Result<(), ReadError<S::Error, core::convert::Infallible>> {
+        if self.failed {
+            return Err(ReadError::Failed);
+        }
+        self.failed = true;
+        let (mark, position) = self
+            .subject
+            .with_view(|input| {
+                if span.end() > input.len_utf16() {
+                    return Err(ReadError::InvalidSpan);
+                }
+                let current = input
+                    .resume_cursor(self.mark)
+                    .ok_or(ReadError::ChangedPosition)?;
+                let endpoint = if span.start() <= input.len_utf16() - span.start() {
+                    0
+                } else {
+                    input.len_utf16()
+                };
+                let cursor = if input.seek_work(span.start()) == 1 {
+                    input
+                        .cursor_at(span.start())
+                        .ok_or(ReadError::ChangedPosition)?
+                } else if current.position().abs_diff(span.start())
+                    <= endpoint.abs_diff(span.start())
+                {
+                    current
+                } else {
+                    input
+                        .cursor_at(endpoint)
+                        .ok_or(ReadError::ChangedPosition)?
+                };
+                Ok((cursor.mark(), cursor.position()))
+            })
+            .map_err(ReadError::Subject)??;
+        self.mark = mark;
+        self.span = span;
+        self.seeking = position != span.start();
+        self.complete = span.is_empty();
+        self.failed = false;
+        Ok(())
+    }
+
     /// Constant-work setup after subject binding. ASCII and original UTF-16
     /// seek directly; other byte strings begin at the nearer endpoint.
     /// No pattern or subject pointer is retained in continuation state.
