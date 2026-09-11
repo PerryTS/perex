@@ -294,7 +294,7 @@ fn pack_offset(offset: usize, half: bool) -> usize {
     offset | if half { HALF } else { 0 }
 }
 
-impl Cursor<'_> {
+impl<'a> Cursor<'a> {
     pub(crate) fn mark(self) -> Mark {
         Mark {
             offset: self.offset,
@@ -308,6 +308,33 @@ impl Cursor<'_> {
 
     pub fn position(self) -> usize {
         self.utf16_offset
+    }
+
+    /// Original bytes at a scalar boundary. A half-pair position deliberately
+    /// has no byte suffix: the matcher must inspect that surrogate normally.
+    pub(crate) fn byte_tail(self) -> Option<&'a [u8]> {
+        if self.offset & HALF != 0 {
+            return None;
+        }
+        match self.input.storage {
+            Storage::Ascii(bytes) | Storage::Bytes(bytes) => bytes.get(self.offset..),
+            Storage::Units(_) => None,
+        }
+    }
+
+    /// Advance through a checked ASCII prefix without re-seeking the string.
+    /// No change on a non-ASCII prefix, half pair or insufficient storage.
+    pub(crate) fn skip_ascii(&mut self, count: usize) -> bool {
+        if !self
+            .byte_tail()
+            .and_then(|bytes| bytes.get(..count))
+            .is_some_and(|bytes| bytes.is_ascii())
+        {
+            return false;
+        }
+        self.offset += count;
+        self.utf16_offset += count;
+        true
     }
 
     pub fn next_unit(&mut self) -> Option<u16> {
@@ -596,6 +623,32 @@ fn decode_valid(bytes: &[u8], offset: usize) -> (u32, usize) {
 #[cfg(test)]
 mod checkpoint_tests {
     use super::*;
+
+    #[test]
+    fn ascii_prefix_skipping_preserves_bytes_units_and_half_pairs() {
+        let coordinates = |mark: Mark| (mark.offset, mark.units);
+        let input = Input::utf8("éabc😀z");
+        let mut cursor = input.cursor();
+        let before = cursor.mark();
+        assert!(!cursor.skip_ascii(1));
+        assert_eq!(coordinates(cursor.mark()), coordinates(before));
+        assert_eq!(cursor.next_point(), Some(0xe9));
+        assert!(cursor.skip_ascii(3));
+        assert_eq!(cursor.position(), 4);
+        assert_eq!(cursor.next_unit(), Some(0xd83d));
+        let half = cursor.mark();
+        assert!(cursor.byte_tail().is_none());
+        assert!(!cursor.skip_ascii(0));
+        assert!(!cursor.skip_ascii(1));
+        assert_eq!(coordinates(cursor.mark()), coordinates(half));
+        assert_eq!(cursor.next_unit(), Some(0xde00));
+        let before = cursor.mark();
+        assert!(!cursor.skip_ascii(2));
+        assert_eq!(coordinates(cursor.mark()), coordinates(before));
+        assert!(cursor.skip_ascii(1));
+        assert_eq!(cursor.position(), input.len_utf16());
+        assert_eq!(cursor.next_unit(), None);
+    }
 
     #[test]
     fn packing_preserves_every_offset_bit_up_to_a_valid_slice_endpoint() {

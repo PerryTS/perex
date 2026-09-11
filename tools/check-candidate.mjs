@@ -37,7 +37,7 @@ for (const source of patterns) {
 }
 
 // Complement and case-equivalence ordering matters, including equivalences
-// whose other members are non-ASCII. Non-ASCII subjects take the existing path.
+// whose other members are non-ASCII. Every non-ASCII start must be evaluated.
 for (const source of [
   '\\p{ASCII}', '\\P{ASCII}', '[^\\x00-\\x7f]', '\\p{L}', '\\p{N}',
   '\\p{Lowercase_Letter}', '\\P{Lowercase_Letter}', '[^\\P{Lowercase_Letter}]',
@@ -64,6 +64,25 @@ for (let c = 0; c < 128; c++) {
       const source = `([${negate}${escape(lo)}-${escape(hi)}])`;
       for (const flags of ['g', 'gi', 'gu', 'giu']) {
         for (const size of [7, 8, 9]) add(source, flags, 'x'.repeat(size) + String.fromCharCode(c));
+      }
+    }
+  }
+}
+
+// Mixed byte strings exercise UTF-16 offsets after multi-byte prefixes and
+// positions inside scalar pairs. ASCII runs must stop before every non-ASCII
+// value, including lone surrogates and folded non-ASCII alternatives.
+for (const source of [...patterns, '\\uDC00', '(?i:K)', '(?<=éx{8})(needle)']) {
+  for (const flags of ['g', 'gy', 'gu', 'guy', 'giu']) {
+    for (const lead of ['é', '😀', '\ud800', '\udc00', '\ud800\udc00']) {
+      for (const size of [0, 7, 8, 255, 256]) {
+        for (const tail of ['needle', 'éab', '😀b']) {
+          const subject = lead + 'x'.repeat(size) + tail + 'x'.repeat(size) + lead;
+          for (const start of new Set([0, 1, lead.length, lead.length + size,
+            subject.length - 1, subject.length, subject.length + 1])) {
+            add(source, flags, subject, start);
+          }
+        }
       }
     }
   }

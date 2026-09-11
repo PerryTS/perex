@@ -19,6 +19,24 @@ for(const source of patterns)for(const flags of ['','u','i','ui'])for(const pref
 for(const source of ['(?<=needle.*)z+','(?<=\\w*needle)a+','.*needle','(?:(?<x>.)|(?<x>a))+\\k<x>'])
  for(const flags of ['g','gy','ug','uy'])for(const subject of ['needle'+'a'.repeat(100)+'z','x'.repeat(70)+'😀needle'])
   for(const start of [0,5,6,64,71,72,73,subject.length,subject.length+1])add(source,flags,subject,start);
+// Required ASCII ranges in mixed original storage: every byte lane, chunk
+// boundary and UTF-16 half-pair start must retain complete reference answers.
+for (const [lo, hi] of [[0, 0], [0, 127], [65, 70], [97, 102], [127, 127]]) {
+  const esc = n => `\\x${n.toString(16).padStart(2, '0')}`;
+  const range = `[${esc(lo)}-${esc(hi)}]`;
+  for (const source of [`.*(${range})`, `(?<=${range}.*)(z)`, `(${range}.*z)|(z.*${range})`]) {
+    for (const lead of ['é', '😀', '\ud800', '\udc00']) {
+      for (const size of [63, 64, 255, 256, 257]) {
+        for (const tail of ['', String.fromCharCode(lo) + 'z', String.fromCharCode(hi) + 'z']) {
+          const subject = lead + 'x'.repeat(size) + tail;
+          for (const flags of ['gs', 'gsu', 'gsy', 'gsuy']) {
+            for (const start of [0, 1]) add(source, flags, subject, start);
+          }
+        }
+      }
+    }
+  }
+}
 let seed=0x3fca529e;function random(n){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;return(seed>>>0)%n;}
 function pattern(depth){const atoms=['a','b','[ab]','[A-F]','\\w','ſ','😀','(?:)'];if(!depth)return atoms[random(atoms.length)];const child=()=>pattern(depth-1);switch(random(7)){case 0:return`(?:${child()}|${child()})`;case 1:return`(${child()})`;case 2:return`(?:${child()})${['?','{1,3}','{0,2}'][random(3)]}`;case 3:return`(?=${child()})${child()}`;case 4:return`(?<=${child()})${child()}`;case 5:return`(?!${child()})${child()}`;default:return child()+child();}}
 for(let i=0;i<512;i++){const source=`(?:${pattern(2)})+Q`;for(const flags of ['','u','i','ui'])for(const tail of ['','ababaQ','baabQ','ſQ','😀Q'])add(source,flags,'0123456789 '.repeat(8)+tail);}

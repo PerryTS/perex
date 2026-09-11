@@ -1,4 +1,4 @@
-# Candidate starts in original ASCII storage
+# Candidate starts in original byte storage
 
 The compiler derives a conservative range containing every possible first
 consumed ASCII character. The evaluator can skip positions outside that range
@@ -46,10 +46,12 @@ validation; passing validation alone is not a correctness certificate.
 
 ## Execution, lifetime and work
 
-Scanning borrows the original validated ASCII bytes. Native UTF-16 and non-ASCII
-byte subjects retain the existing instruction path; no representation is copied
-or converted to enable this optimization. Sticky matching checks only its requested
-position. A nonnullable pattern cannot match at the end of an ASCII subject.
+Scanning borrows the original validated bytes. Entirely ASCII inputs retain their
+direct path. Mixed WTF-8 inputs can skip ASCII runs, stopping at every non-ASCII
+lead byte for ordinary matching. A position inside a scalar's surrogate pair
+always goes through ordinary matching. Native UTF-16 retains its existing path.
+No representation is copied or converted. Sticky matching checks only its
+requested position. A nonnullable pattern cannot match at the subject's end.
 
 Each scan step reads at most 256 available bytes, further bounded by its execution
 quantum and remaining work. Portable eight-byte arithmetic locates a possible
@@ -58,6 +60,14 @@ through the first candidate are charged, so word-read speculation does not chang
 matching work across quanta. Subject positions remain cursor offsets/checkpoints;
 no subject address survives the scoped borrow. The scan adds a phase but no frame,
 undo entry or match-scratch buffer.
+
+Mixed scanning uses the cursor's current byte suffix, never a UTF-16 re-seek from
+an end of the string. It checks the skipped prefix is ASCII and advances byte and
+UTF-16 offsets together. Word arithmetic masks high bits before lane comparison
+and treats every original high bit as a potential start; byte arithmetic must
+not carry a non-ASCII lane into neighboring ASCII comparisons. Programs with no
+possible ASCII first character still inspect non-ASCII starts. The existing
+format-9 descriptor already permits this behavior, so no format change is needed.
 
 ## Checks and measurement boundary
 
