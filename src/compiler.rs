@@ -86,6 +86,7 @@ struct Parser<'a, 's> {
     pattern: Input<'a>,
     cursor: Cursor<'a>,
     flags: u32,
+    unicode_sets: bool,
     nodes: &'s mut [Node],
     used: usize,
     ranges: &'s mut [Range],
@@ -519,6 +520,14 @@ impl Parser<'_, '_> {
         Ok(length)
     }
     fn property(&mut self, negative: bool) -> Result<(), CompileError> {
+        if self.unicode_sets {
+            // v properties include strings, and vi complements must fold
+            // before subtraction. Do not silently reuse the u evaluator.
+            return Err(CompileError::Unsupported {
+                feature: "Unicode sets",
+                utf16_offset: self.cursor.position(),
+            });
+        }
         if !self.eat(b'{')? {
             return Err(self.error());
         }
@@ -686,6 +695,15 @@ impl Parser<'_, '_> {
         }
     }
     fn class(&mut self) -> Result<u32, CompileError> {
+        if self.unicode_sets {
+            // Nested sets, reserved punctuation and string members have a
+            // distinct grammar. Until that compiler path is complete, keep
+            // its explicit unsupported result instead of accepting u syntax.
+            return Err(CompileError::Unsupported {
+                feature: "Unicode sets",
+                utf16_offset: self.cursor.position(),
+            });
+        }
         let negative = self.eat(b'^')?;
         let start = self.range_used;
         while self.peek() != Some(93) {
@@ -826,7 +844,7 @@ fn prepare_with<'s, T>(
             b'i' => I,
             b'm' => M,
             b's' => S,
-            b'u' => U,
+            b'u' | b'v' => U,
             b'y' => Y,
             _ => 0,
         };
@@ -834,16 +852,11 @@ fn prepare_with<'s, T>(
     if seen & 96 == 96 {
         return Err(CompileError::Syntax { utf16_offset: 0 });
     }
-    if seen & 64 != 0 {
-        return Err(CompileError::Unsupported {
-            feature: "Unicode sets",
-            utf16_offset: 0,
-        });
-    }
     let mut parser = Parser {
         pattern,
         cursor: pattern.cursor(),
         flags: bits,
+        unicode_sets: seen & 64 != 0,
         nodes,
         used: 0,
         ranges,

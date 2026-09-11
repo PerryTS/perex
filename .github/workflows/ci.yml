@@ -65,6 +65,11 @@ jobs:
           node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes
           node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes-q1 --quantum 1 --relocate --grow
           node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes-q17 --quantum 17 --relocate --grow
+      - name: Unicode-sets flag, complete captures and relocation
+        run: |
+          node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets
+          node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets-q1 --quantum 1 --relocate --grow
+          node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets-q17 --quantum 17 --relocate --grow
       - name: Unicode and legacy case equivalence differential
         run: node tools/check-casefold.mjs target/release/examples/engine_probe
       - run: cargo +stable build --locked --release --example property_probe

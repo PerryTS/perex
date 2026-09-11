@@ -61,6 +61,7 @@ node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/
 node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/atom-filter-q1 --quantum 1 --relocate --grow
 node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/atom-filter-q17 --quantum 17 --relocate --grow
 node tools/check-modifiers.mjs target/release/examples/engine_probe
+node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q1 --quantum 1 --relocate --grow
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q17 --quantum 17 --relocate --grow
@@ -94,3 +95,9 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 [Candidate-start scanning](docs/candidate.md) skips impossible ASCII start positions using the same evaluator and original storage. Complete-answer and relocation checks precede performance claims.
 
 [Single-atom repetition merging](docs/repetition.md) removes duplicate partitions when match ordering can be preserved, using the same evaluator and caller-owned storage.
+
+Unicode-sets (`v`) admission currently covers patterns without character
+classes or property escapes, including empty patterns, captures, assertions,
+backreferences and builtin character escapes. They emit the same Unicode
+programs as `u`. Nested sets, string members and property escapes remain
+explicitly unsupported; complete `v` compatibility is still an adoption gate.
