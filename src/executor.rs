@@ -731,7 +731,7 @@ impl Vm<'_, '_, '_, '_> {
                 Phase::AtomExtend => self.atom_scan(true)?,
                 Phase::AtomResult { matched, extend } => self.atom_result(matched, extend)?,
                 Phase::AtomCommit => self.atom_commit()?,
-                Phase::AtomRetreat => self.atom_retreat()?,
+                Phase::AtomRetreat => self.atom_retreat(available)?,
                 Phase::Named {
                     group,
                     next,

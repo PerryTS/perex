@@ -49,6 +49,9 @@ node tools/check-names.mjs target/release/examples/engine_probe
 node tools/check-legacy.mjs target/release/examples/engine_probe
 node tools/check-admission.mjs target/release/examples/engine_probe
 node tools/check-repetition.mjs target/release/examples/engine_probe
+node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/atom-filter
+node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/atom-filter-q1 --quantum 1 --relocate --grow
+node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/atom-filter-q17 --quantum 17 --relocate --grow
 node tools/check-modifiers.mjs target/release/examples/engine_probe
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q1 --quantum 1 --relocate --grow

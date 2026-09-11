@@ -247,3 +247,53 @@ fn optimized_record_validation_rejects_shape_and_version_corruption() {
         );
     }
 }
+
+#[test]
+fn literal_retry_filter_keeps_general_vm_captures_and_errors() {
+    for source in [
+        r"^(.*ab)",
+        r"^(.{2,9}ab)",
+        r"^(.{2,9}?ab)",
+        r"^(.*ab|.*ac)",
+        r"^(?:.*ab)(c)?",
+        r"(?<=^(ab.*))$",
+        r"(?<=^(ab.{2,9}))$",
+        r"^(.*ſK)",
+        r"(?<=^(ſK.*))$",
+        r"^(.*\ud83d)",
+        r"(?<=^(\ude00.*))$",
+        r"(?!(.*ab))x",
+        r"^(.*ab)\1",
+    ] {
+        for flags in ["", "u", "i", "ui"] {
+            let optimized = words(source, flags);
+            let original = general(optimized.clone());
+            for subject in [
+                "",
+                "ab",
+                "abxxxxxxxx",
+                "ababxxabc",
+                "ſKxxxxxxxx",
+                "sKxxxxſK",
+                "😀xxxx😀",
+            ] {
+                let units: Vec<_> = subject.encode_utf16().collect();
+                for input in [Input::utf8(subject), Input::utf16(&units)] {
+                    let a = execute(&optimized, input, 1024, 8192, 2_000_000);
+                    let b = execute(&original, input, 1024, 8192, 2_000_000);
+                    assert_eq!((&a.0, &a.1), (&b.0, &b.1), "{source} {flags} {subject}");
+                    for allowance in 0..a.2 {
+                        let (error, captures, _) =
+                            execute(&optimized, input, 1024, 8192, allowance);
+                        assert_eq!(
+                            error,
+                            Err(ExecError::WorkLimit),
+                            "{source} {flags} {subject} {allowance}"
+                        );
+                        assert!(captures.iter().all(|s| *s == Span::new(900, 901)));
+                    }
+                }
+            }
+        }
+    }
+}
