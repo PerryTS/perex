@@ -9,10 +9,6 @@ impl Parser<'_, '_> {
         Ok(self.named_mode.unwrap())
     }
 
-    fn name_point(&self, start: u32, index: u32) -> u32 {
-        self.ranges[self.ranges.len() - 1 - start as usize - index as usize].lo
-    }
-
     pub(super) fn name(&mut self) -> Result<u32, CompileError> {
         let start = u32::try_from(self.name_chars).map_err(|_| CompileError::SizeLimit)?;
         let mut count = 0u32;
@@ -57,7 +53,7 @@ impl Parser<'_, '_> {
             if equal {
                 for i in 0..count {
                     self.step()?;
-                    if self.name_point(start, i) != self.name_point(old.a, i) {
+                    if name_point(self.ranges, start, i) != name_point(self.ranges, old.a, i) {
                         equal = false;
                         break;
                     }
@@ -193,7 +189,9 @@ impl Parser<'_, '_> {
         }
         Ok(words)
     }
+}
 
+impl Prepared<'_> {
     pub(super) fn write_names(
         &mut self,
         output: &mut [u32],
@@ -221,7 +219,7 @@ impl Parser<'_, '_> {
             let mut unit_index = 0;
             for j in 0..n.b {
                 self.step()?;
-                let c = self.name_point(n.a, j);
+                let c = name_point(self.ranges, n.a, j);
                 let mut units = [0; 2];
                 for &unit in char::from_u32(c).unwrap().encode_utf16(&mut units).iter() {
                     let word = &mut output[at + unit_index / 2];
@@ -245,4 +243,8 @@ impl Parser<'_, '_> {
         }
         Ok(())
     }
+}
+
+fn name_point(ranges: &[Range], start: u32, index: u32) -> u32 {
+    ranges[ranges.len() - 1 - start as usize - index as usize].lo
 }

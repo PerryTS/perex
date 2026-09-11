@@ -3,7 +3,7 @@
 use super::*;
 use core::cmp::Ordering;
 
-impl Parser<'_, '_> {
+impl Prepared<'_> {
     fn compare_admission(
         &mut self,
         p: Program<'_>,

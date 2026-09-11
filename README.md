@@ -28,6 +28,9 @@ Perex does not depend on `perry-runtime`. Perry will use a pinned Perex revision
 
 Start with the [implemented engine and its limits](docs/engine.md), [architecture](docs/architecture.md), the [memory contract](docs/memory-contract.md), and the [implementation milestones](docs/roadmap.md). The [research notes](docs/research.md) explain the source material and what existing engine tests do and do not establish.
 
+The [compilation plan](docs/compilation-plan.md) separates parsing from final
+storage allocation without retaining the original pattern view or resetting work.
+
 The experimental [input API](docs/input.md) reads the original string, including individual surrogate halves inside four-byte UTF-8 characters. Capture spans borrow those units without constructing substrings. Validation, seeking and relocation costs are documented explicitly. The [performance requirements](docs/performance.md) preserve per-case CPU and RSS results alongside complete host measurements.
 
 ## Development

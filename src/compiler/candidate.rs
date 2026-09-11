@@ -30,7 +30,7 @@ impl First {
         }
     }
 }
-impl Parser<'_, '_> {
+impl Prepared<'_> {
     fn first(&self, id: u32) -> First {
         let n = self.nodes[id as usize];
         First {

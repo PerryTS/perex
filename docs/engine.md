@@ -2,6 +2,10 @@
 
 Perex now has one compiler and ordered bytecode evaluator. It is an implementation in progress, not a production replacement or a complete ECMAScript engine. There are no matching-library dependencies or fallback routes. All core modules remain `no_std` and forbid unsafe code.
 
+Compilation supports a one-call API and an explicit [prepared plan](compilation-plan.md).
+Both use the same parser and emitter; preparation permits exact output allocation
+after the host ends its pattern borrow.
+
 ## Implemented behavior
 
 Literals, concatenation, ordered alternatives, numbered/named capturing and noncapturing groups, dot, ranges and negated classes, digit/word/whitespace escapes, anchors and word boundaries, hexadecimal/Unicode escapes, numbered/named backreferences, greedy/lazy/count-bounded repetition, and positive/negative lookahead/lookbehind execute through the same program and VM. Unicode and code-unit modes use the original input storage. Captures inside a repetition are reset on each iteration; empty iterations obey minimum-count/progress rules. Assertions are atomic, with positive captures retained and negative captures rolled back. Lookbehind traverses the subject and concatenation in reverse order.
