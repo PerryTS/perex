@@ -119,7 +119,7 @@ impl Vm<'_, '_, '_, '_> {
         Ok(())
     }
 
-    pub(super) fn atom_retreat(&mut self) -> Result<(), ExecError> {
+    pub(super) fn atom_retreat(&mut self, available: usize) -> Result<(), ExecError> {
         let atom = self.atom_state()?;
         let r = self.atom_record()?;
         let position = self.cursor.position();
@@ -131,6 +131,10 @@ impl Vm<'_, '_, '_, '_> {
             }
         {
             return Err(ExecError::InvalidProgram);
+        }
+        let [next, value, _] = self.program.instruction(r[4] as usize);
+        if matches!(next, CHAR | CHAR_I) {
+            return self.retreat_literal(atom.minimum_end, value, next == CHAR_I, available);
         }
         self.charge(1)?;
         // Every position between this endpoint and the minimum was already
@@ -151,5 +155,50 @@ impl Vm<'_, '_, '_, '_> {
         }
         self.state.phase = Phase::AtomCommit;
         Ok(())
+    }
+
+    // The immediate continuation must consume this literal before it can change
+    // captures or choose another branch. Impossible endpoints need no retry
+    // frame or capture rollback. Leave possible endpoints to the same VM.
+    #[inline(never)]
+    fn retreat_literal(
+        &mut self,
+        minimum_end: usize,
+        value: u32,
+        fold: bool,
+        available: usize,
+    ) -> Result<(), ExecError> {
+        let initial = self.budget.remaining();
+        let limit = available.min(256);
+        loop {
+            self.charge(1)?;
+            read(
+                &mut self.cursor,
+                self.program.unicode(),
+                !self.state.reverse,
+            )
+            .ok_or(ExecError::InvalidProgram)?;
+            let position = self.cursor.position();
+            if if self.state.reverse {
+                position > minimum_end
+            } else {
+                position < minimum_end
+            } {
+                return Err(ExecError::InvalidProgram);
+            }
+            self.charge(1)?;
+            let mut probe = self.cursor;
+            let possible = read(&mut probe, self.program.unicode(), self.state.reverse)
+                .is_some_and(|c| equal(self.program, c, value, fold));
+            if possible || position == minimum_end {
+                self.state.phase = Phase::AtomCommit;
+                return Ok(());
+            }
+            // Pauses retain only the existing endpoint and atom metadata. The
+            // probe never escapes this view; the operation budget is continuous.
+            if initial - self.budget.remaining() >= limit {
+                return Ok(());
+            }
+        }
     }
 }

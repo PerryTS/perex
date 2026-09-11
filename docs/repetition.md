@@ -115,3 +115,12 @@ finite/infinite/lazy quantifiers, surrounding captures and backreferences,
 lookbehind, empty alternatives and Unicode/surrogate inputs. It has no exception
 list. The unchanged `check-admission.mjs` retains all 64 newly discovered work-limit
 failures as independent witnesses. The first Linux revision passed all 88,464 repetition cases and all 23,528 admission cases, closing the 64 failures. It also passed all 62,482 application-corpus answers. Further admission tuning requires its own checks and measurements; these counts do not establish full ECMAScript conformance or performance across all cases.
+
+A greedy consuming-atom retry whose immediate next instruction is a literal
+can reject impossible endpoints before storing another retry frame. The same
+literal comparison, direction and Unicode/code-unit mode determine eligibility;
+a possible endpoint still runs the ordinary continuation. Both movement and the
+probe consume the operation budget. Each chunk uses at most 256 work units,
+and a two-unit movement/probe may overshoot a requested quantum by one unit.
+Pauses preserve existing offset state only. Captures, assertions and other
+continuations retain the ordinary retry path.
