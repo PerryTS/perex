@@ -21,6 +21,15 @@ pub(crate) fn valid(id: u32) -> bool {
     (id as usize) < data::PROPERTIES.len()
 }
 
+/// Exact ASCII membership already stored in the shared descriptor table.
+pub(crate) fn ascii(id: u32) -> u128 {
+    let row = data::PROPERTIES[id as usize];
+    u128::from(row[2])
+        | (u128::from(row[3]) << 32)
+        | (u128::from(row[4]) << 64)
+        | (u128::from(row[5]) << 96)
+}
+
 /// ASCII stays in the small descriptor table; non-ASCII membership uses a
 /// category mask or binary search over shared, disjoint interval boundaries.
 pub(crate) fn contains(id: u32, c: u32) -> bool {

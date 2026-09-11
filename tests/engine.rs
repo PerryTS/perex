@@ -96,13 +96,13 @@ fn property_programs_use_bounded_references_and_validate_relocation() {
             &mut Budget::new(10000),
         )
         .unwrap();
-        // Four instructions and one two-word property reference, regardless of
-        // how many Unicode intervals the property contains.
-        assert_eq!(p.size_bytes(), 84);
+        // Eight header words, four instructions and one two-word property
+        // reference, regardless of how many Unicode intervals it contains.
+        assert_eq!(p.size_bytes(), 88);
         let mut moved = p.words().to_vec();
         words.fill(0xdeadbeef);
         let p = Program::from_words(&moved, &mut Budget::new(10000)).unwrap();
-        assert_eq!(p.size_bytes(), 84);
+        assert_eq!(p.size_bytes(), 88);
         let mut registers = [0; 2];
         let mut frames = [Frame::default(); 1];
         let mut undo = [Undo::default(); 1];
@@ -362,7 +362,9 @@ fn corruption_limits_and_partial_outputs_are_explicit() {
     let mut ranges = [Range::default(); 64];
     let mut storage = [0; 512];
     let p = compile(
-        Input::utf8("(?!(a+)+b)c"),
+        // An expensive assertion at a plausible start must still report its
+        // work limit. Candidate skipping may bypass impossible start positions.
+        Input::utf8("(?!(a+)+b)a"),
         "",
         &mut nodes,
         &mut ranges,
@@ -371,7 +373,7 @@ fn corruption_limits_and_partial_outputs_are_explicit() {
     )
     .unwrap();
     let mut corrupt = p.words().to_vec();
-    corrupt[7] = 999;
+    corrupt[8] = 999;
     assert_eq!(
         Program::from_words(&corrupt, &mut Budget::new(10000)).unwrap_err(),
         ProgramError::Invalid
@@ -396,7 +398,7 @@ fn corruption_limits_and_partial_outputs_are_explicit() {
     assert_eq!(captures, [Span::new(0, 1); 2]);
     let error = find(
         p,
-        Input::utf8("c"),
+        Input::utf8("a"),
         0,
         Scratch {
             registers: &mut registers,

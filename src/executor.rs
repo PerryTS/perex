@@ -8,6 +8,7 @@ use crate::{
 };
 mod admission;
 mod atom;
+mod candidate;
 mod state;
 use state::*;
 const UNSET: usize = usize::MAX;
@@ -455,7 +456,7 @@ impl Vm<'_, '_, '_, '_> {
                     self.cursor.normalize_unicode_start();
                 }
                 self.state.start = self.cursor.mark();
-                self.state.phase = Phase::Initialize(0);
+                self.start_candidate();
             }
             AfterSeek::Backref {
                 start,
@@ -673,6 +674,7 @@ impl Vm<'_, '_, '_, '_> {
                         }
                     }
                 }
+                Phase::Candidate => self.candidate_step(available)?,
                 Phase::Initialize(index) => {
                     if index == self.program.register_count() {
                         self.begin_trial();
@@ -855,7 +857,7 @@ impl Vm<'_, '_, '_, '_> {
                             self.state.phase = Phase::Finished(false);
                         } else {
                             self.state.start = self.cursor.mark();
-                            self.state.phase = Phase::Initialize(0);
+                            self.start_candidate();
                         }
                     }
                 }

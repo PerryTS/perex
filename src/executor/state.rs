@@ -87,6 +87,7 @@ pub(super) enum Phase {
         target: usize,
         after: AfterSeek,
     },
+    Candidate,
     Initialize(usize),
     Trial,
     Execute {

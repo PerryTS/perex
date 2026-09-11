@@ -1028,3 +1028,22 @@ fn atom_retries_preserve_lone_surrogates_across_relocation_and_cancellation() {
         }
     }
 }
+
+#[test]
+fn candidate_scans_keep_work_and_captures_across_relocation_boundaries() {
+    for source in [
+        "needle",
+        "(a)?(b+)",
+        "[a-f]+",
+        "(?<=x{3})(needle)",
+        "(?:#|[0-9])z",
+    ] {
+        for tail in ["", "needle", "abbb", "#z", "12z"] {
+            let text = "x".repeat(257) + tail;
+            let owner = Owner::new(source, "", Subject::Bytes(text.into_bytes()));
+            for quantum in [1, 7, 8, 17, 255, 256] {
+                assert!(compare(&owner, 0, quantum) > 0);
+            }
+        }
+    }
+}

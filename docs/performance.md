@@ -1,6 +1,6 @@
 # Performance and adoption requirements
 
-The target is one production regex engine that is correct for the host's entire regex workload and has the lowest CPU and RSS across its cases. An aggregate improvement alone does not satisfy that target. Input-layer tests, a faster subset, an upstream engine's results, or a passing CI run are not adoption evidence.
+The target is one production regex engine that is correct for the host's entire regex workload and beats the compatible alternatives, or reaches CPU and RSS parity within the owner's accepted 10% variation. The tolerance applies to both measures across the covered cases; an aggregate improvement alone does not satisfy that target. Input-layer tests, a faster subset, an upstream engine's results, or a passing CI run are not adoption evidence.
 
 ## Comparisons that must remain visible
 
@@ -18,7 +18,7 @@ The host owns private workload capture, source/binary receipts and application m
 
 ## Evidence before adoption
 
-Run clean alternating comparisons on the same machine, preserve all clean outcomes and every failure, and account for measurement noise with repeated samples. Keep cold/warm and construction/execution results distinct. For each covered case, identify the best compatible measured competitor for CPU and for memory, even when these are different competitors. Unresolved CPU or RSS losses remain work to do; the old host campaign's aggregate thresholds or memory allowance do not override this project's objective.
+Run clean alternating comparisons on the same machine, preserve all clean outcomes and every failure, and account for measurement noise with repeated samples. Keep cold/warm and construction/execution results distinct. For each covered case, identify the best compatible measured competitor for CPU and for memory, even when these are different competitors. Losses outside the owner's 10% tolerance remain work to do; uncertain observations require stronger evidence. The old host campaign's aggregate thresholds or memory allowance do not override this project's objective.
 
 Then repeat complete host-operation checks and whole-application CPU/RSS comparisons against the retained binary. Traceability must connect the measured binary to the exact Perex and host revisions. Engine microbenchmarks cannot prove a host improvement, and host totals cannot prove every engine case is faster.
 

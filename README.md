@@ -50,6 +50,9 @@ node tools/check-legacy.mjs target/release/examples/engine_probe
 node tools/check-admission.mjs target/release/examples/engine_probe
 node tools/check-repetition.mjs target/release/examples/engine_probe
 node tools/check-modifiers.mjs target/release/examples/engine_probe
+node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate
+node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q1 --quantum 1 --relocate --grow
+node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-q17 --quantum 17 --relocate --grow
 cargo build --locked --release --example property_probe
 node tools/check-properties.mjs target/release/examples/property_probe target/release/examples/engine_probe --allow-reviewed-reference-disagreements
 node tools/reference.mjs --check
@@ -73,5 +76,7 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 [Named captures](docs/names.md) keep packed names and numeric capture lists inside the relocatable program. Matching and backreferences continue to borrow the original subject.
 
 [Required-text admission](docs/admission.md) uses a condition proved by the compiler and original subject storage. Its correctness and CPU/RSS costs require separate checks.
+
+[Candidate-start scanning](docs/candidate.md) skips impossible ASCII start positions using the same evaluator and original storage. Complete-answer and relocation checks precede performance claims.
 
 [Single-atom repetition merging](docs/repetition.md) removes duplicate partitions when match ordering can be preserved, using the same evaluator and caller-owned storage.

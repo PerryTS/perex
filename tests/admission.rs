@@ -19,7 +19,9 @@ fn compile_words(source: &str, flags: &str) -> Vec<u32> {
         &mut Budget::new(1_000_000),
     )
     .unwrap();
-    let moved = p.words().to_vec();
+    let mut moved = p.words().to_vec();
+    // These witnesses isolate required-text admission from candidate skipping.
+    moved[7] = 0;
     words.fill(0xdeadbeef);
     moved
 }

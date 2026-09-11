@@ -1,9 +1,9 @@
 //! Versioned, relocatable programs in caller-owned u32 storage.
 use crate::{Budget, properties};
 
-pub(crate) const HEADER: usize = 7;
+pub(crate) const HEADER: usize = 8;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 7;
+pub(crate) const VERSION: u32 = 8;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -108,6 +108,12 @@ impl<'a> Program<'a> {
             || words[3] == 0
             || words[4] == 0
         {
+            return Err(bad);
+        }
+        let candidate = words[7];
+        let lo = (candidate >> 8) & 255;
+        let hi = (candidate >> 16) & 255;
+        if candidate > 1 && (candidate != (2 | (lo << 8) | (hi << 16)) || lo > hi || hi > 127) {
             return Err(bad);
         }
         let size = HEADER

@@ -54,6 +54,7 @@ const WRAP: u32 = 37;
 const NAME_META: u32 = 38;
 const NAME_DECL: u32 = 39;
 mod admission;
+mod candidate;
 mod escapes;
 mod names;
 mod repetition;
@@ -919,6 +920,7 @@ pub fn compile<'p>(
         count,
         parser.range_used as u32,
         parser.repeats,
+        0,
     ]);
     // Preserve the existing atom instruction and its admission-hint address.
     // The entry selects a bounded retry record in the same evaluator; keeping
@@ -938,6 +940,8 @@ pub fn compile<'p>(
         let hint = parser.admission(Program { words: output }, root)?;
         output[2] |= hint;
     }
+    parser.candidate()?;
+    output[7] = parser.candidate_descriptor(root);
     Program::from_words(output, parser.budget).map_err(|e| match e {
         ProgramError::WorkLimit => CompileError::WorkLimit,
         ProgramError::Invalid => CompileError::InvalidProgram,
