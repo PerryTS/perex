@@ -39,6 +39,11 @@ impl AtomBytes {
 /// Bytes a span must hold before block comparisons pay for their setup.
 const BLOCK_MIN: usize = 256;
 
+/// The high bit and the low bit of every lane of a word, for comparing eight
+/// bytes at once without a borrow crossing between them.
+const HIGH: u64 = 0x8080_8080_8080_8080;
+const ONES: u64 = 0x0101_0101_0101_0101;
+
 /// Ranges a repeated class may hold and still be tested in one step. The step
 /// stays bounded work, like the sorted-class search, while covering the small
 /// classes ordinary patterns repeat.
@@ -146,92 +151,139 @@ impl Vm<'_, '_, '_, '_> {
     /// Walk a run of a fixed-charge atom directly over original bytes, which
     /// costs a fraction of decoding each character through the cursor. Returns
     /// how many characters the run holds from `start`.
+    /// Walk a run of a fixed-charge atom directly over original bytes, which
+    /// costs a fraction of decoding each character through the cursor. Returns
+    /// how many characters the run holds from `start`.
+    ///
+    /// Each predicate gets its own loop. Deciding which one applies per word,
+    /// and rebuilding its comparison words there, costs more than the
+    /// comparison itself; decided once, each loop is a fixed sequence over a
+    /// word the compiler can widen further where the target allows.
     fn byte_run(bytes: &[u8], start: usize, accepts: AtomBytes, limit: usize) -> usize {
-        const HIGH: u64 = 0x8080_8080_8080_8080;
-        const ONES: u64 = 0x0101_0101_0101_0101;
         let end = bytes.len().min(start + limit);
-        if let AtomBytes::Every = accepts {
-            return end - start;
-        }
-        // A class of several ranges tests each one against every lane of a
-        // block, which widens into vector comparisons where the target has
-        // them. A single range keeps the lane arithmetic below, which is faster
-        // for one comparison than a block is.
-        // Only worth it past a few blocks: below that the block's own setup
-        // costs more than the lane arithmetic it replaces.
-        if let AtomBytes::Ranges(ranges, count, negated) = accepts
-            && end.saturating_sub(start) >= BLOCK_MIN
-        {
-            const LANES: usize = 32;
-            let mut base = start;
-            while base + LANES <= end {
-                let block: [u8; LANES] = bytes[base..base + LANES].try_into().unwrap();
-                let mut inside = [0u8; LANES];
-                for &(lo, hi) in &ranges[..count as usize] {
-                    for lane in 0..LANES {
-                        inside[lane] |= u8::from(block[lane] >= lo && block[lane] <= hi);
-                    }
-                }
-                let mut stop = 0;
-                for &lane in &inside {
-                    stop |= lane ^ u8::from(!negated);
-                }
-                if stop != 0 {
-                    for (lane, &accepted) in inside.iter().enumerate() {
-                        if (accepted != 0) == negated {
-                            return base + lane - start;
-                        }
-                    }
-                }
-                base += LANES;
+        match accepts {
+            AtomBytes::Every => end - start,
+            AtomBytes::Inside(lo, hi) => Self::run_range(bytes, start, end, lo, hi, false),
+            AtomBytes::Outside(lo, hi) => Self::run_range(bytes, start, end, lo, hi, true),
+            AtomBytes::Unlined => Self::run_unlined(bytes, start, end),
+            AtomBytes::Ranges(ranges, count, negated) => {
+                Self::run_ranges(bytes, start, end, &ranges[..count as usize], negated)
             }
-            while base < end && accepts.holds(bytes[base]) {
-                base += 1;
-            }
-            return base - start;
         }
+    }
+
+    /// Lanes of a word that hold a byte inside `[lower, upper]`, marked by
+    /// their high bit. Both bounds arrive already spread over every lane.
+    fn inside_lanes(word: u64, lower: u64, upper: u64) -> u64 {
+        (word | HIGH).wrapping_sub(lower) & (upper | HIGH).wrapping_sub(word) & HIGH
+    }
+
+    /// Characters from `start` inside one inclusive range, or outside it.
+    fn run_range(bytes: &[u8], start: usize, end: usize, lo: u8, hi: u8, outside: bool) -> usize {
+        let (lower, upper) = (u64::from(lo) * ONES, u64::from(hi) * ONES);
         let mut i = start;
         while i + 8 <= end {
             let word = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
-            // High bit set for each lane the atom does not accept.
-            let rejected = match accepts {
-                AtomBytes::Inside(lo, hi) | AtomBytes::Outside(lo, hi) => {
-                    let (lower, upper) = (u64::from(lo) * ONES, u64::from(hi) * ONES);
-                    let inside = ((word | HIGH).wrapping_sub(lower))
-                        & ((upper | HIGH).wrapping_sub(word))
-                        & HIGH;
-                    if matches!(accepts, AtomBytes::Inside(..)) {
-                        !inside & HIGH
-                    } else {
-                        inside
-                    }
-                }
-                AtomBytes::Unlined => {
-                    let nl = word ^ (u64::from(b'\n') * ONES);
-                    let cr = word ^ (u64::from(b'\r') * ONES);
-                    (nl.wrapping_sub(ONES) & !nl & HIGH) | (cr.wrapping_sub(ONES) & !cr & HIGH)
-                }
-                AtomBytes::Every => 0,
-                AtomBytes::Ranges(ranges, count, negated) => {
-                    let mut inside = 0;
-                    for &(lo, hi) in &ranges[..count as usize] {
-                        let (lower, upper) = (u64::from(lo) * ONES, u64::from(hi) * ONES);
-                        inside |= ((word | HIGH).wrapping_sub(lower))
-                            & ((upper | HIGH).wrapping_sub(word))
-                            & HIGH;
-                    }
-                    if negated { inside } else { !inside & HIGH }
-                }
-            };
+            let inside = Self::inside_lanes(word, lower, upper);
+            let rejected = if outside { inside } else { !inside & HIGH };
             if rejected != 0 {
                 return i - start + rejected.trailing_zeros() as usize / 8;
             }
             i += 8;
         }
-        while i < end && accepts.holds(bytes[i]) {
+        while i < end && ((bytes[i] >= lo && bytes[i] <= hi) != outside) {
             i += 1;
         }
         i - start
+    }
+
+    /// Characters from `start` that are not line terminators. On ASCII storage
+    /// only the two single-byte terminators can occur.
+    fn run_unlined(bytes: &[u8], start: usize, end: usize) -> usize {
+        let (nl, cr) = (u64::from(b'\n') * ONES, u64::from(b'\r') * ONES);
+        let mut i = start;
+        while i + 8 <= end {
+            let word = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+            let (a, b) = (word ^ nl, word ^ cr);
+            let rejected = (a.wrapping_sub(ONES) & !a & HIGH) | (b.wrapping_sub(ONES) & !b & HIGH);
+            if rejected != 0 {
+                return i - start + rejected.trailing_zeros() as usize / 8;
+            }
+            i += 8;
+        }
+        while i < end && bytes[i] != b'\n' && bytes[i] != b'\r' {
+            i += 1;
+        }
+        i - start
+    }
+
+    /// Characters from `start` inside any of several inclusive ranges, or
+    /// outside all of them.
+    fn run_ranges(
+        bytes: &[u8],
+        start: usize,
+        end: usize,
+        ranges: &[(u8, u8)],
+        negated: bool,
+    ) -> usize {
+        // Past a few blocks, testing each range against every lane of a block
+        // widens into vector comparisons where the target has them. Below that
+        // the block's own setup costs more than the lane arithmetic it
+        // replaces, so short runs keep the word loop.
+        let mut base = start;
+        if end.saturating_sub(start) >= BLOCK_MIN {
+            const LANES: usize = 32;
+            while base + LANES <= end {
+                let block: [u8; LANES] = bytes[base..base + LANES].try_into().unwrap();
+                let mut inside = [0u8; LANES];
+                for &(lo, hi) in ranges {
+                    for lane in 0..LANES {
+                        inside[lane] |= u8::from(block[lane] >= lo && block[lane] <= hi);
+                    }
+                }
+                // Find the lane the run stops at through the word it lands
+                // in rather than by a scalar pass over every lane, which on a
+                // short run costs more than the comparisons it follows.
+                for (word, lanes) in inside.chunks_exact(8).enumerate() {
+                    let lanes = u64::from_le_bytes(lanes.try_into().unwrap());
+                    let stop = if negated { lanes } else { !lanes & ONES };
+                    if stop != 0 {
+                        let lane = word * 8 + stop.trailing_zeros() as usize / 8;
+                        return base + lane - start;
+                    }
+                }
+                base += LANES;
+            }
+        }
+        // Each bound spread over a word's lanes, built once for the whole run
+        // rather than once per word: the multiplies cost more than the
+        // comparisons they serve.
+        let mut bounds = [(0u64, 0u64); ATOM_CLASS_RANGES as usize];
+        for (bound, &(lo, hi)) in bounds.iter_mut().zip(ranges) {
+            *bound = (u64::from(lo) * ONES, u64::from(hi) * ONES);
+        }
+        let bounds = &bounds[..ranges.len()];
+        while base + 8 <= end {
+            let word = u64::from_le_bytes(bytes[base..base + 8].try_into().unwrap());
+            let mut inside = 0;
+            for &(lower, upper) in bounds {
+                inside |= Self::inside_lanes(word, lower, upper);
+            }
+            let rejected = if negated { inside } else { !inside & HIGH };
+            if rejected != 0 {
+                return base - start + rejected.trailing_zeros() as usize / 8;
+            }
+            base += 8;
+        }
+        while base < end
+            && (ranges
+                .iter()
+                .any(|&(lo, hi)| bytes[base] >= lo && bytes[base] <= hi)
+                != negated)
+        {
+            base += 1;
+        }
+        base - start
     }
 
     pub(super) fn atom_scan(&mut self, extend: bool, available: usize) -> Result<(), ExecError> {
@@ -265,7 +317,14 @@ impl Vm<'_, '_, '_, '_> {
                 && !self.state.reverse
             {
                 let start = self.cursor.position();
-                let limit = (available / per).min(self.budget.remaining() / per);
+                // A character of most atoms charges exactly one, where the
+                // division below is the identity. Naming that case keeps two
+                // divisions out of the entry cost of every run.
+                let limit = if per == 1 {
+                    available.min(self.budget.remaining())
+                } else {
+                    (available / per).min(self.budget.remaining() / per)
+                };
                 let run = Self::byte_run(bytes, start, accepts, limit);
                 if run != 0 {
                     self.charge(run * per)?;
