@@ -63,8 +63,22 @@ the largest single advantage Perex has.
 
 ### Behind
 
-Between 1.1x and 7.2x, led by a three-way literal alternation over 256 KiB
-(7.2x), a capture-heavy short match (6.7x) and a short class repeat (5.0x).
+Between 1.38x and 7.7x. The worst is a capture-heavy short match; the rest of
+the spread sits between two and four.
+
+| Case | Perex | V8 | |
+|---|---:|---:|---:|
+| Captures, 25-character subject | 450 ns | 58.5 ns | 7.7x |
+| Three-way alternation, 256 KiB | 186 µs | 41.1 µs | 4.5x |
+| Class repeat, short subject | 301 ns | 67.2 ns | 4.5x |
+| Folded literal | 86.7 ns | 21.0 ns | 4.1x |
+| End-anchored hit, 256 KiB | 54.0 ns | 17.1 ns | 3.2x |
+| Literal lookbehind, 256 KiB | 122 ns | 41.0 ns | 3.0x |
+| Short literal | 49.3 ns | 35.8 ns | 1.4x |
+
+The diagnostics cluster between 1.5x and 4.3x whatever the pattern's length,
+which is the flat per-search cost of interpreting rather than compiling. It is
+visible most directly in the ladder below.
 
 ### The floor, and what it is
 
