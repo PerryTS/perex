@@ -2,6 +2,11 @@
 //! and retreat uses the current original input view; pauses retain offsets only.
 use super::*;
 
+/// Ranges a repeated class may hold and still be tested in one step. The step
+/// stays bounded work, like the sorted-class search, while covering the small
+/// classes ordinary patterns repeat.
+const ATOM_CLASS_RANGES: u32 = 8;
+
 impl Vm<'_, '_, '_, '_> {
     fn atom_state(&self) -> Result<AtomState, ExecError> {
         match self.state.work {
@@ -38,6 +43,47 @@ impl Vm<'_, '_, '_, '_> {
             match op {
                 CHAR | CHAR_I => equal(self.program, c, a, op == CHAR_I),
                 ANY | ANY_S => op == ANY_S || !line_terminator(c),
+                // A repeated plain class is tested here rather than through the
+                // resumable class phase. That phase exists for folding, sorted
+                // search and classes too large for one step; building and taking
+                // it apart again per character costs several times the
+                // membership test itself, and this is the engine's hottest loop.
+                CLASS if (b & !NEGATED) <= ATOM_CLASS_RANGES => {
+                    let mut found = false;
+                    for index in a..a + (b & !NEGATED) {
+                        if self.charge(1).is_err() {
+                            // Resume through the phase, which re-tests the class
+                            // from its first range with the character already read.
+                            self.begin_class(
+                                a,
+                                b,
+                                c,
+                                if extend {
+                                    ClassUse::AtomExtend
+                                } else {
+                                    ClassUse::AtomScan
+                                },
+                                false,
+                                false,
+                            );
+                            return Err(ExecError::WorkLimit);
+                        }
+                        let [lo, hi] = self.program.range(index as usize);
+                        found = if lo & PROPERTY != 0 {
+                            if hi == 2 {
+                                !properties::contains(lo & !PROPERTY, c)
+                            } else {
+                                properties::contains(lo & !PROPERTY, c) != (hi != 0)
+                            }
+                        } else {
+                            c >= lo && c <= hi
+                        };
+                        if found {
+                            break;
+                        }
+                    }
+                    found != (b & NEGATED != 0)
+                }
                 CLASS | CLASS_I | CLASS_SORTED | CLASS_SORTED_I => {
                     self.begin_class(
                         a,

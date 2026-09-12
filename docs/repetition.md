@@ -172,3 +172,30 @@ subject fell from 187 charged work units to 82 and from about 1.34 µs to about
 0.61 µs, and `/(\w+)@(\w+)\.com/` from 266 units to 159 and about 1.18 µs to
 about 0.74 µs. The work reduction is deterministic and independent of machine
 load.
+
+## Testing a repeated class in the scan
+
+The atom scan reached the resumable class phase for every character of a
+repeated class. That phase exists for folding, sorted search and classes too
+large for one step; for the small classes ordinary patterns repeat, building it
+and taking it apart again costs several times the membership test itself, and
+this is the engine's hottest loop.
+
+A plain class of at most eight ranges is now tested in the scan, which leaves
+the step bounded in the same way the sorted-class search is. Folding, sorted
+classes and larger ones keep the phase. Work is charged per range exactly as
+before, and a charge that fails hands the character to the phase, which re-tests
+the class from its first range, so resumption is unchanged.
+
+Measured on a sixty-character run, process CPU time per search:
+
+| Pattern | Before | After |
+|---|---:|---:|
+| `/[a-z]+!/` | 1.20 µs | 0.75 µs |
+| `/\w+!/` | 1.49 µs | 0.94 µs |
+| `/[^0-9]+!/` | 1.27 µs | 0.78 µs |
+
+The repeated class now costs about what a repeated character does — 0.75 µs
+against 0.72 µs — where before it cost two thirds again as much. On the authored
+short cases, `/[a-z]+[0-9]+/` fell from 626 ns to 431 ns and
+`/(\w+)@(\w+)\.com/` from 749 ns to 559 ns.
