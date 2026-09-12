@@ -136,14 +136,34 @@ out — about 2 to 3 ns for each primitive operation, which is what a bytecode
 interpreter with bounds-checked scratch costs and roughly ten times what
 compiled code costs. V8 emits native code and owes a collector nothing.
 
-There is no remaining hot spot behind that number, and it was checked rather
-than assumed. Counting how often each phase runs gives seven dispatcher rounds
-for `/a/` against `"a"` and forty-seven for the capture case. Removing eight of
-those forty-seven recovered three percent, and running three of the seven in one
-round recovered four percent on the shortest hits and nothing elsewhere. Two
-independent measurements therefore agree that the dispatcher is not where the
-remaining gap is: the cost is distributed across what the phases do, in the
-shape the ladder shows, so no further tuning of this design removes it.
+There is no remaining hot spot behind that number, and it was priced rather
+than assumed. Removing one piece of the successful path at a time, and measuring
+what each removal recovers from `/a/` against `"a"`:
+
+| Piece removed | Recovered |
+|---|---:|
+| Checking the registers a match reports | 3.3 ns |
+| Copying the result out | 3.0 ns |
+| Clearing the registers a trial starts from | 3.9 ns |
+
+The last of those is an upper bound rather than a price — a search that does not
+clear its registers is not the same search, and removing the write lets the
+compiler drop the slice around it too. The first two are exact. What is left of
+the twenty-four is four instructions, entering the trial, and the rounds between.
+Nothing in the list is large, and putting any of them where the round before it
+ends was measured and made things worse.
+
+This was also checked from the other direction, by counting the rounds rather
+than pricing their contents. `/a/` against `"a"` takes seven dispatcher rounds
+and the capture case forty-seven. Removing eight of those forty-seven recovered
+three percent; running three of a start's seven in one round recovered four
+percent on the shortest hits and nothing elsewhere; and removing the round every
+match spends checking its registers cost five to ten percent on the two cases
+furthest behind. Three measurements agree that the dispatcher is not where the
+remaining gap is.
+
+The cost is distributed across what the phases do, in the shape the ladder
+shows, so no further tuning of this design removes it.
 
 The scan is not where the remaining gap is, and it is no longer where any of
 it is. Two claims recorded here earlier were wrong, and the measurements that
