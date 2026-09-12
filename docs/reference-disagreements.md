@@ -20,20 +20,24 @@ In `tools/check-modifiers.mjs`, eight cases of the form
 `(?i:(?<x>a)|(?<x>b))(?-i:\k<x>)` and `(?i:(?<x>a)|(?<x>b))(?i:\k<x>)` on
 `"0".repeat(80) + "aBBB"` reported no match while Perex reported a match at
 UTF-16 `[81,83]` with `x` captured at `[81,82]`. Re-running the identical case
-in a clean Node 26.5.1 process returns the same match Perex returns, as does
-`new RegExp(source, flags).exec(subject)` evaluated directly. Replaying the
-check's generated cases in order reproduces the no-match; a bisect placed the
-transition after roughly 108,000 preceding cases, and no small pair of patterns
-reproduces it, so the trigger is cumulative process state rather than one
-pattern.
+in a clean Node 26.5.1 process returns the same match Perex returns.
+
+This was reduced to a V8 defect and is recorded, with a self-contained
+reproduction and a report ready to file upstream, in
+`tests/fixtures/v8-modifier-alternation-backreference/`. The affected shape is a
+scoped modifier group whose alternation captures, where the winning alternative
+required case folding and a backreference then reads that capture; the smallest
+case is `/(?i:(a)|(b))\2/d` against `"BB"`, which returns `null` instead of
+matching at index 0. Forcing V8's regexp interpreter with `--regexp-interpret-all`
+or `--jitless` restores the correct answer, so the natively compiled code is the
+wrong one. Named and numbered groups are equally affected, and a two-character
+subject is enough.
 
 The answer Perex returns is the one the specification requires. Inside
-`(?i: … )` the second alternative matches `B` under case folding and captures
-it; the `(?-i: … )` backreference then compares that captured `B` against the
-following `B` case-sensitively and succeeds. Position 80 fails first because the
-`a` there forces `x` to be `a`, which the next position does not repeat.
+`(?i: … )` the second alternative matches under folding and captures; the
+backreference then compares that capture against the following character.
 
-This is a measurement artifact in the oracle, so it is removed by measuring
+Because this is a measurement artifact in the oracle, it is removed by measuring
 again rather than by editing an answer. `reference.mjs` exposes `freshAnswers`
 and `stableDifferences`: every differential check compares as before, then
 recomputes only the disagreeing cases in a fresh process and compares those
@@ -44,4 +48,4 @@ of disappearing. It is not an allow-list, and it binds no expected answer.
 
 Observed with Node v26.5.1 and V8 14.6.202.34-node.24 on darwin arm64. The
 pinned CI version is Node 26.8.1; this has not yet been re-checked there, and no
-upstream report has been filed.
+upstream report has been filed yet.
