@@ -109,6 +109,8 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 
 [Required-text admission](docs/admission.md) also bounds where a match can begin when the condition is one the match itself consumes, so text present only before every possible start stops the search instead of retrying it.
 
+[Skipping a failed start's run](docs/repetition.md) removes the starts inside a leading atom repeat's run once one of them has failed, since each reaches a subset of the positions the first one tried.
+
 [Single-atom repetition merging](docs/repetition.md) removes duplicate partitions when match ordering can be preserved, using the same evaluator and caller-owned storage.
 
 Unicode-sets (`v`) admission currently covers patterns without character

@@ -920,7 +920,18 @@ impl Vm<'_, '_, '_, '_> {
                     } else {
                         self.charge(1)?;
                         self.restore(self.state.start);
-                        if read(&mut self.cursor, self.program.unicode(), false).is_none() {
+                        // A failed start whose leading atom repeat walked a run
+                        // proves every later start inside that run fails too, so
+                        // the search resumes at its end rather than one character
+                        // on. The mark is consumed here and rebuilt per start.
+                        let run_end = core::mem::replace(&mut self.state.run_end, UNSET);
+                        let skipped = run_end != UNSET && run_end > self.cursor.position();
+                        if skipped {
+                            self.state.phase = Phase::Seek {
+                                target: run_end,
+                                after: AfterSeek::Start,
+                            };
+                        } else if read(&mut self.cursor, self.program.unicode(), false).is_none() {
                             self.state.phase = Phase::Finished(false);
                         } else {
                             self.state.start = self.cursor.mark();

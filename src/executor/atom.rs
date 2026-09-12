@@ -82,6 +82,11 @@ impl Vm<'_, '_, '_, '_> {
             };
         } else {
             self.restore(atom.before);
+            // The run this scan just walked ends here. When it is the pattern's
+            // leading repeat, every later start inside it fails with this one.
+            if self.program.run_skip() == Some(self.state.pc) {
+                self.state.run_end = self.cursor.position();
+            }
             self.state.phase = if extend || atom.needed != 0 {
                 Phase::Fail
             } else {

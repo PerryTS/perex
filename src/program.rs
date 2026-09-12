@@ -31,6 +31,9 @@ const LEADING_SCAN: usize = 128;
 pub(crate) const LEADING_ALTERNATION: u32 = 1;
 /// Alternatives the entry alternation may hold. Each needs one stack slot.
 pub(crate) const LEADING_BRANCHES: usize = 8;
+/// Word 9 bits holding the leading atom repeat's instruction, one more than the
+/// index so that zero means the claim is absent.
+pub(crate) const RUN_SKIP: u32 = 0x7fff_ff00;
 pub(crate) const NEGATED: u32 = 1 << 31;
 // A class-table record is either (literal low, literal high), or
 // (PROPERTY | shared property id, complement kind). Both words are relocatable.
@@ -227,6 +230,44 @@ pub(crate) fn leading_pc(words: &[u32], instructions: usize) -> usize {
     pc
 }
 
+/// Whether a failed attempt at one start proves failure at every later start
+/// inside the same run of the pattern's leading atom.
+///
+/// If the pattern begins with an unbounded repeat of a single atom, an attempt
+/// at `p` tries the rest of the pattern at every position the run reaches from
+/// `p`. An attempt at `p + 1` inside that same run tries a subset of those
+/// positions, so it must fail too. A bounded repeat has no such containment —
+/// `[a-z]{1,3}` from `p + 1` reaches a position `p` never tried — and a
+/// backreference can make the rest depend on what the run captured, so both
+/// disable the claim.
+///
+/// Returns the packed instruction of the repeat, or zero.
+pub(crate) fn derive_run_skip(words: &[u32], p: Program<'_>) -> u32 {
+    let entry = leading_pc(words, p.instructions());
+    if entry >= p.instructions() {
+        return 0;
+    }
+    let [op, id, _] = p.instruction(entry);
+    if op != ATOM_REPEAT || id as usize >= words[6] as usize {
+        return 0;
+    }
+    let record = p.repeat(id as usize);
+    // Tagged as a single-atom repeat, with no maximum.
+    if record[7] != 1 || record[2] & 1 == 0 {
+        return 0;
+    }
+    for pc in 0..p.instructions() {
+        if matches!(
+            p.instruction(pc)[0],
+            BACKREF | BACKREF_I | NAMED_BACKREF | NAMED_BACKREF_I
+        ) {
+            return 0;
+        }
+    }
+    let packed = (entry as u32 + 1) << 8;
+    if packed & !RUN_SKIP != 0 { 0 } else { packed }
+}
+
 /// A validated immutable view. All persistent data is in `words`, with no
 /// pointers, reference counts, source borrow, or separate owning allocation.
 /// Release this borrow before moving the storage and validate its new borrow.
@@ -289,7 +330,14 @@ impl<'a> Program<'a> {
         budget
             .charge(LEADING_SCAN / 8)
             .map_err(|_| ProgramError::WorkLimit)?;
-        if words[9] & !(LEADING_MASK | ADMISSION_FORWARD) != 0
+        budget
+            .charge(p.instructions() / 8 + 1)
+            .map_err(|_| ProgramError::WorkLimit)?;
+        // Word 9's bits are now fully assigned: the leading claim in its low
+        // byte, the run-skip instruction in its middle bits and the forward
+        // admission claim in its top bit. There are no reserved bits to reject,
+        // so every field is checked on its own.
+        if words[9] & RUN_SKIP != derive_run_skip(words, p)
             || words[9] & LEADING_MASK != derive_leading(words, p.instructions())
             || (words[9] & ADMISSION_FORWARD != 0 && words[2] & ADMISSION == 0)
         {
@@ -483,6 +531,14 @@ impl<'a> Program<'a> {
         match self.words[8] >> 24 {
             0 => None,
             packed => Some((packed - 1) as usize),
+        }
+    }
+    /// Instruction of the leading atom repeat whose run a failed start lets the
+    /// search skip. See [`derive_run_skip`].
+    pub(crate) fn run_skip(self) -> Option<usize> {
+        match (self.words[9] & RUN_SKIP) >> 8 {
+            0 => None,
+            packed => Some(packed as usize - 1),
         }
     }
     /// Instruction holding the first character of [`Program::leading`].

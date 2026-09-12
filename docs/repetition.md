@@ -124,3 +124,51 @@ probe consume the operation budget. Each chunk uses at most 256 work units,
 and a two-unit movement/probe may overshoot a requested quantum by one unit.
 Pauses preserve existing offset state only. Captures, assertions and other
 continuations retain the ordinary retry path.
+
+## Skipping a failed start's run
+
+A pattern that begins with an unbounded repeat of one atom retries every start
+inside the run that repeat walks. `/[a-z]+[0-9]+/` against `value abc123 end`
+fails at `value`, then tries `alue`, `lue`, `ue` and `e`, each of which walks to
+the same place and fails for the same reason.
+
+None of those can succeed. An attempt at `p` tries the rest of the pattern at
+every position the run reaches from `p`. An attempt at `p + 1` inside that same
+run reaches a subset of those positions, so if all of them failed, it fails too.
+The search therefore resumes at the run's end rather than at the next character.
+
+Two shapes break the containment and disable the claim:
+
+- **A bounded repeat.** From `p`, `[a-z]{1,3}` reaches `p+1` through `p+3`; from
+  `p+1` it reaches `p+2` through `p+4`, and `p+4` was never tried.
+- **A backreference.** The rest of the pattern can then depend on what the run
+  captured, which differs between starts, so failure does not carry over.
+
+The compiler claims this when the entry instruction is a tagged atom repeat with
+no maximum and the program holds no backreference of any kind. Word 9's middle
+bits carry that instruction, so no program word is added; like the other claims
+in that word it is re-derived during validation rather than trusted.
+
+The evaluator records where the leading repeat's scan stopped — the scan already
+walks to the run's end, so the position costs nothing to obtain — and the next
+start seeks there. One offset in the execution state carries it, and it is
+consumed when used so a later start cannot reuse a stale run.
+
+### Checks and measurement
+
+`tools/check-run-skip.mjs` compares complete answers against Node for 28,080
+cases: thirty patterns over 156 subjects placing a match inside a run, at its
+end, immediately past it, in a later run and nowhere at all, with runs of every
+small length, including the bounded and backreferencing shapes that must keep
+every start. It passes unchanged under one- and seventeen-unit resumption with
+relocation and scratch growth.
+
+This removes starts rather than making a start cheaper, so a wrong claim would
+hide a real match; that is why the check is built around where a match sits
+relative to a run.
+
+Measured on the authored cases, `/[a-z]+[0-9]+/` against a sixteen-character
+subject fell from 187 charged work units to 82 and from about 1.34 µs to about
+0.61 µs, and `/(\w+)@(\w+)\.com/` from 266 units to 159 and about 1.18 µs to
+about 0.74 µs. The work reduction is deterministic and independent of machine
+load.

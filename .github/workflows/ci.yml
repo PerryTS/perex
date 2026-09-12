@@ -51,6 +51,10 @@ jobs:
         run: node tools/check-legacy.mjs target/release/examples/engine_probe
       - name: Required-text admission on long borrowed subjects
         run: node tools/check-admission.mjs target/release/examples/engine_probe
+      - name: Skipping a failed start's atom run
+        run: |
+          node tools/check-run-skip.mjs target/release/examples/engine_probe artifacts/run-skip
+          node tools/check-run-skip.mjs target/release/examples/engine_probe artifacts/run-skip-q1 --quantum 1 --relocate --grow
       - name: Nested repetition ordering and complete captures
         run: node tools/check-repetition.mjs target/release/examples/engine_probe
       - name: Lexical flags, nested scopes and complete captures
