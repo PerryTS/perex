@@ -96,9 +96,14 @@ around, split across and repeated through the subject, at filler sizes that
 straddle the admission threshold and the scan's chunk boundary, in ordinary and
 one-/seventeen-work-unit advances with relocation and scratch growth.
 
-On one authored case — `/a+END/` against `END` followed by 4,000 `a` — the
-search fell from about 118 ms to about 1.7 µs, because the previous behaviour
-retried every start through the run. Measured beside it, `regress` took about
-24 ms and Rust `regex` about 7 µs on the same case. This removes one
-arrangement; it gives arbitrary backtracking expressions no general
-linear-time guarantee, and patterns without a literal condition are unchanged.
+On one authored case — `/a+END/` against `END` followed by 4,000 `a` — charged
+work fell from 24,046,265 units to 4,270, a factor of 5,631. That figure is
+deterministic and independent of machine load. Alternating the identical driver
+between both binaries showed a larger wall-clock ratio, between 110,401x and
+162,210x over three rounds, because the retried starts also pushed frames and
+undo entries whose real cost exceeds their charge. Measured beside it on the
+same loaded machine, `regress` took about 24 ms and Rust `regex` about 7 us.
+
+This removes one arrangement. It gives arbitrary backtracking expressions no
+general linear-time guarantee, and patterns without a literal condition, or
+with a nullable root that disables the start descriptor, are unchanged.

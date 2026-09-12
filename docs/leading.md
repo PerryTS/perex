@@ -23,14 +23,17 @@ because word 7 already carries that claim.
 ASCII bytes cannot occur inside a multibyte UTF-8/WTF-8 encoding, so a run of
 ASCII characters is also a claim about original bytes.
 
-Program format 11 has ten header words. Word 9 holds the run's character count,
-or zero when disabled. The word costs four used program bytes.
+Program format 12 has ten header words. Word 9's low byte holds the run's
+character count, or zero when disabled; its top bit is the separate
+forward-admission claim described in [admission](admission.md). The word costs
+four used program bytes, and the two claims share it rather than adding another.
 
-Unlike the word 7 and 8 descriptors, word 9 is **re-derived** from the
+Unlike the word 7 and 8 descriptors, the run count is **re-derived** from the
 instructions by `Program::from_words` and rejected when it disagrees. A
-format-valid edited claim is therefore not executable, and no program can
+format-valid edited count is therefore not executable, and no program can
 disagree with its own instructions here. The derivation inspects a bounded
-number of entry instructions and charges the work budget.
+number of entry instructions and charges the work budget. The validator also
+rejects any reserved bit and a forward claim without its condition.
 
 ## Execution, lifetime and work
 
@@ -61,13 +64,21 @@ UTF-16 storage. `tools/check-candidate.mjs` compares complete answers against
 Node in ordinary and one-/seventeen-work-unit advances with relocation and
 scratch growth, which exercises this path together with the word 7 descriptor.
 
-Measured against the previous revision on one 256 KiB ASCII subject with a
-six-character pattern, a search that previously entered a trial at every copy of
-the first character fell from about 225 µs to about 57 µs, and the equivalent
-long miss from about 226 µs to about 69 µs. A scan with no admitted position at
-all was already about 24 µs, so a remaining gap to that floor is the per-position
-comparison rather than the byte scan. These are single-case standalone figures
-on one machine; they are not a whole-application result and do not establish a
-win for patterns without a leading run. Cases whose first characters usually do
-continue into the run pay the comparison without removing a trial, and must stay
-visible in comparisons.
+Measured against the previous revision by alternating the identical driver
+between both binaries on one 256 KiB ASCII subject with a six-character
+pattern, so the same machine load applies to both. The searching case was
+2.75x faster at the median of six rounds (range 2.17x to 6.15x), and the
+equivalent long miss about 3.6x over three rounds (3.38x to 4.86x). The host
+machine carried a load average above 20 throughout, so absolute times from it
+are not reportable; the alternating ratio is.
+
+Charged work is essentially unchanged (305,817 to 305,823 units on the
+searching case), because rejecting a candidate costs roughly what the trial it
+avoids was charged. The saving is in real cycles: a byte comparison replaces
+register initialization, a trial and instruction dispatch. Work accounting
+therefore cannot show this improvement, and neither figure alone describes it.
+
+These are single-case standalone figures; they are not a whole-application
+result and do not establish a win for patterns without a leading run. Cases
+whose first characters usually do continue into the run pay the comparison
+without removing a trial, and must stay visible in comparisons.
