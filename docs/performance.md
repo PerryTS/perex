@@ -179,6 +179,15 @@ as one that confirmed it, and because each of these looked obviously right.
   again after the step was enlarged sixteenfold and the first-byte filter
   restored. Reading an instruction per character is not the cost that the
   arithmetic suggested it was.
+- **Checking a match's registers in the round that produced it.** That check
+  is its own phase, and ablating it showed it costs 3.3 to 4.1 ns of every
+  successful search — seven to eight percent of the shortest ones — almost all
+  of it the round trip rather than the two loads it performs. Running it where
+  the trial ends recovered about a nanosecond on those, and cost five to ten
+  percent on the two worst cases, consistently across three alternating passes.
+  Testing the phase after every trial return perturbs the hottest path in the
+  engine by more than a whole round trip is worth. The round trip is real and
+  still not where the gap is.
 - **Lowering the length at which a repeated class uses block comparisons.**
   The 256-byte threshold was chosen when the block form ended with a scalar
   pass over all thirty-two lanes to find the one it stopped at. That pass is now
