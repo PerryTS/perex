@@ -421,9 +421,26 @@ impl Vm<'_, '_, '_, '_> {
         {
             return Err(ExecError::InvalidProgram);
         }
-        let [next, value, _] = self.program.instruction(r[4] as usize);
+        let [next, value, third] = self.program.instruction(r[4] as usize);
         if matches!(next, CHAR | CHAR_I) {
             return self.retreat_literal(atom.minimum_end, value, next == CHAR_I, available);
+        }
+        // The continuation's own first consumed character is just as much a
+        // necessary condition as a literal's, so an endpoint it cannot start at
+        // needs no retry frame either. A repeat that can match nothing consumes
+        // no character and so states no condition.
+        let probe = if next == ATOM_REPEAT {
+            let inner = self.program.repeat(value as usize);
+            let body = r[4] as usize + 3;
+            (inner[0] >= 1 && body < self.program.instructions())
+                .then(|| self.program.instruction(body))
+        } else {
+            Some([next, value, third])
+        };
+        if let Some([op, a, b]) = probe
+            && self.inline_atom(op, b)
+        {
+            return self.retreat_probe(atom.minimum_end, op, a, b, available);
         }
         self.charge(1)?;
         // Every position between this endpoint and the minimum was already
@@ -444,6 +461,50 @@ impl Vm<'_, '_, '_, '_> {
         }
         self.state.phase = Phase::AtomCommit;
         Ok(())
+    }
+
+    /// The same retreat as `retreat_literal`, for a continuation whose first
+    /// consumed character is a class or `.` rather than a literal.
+    #[inline(never)]
+    fn retreat_probe(
+        &mut self,
+        minimum_end: usize,
+        op: u32,
+        a: u32,
+        b: u32,
+        available: usize,
+    ) -> Result<(), ExecError> {
+        let initial = self.budget.remaining();
+        let limit = available.min(256);
+        loop {
+            self.charge(1)?;
+            read(
+                &mut self.cursor,
+                self.program.unicode(),
+                !self.state.reverse,
+            )
+            .ok_or(ExecError::InvalidProgram)?;
+            let position = self.cursor.position();
+            if if self.state.reverse {
+                position > minimum_end
+            } else {
+                position < minimum_end
+            } {
+                return Err(ExecError::InvalidProgram);
+            }
+            let mut ahead = self.cursor;
+            let possible = match read(&mut ahead, self.program.unicode(), self.state.reverse) {
+                Some(c) => self.atom_holds(op, a, b, c)?,
+                None => false,
+            };
+            if possible || position == minimum_end {
+                self.state.phase = Phase::AtomCommit;
+                return Ok(());
+            }
+            if initial - self.budget.remaining() >= limit {
+                return Ok(());
+            }
+        }
     }
 
     // The immediate continuation must consume this literal before it can change
