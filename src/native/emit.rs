@@ -1,24 +1,28 @@
-//! Generating a whole search for a straight-line program, in the instructions
-//! [`super::a64`] encodes. See `docs/compilation.md`.
+//! Generating a whole search, in the instructions [`super::a64`] encodes. See
+//! `docs/compilation.md`.
 //!
-//! A straight-line program consumes a fixed sequence of characters and cannot
-//! fail part-way and try something else at the same start: no repeat, no
-//! branch, no assertion. That is the subset worth doing first, because it needs
-//! none of the backtracking machinery and already covers most of the cases
-//! measured behind V8.
+//! The subset is a sequence of atoms, some of them greedily repeated, with
+//! capture bookkeeping around them: no alternation, no backreference, no
+//! assertion needing a sub-search. That is what the cases measured behind V8
+//! are made of, and it needs only the retreat form of backtracking rather than
+//! the general frame and undo machinery the interpreter carries.
 //!
 //! The generated code owns the whole search, not one attempt. Compiling only
 //! the attempt would leave the per-start phase machinery in place, and
-//! `docs/performance.md` measures that to be most of what the short cases cost.
+//! `docs/performance.md` measures that to be most of what a short case costs.
+//!
+//! It assumes wholly ASCII subject storage, which is the caller's to check, and
+//! that registers it does not write have already been cleared.
 #![allow(dead_code)]
 
-use super::a64::{Assembler, Cond, EncodeError, Patch, Reg, X0, X1, X2, X3};
+use super::a64::{Assembler, Cond, EncodeError, Label, Patch, Reg, X0, X1, X2, X3};
 use crate::program::{
-    ANY, ANY_S, CHAR, CHAR_I, CLASS, MATCH, NEGATED, PROPERTY, Program, SAVE, Y, consuming,
+    ANY, ANY_S, ATOM_REPEAT, CHAR, CHAR_I, CLASS, MATCH, NEGATED, PROPERTY, Program, SAVE, Y,
+    consuming,
 };
 
-/// Where the arguments arrive, and what the generated code keeps in each
-/// register. The first six follow the C calling convention this targets.
+/// Where the arguments arrive. The first four follow the C calling convention
+/// this targets; the rest are scratch it may use freely.
 const SUBJECT: Reg = X0;
 const LENGTH: Reg = X1;
 const START: Reg = X2;
@@ -27,10 +31,23 @@ const REGISTERS: Reg = X3;
 const AT: Reg = Reg(6);
 /// The byte just loaded from the subject.
 const BYTE: Reg = Reg(7);
+/// Scratch within a single step.
+const TMP: Reg = Reg(8);
+const TMP2: Reg = Reg(15);
 
-/// Failure branches waiting for the "try the next start" label. A straight-line
-/// program emits a few per character, and a program with more characters than
-/// this is not one worth compiling.
+/// Open repeats keep two registers each: where the run currently ends, and the
+/// earliest end its minimum allows. Three is what X9 through X14 hold, and
+/// three sequential repeats is more than the measured cases use.
+const MAX_REPEATS: usize = 3;
+
+fn repeat_end(depth: usize) -> Reg {
+    Reg(9 + depth as u8 * 2)
+}
+fn repeat_floor(depth: usize) -> Reg {
+    Reg(10 + depth as u8 * 2)
+}
+
+/// Branches waiting for a label that has not been emitted yet.
 const MAX_PATCHES: usize = 512;
 
 /// Ranges one class may hold and still have code generated for it.
@@ -43,7 +60,7 @@ pub(crate) enum EmitError {
     /// The program is outside the subset this generator handles. The
     /// interpreter runs it, as it runs everything.
     Unsupported,
-    /// The program needed more failure branches than the generator carries.
+    /// The program needed more of something than the generator carries.
     TooLarge,
     /// The instructions could not be encoded.
     Encode(EncodeError),
@@ -55,188 +72,357 @@ impl From<EncodeError> for EmitError {
     }
 }
 
-/// Record a conditional branch that gives up on this start position.
-fn fail_if(
-    asm: &mut Assembler<'_>,
-    cond: Cond,
-    patches: &mut [Patch; MAX_PATCHES],
-    waiting: &mut usize,
-) -> Result<(), EmitError> {
-    if *waiting == MAX_PATCHES {
-        return Err(EmitError::TooLarge);
-    }
-    patches[*waiting] = asm.b_cond_forward(cond);
-    *waiting += 1;
-    Ok(())
+/// Branches that all go to one place, collected until that place is known.
+struct Patches {
+    list: [Patch; MAX_PATCHES],
+    count: usize,
 }
 
-/// The same, unconditionally.
-fn fail_here(
-    asm: &mut Assembler<'_>,
-    patches: &mut [Patch; MAX_PATCHES],
-    waiting: &mut usize,
-) -> Result<(), EmitError> {
-    if *waiting == MAX_PATCHES {
-        return Err(EmitError::TooLarge);
+impl Patches {
+    fn new() -> Self {
+        Self {
+            list: [Patch::default(); MAX_PATCHES],
+            count: 0,
+        }
     }
-    patches[*waiting] = asm.b_forward();
-    *waiting += 1;
-    Ok(())
+    fn push(&mut self, patch: Patch) -> Result<(), EmitError> {
+        if self.count == MAX_PATCHES {
+            return Err(EmitError::TooLarge);
+        }
+        self.list[self.count] = patch;
+        self.count += 1;
+        Ok(())
+    }
+    fn take(&mut self, other: &mut Patches) -> Result<(), EmitError> {
+        for index in 0..other.count {
+            self.push(other.list[index])?;
+        }
+        Ok(())
+    }
+    /// Point every branch collected here at the next instruction.
+    fn bind(&mut self, asm: &mut Assembler<'_>) {
+        for patch in &self.list[..self.count] {
+            asm.bind(*patch);
+        }
+        self.count = 0;
+    }
 }
 
-/// Whether this program consumes a fixed sequence of characters, with capture
-/// bookkeeping around them and nothing else.
-pub(crate) fn straight_line(program: Program<'_>) -> bool {
+/// An open repeat: where to re-run its continuation from, and the branches that
+/// will make it give a character back.
+struct Repeat {
+    retry: Label,
+    failures: Patches,
+}
+
+/// Whether this program is a sequence of atoms and greedy repeats of atoms,
+/// which is what [`emit_search`] generates.
+pub(crate) fn supported(program: Program<'_>) -> bool {
     // A sticky search tries only its requested position, which is a different
     // search from the one generated here.
     if program.words()[2] & Y != 0 {
         return false;
     }
-    (0..program.instructions()).all(|pc| {
+    let mut pc = 0;
+    let mut depth = 0;
+    loop {
+        if pc >= program.instructions() {
+            return false;
+        }
         let [op, a, b] = program.instruction(pc);
         match op {
-            MATCH | SAVE => true,
-            CHAR | CHAR_I => a < 128,
-            ANY | ANY_S => true,
-            // A folded class is left to the interpreter for now: over ASCII it
-            // is the range and its case-swapped counterpart, which is arithmetic
-            // this generator does not do yet. `Program::compilable` admits it,
-            // because the tier will; this predicate is what the generator has
-            // actually been written for, and the two are allowed to differ in
-            // that direction only.
-            CLASS => {
-                let count = b & !NEGATED;
-                count > 0
-                    && (a..a + count).all(|i| {
-                        let [lo, hi] = program.range(i as usize);
-                        lo & PROPERTY == 0 && hi < 128
-                    })
+            MATCH => return true,
+            SAVE => pc += 1,
+            ATOM_REPEAT => {
+                let record = program.repeat(a as usize);
+                // A lazy repeat takes its continuation before its body, which
+                // is a different shape from the retreat emitted below.
+                if record[2] & 2 != 0 || depth == MAX_REPEATS {
+                    return false;
+                }
+                let body = pc + 3;
+                if body >= program.instructions() {
+                    return false;
+                }
+                let [body_op, body_a, body_b] = program.instruction(body);
+                if !atom(program, body_op, body_a, body_b) {
+                    return false;
+                }
+                // A bound past an immediate's reach is rarer than it is worth
+                // encoding around.
+                if record[0] >= 1 << 12 || (record[2] & 1 == 0 && record[1] >= 1 << 12) {
+                    return false;
+                }
+                depth += 1;
+                pc = record[4] as usize;
             }
-            _ => false,
+            _ if atom(program, op, a, b) => pc += 1,
+            _ => return false,
         }
-    })
+    }
+}
+
+/// Whether one instruction consumes a character this generator can test.
+fn atom(program: Program<'_>, op: u32, a: u32, b: u32) -> bool {
+    match op {
+        CHAR | CHAR_I => a < 128,
+        ANY | ANY_S => true,
+        CLASS => {
+            let count = b & !NEGATED;
+            count > 0
+                && count as usize <= MAX_RANGES
+                && (a..a + count).all(|i| {
+                    let [lo, hi] = program.range(i as usize);
+                    lo & PROPERTY == 0 && hi < 128
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Characters every match must still consume from `pc` onwards. A repeat
+/// contributes its minimum, since that is all it is obliged to take.
+fn least_from(program: Program<'_>, mut pc: usize) -> usize {
+    let mut least = 0;
+    while pc < program.instructions() {
+        let [op, a, _] = program.instruction(pc);
+        match op {
+            MATCH => break,
+            ATOM_REPEAT => {
+                let record = program.repeat(a as usize);
+                least += record[0] as usize;
+                pc = record[4] as usize;
+            }
+            other => {
+                least += usize::from(consuming(other));
+                pc += 1;
+            }
+        }
+    }
+    least
+}
+
+/// Test the byte at `AT` against one atom, branching to `fail` when it does not
+/// hold. Does not advance; the caller decides whether a match consumes.
+fn emit_atom(
+    asm: &mut Assembler<'_>,
+    program: Program<'_>,
+    op: u32,
+    a: u32,
+    b: u32,
+    fail: &mut Patches,
+) -> Result<(), EmitError> {
+    match op {
+        // Anything at all, so nothing to test.
+        ANY_S => {}
+        CHAR | CHAR_I => {
+            asm.ldrb(BYTE, SUBJECT, AT);
+            let byte = a as u8;
+            if op == CHAR_I && byte.is_ascii_alphabetic() {
+                // Either case, which over this storage is the whole of what
+                // folding means: the two non-ASCII characters that fold into
+                // ASCII cannot occur in it.
+                asm.cmp_imm32(BYTE, u32::from(byte.to_ascii_lowercase()));
+                let matched = asm.b_cond_forward(Cond::Eq);
+                asm.cmp_imm32(BYTE, u32::from(byte.to_ascii_uppercase()));
+                fail.push(asm.b_cond_forward(Cond::Ne))?;
+                asm.bind(matched);
+            } else {
+                asm.cmp_imm32(BYTE, u32::from(byte));
+                fail.push(asm.b_cond_forward(Cond::Ne))?;
+            }
+        }
+        // Anything but a line terminator. On ASCII storage only the two
+        // single-byte terminators can occur; U+2028 and U+2029 are not
+        // representable in it.
+        ANY => {
+            asm.ldrb(BYTE, SUBJECT, AT);
+            asm.cmp_imm32(BYTE, u32::from(b'\n'));
+            fail.push(asm.b_cond_forward(Cond::Eq))?;
+            asm.cmp_imm32(BYTE, u32::from(b'\r'));
+            fail.push(asm.b_cond_forward(Cond::Eq))?;
+        }
+        CLASS => {
+            asm.ldrb(BYTE, SUBJECT, AT);
+            let count = b & !NEGATED;
+            let negated = b & NEGATED != 0;
+            // Each range jumps out when the byte is inside it. Falling past all
+            // of them means the byte is inside none.
+            let mut inside = [Patch::default(); MAX_RANGES];
+            for (slot, index) in inside.iter_mut().zip(a..a + count) {
+                let [lo, hi] = program.range(index as usize);
+                asm.cmp_imm32(BYTE, lo);
+                let below = asm.b_cond_forward(Cond::Lo);
+                asm.cmp_imm32(BYTE, hi);
+                *slot = asm.b_cond_forward(Cond::Ls);
+                asm.bind(below);
+            }
+            if negated {
+                let accepted = asm.b_forward();
+                for patch in &inside[..count as usize] {
+                    asm.bind(*patch);
+                }
+                fail.push(asm.b_forward())?;
+                asm.bind(accepted);
+            } else {
+                fail.push(asm.b_forward())?;
+                for patch in &inside[..count as usize] {
+                    asm.bind(*patch);
+                }
+            }
+        }
+        _ => return Err(EmitError::Unsupported),
+    }
+    Ok(())
 }
 
 /// Emit a whole search for `program` into `code`, returning its byte length.
 ///
-/// The generated code takes the subject, its length, the start position, the
-/// register array and its count, and returns the position a match began at or
-/// `-1`. It writes only into the registers it was given, reads only within the
-/// length, and calls nothing.
-///
-/// Registers are not cleared here: every `SAVE` a straight-line program holds
-/// runs on the path that reports a match, so each one it names is written. The
-/// caller clears any others, exactly as it does for the interpreter.
+/// The generated code takes the subject, its length, the start position and the
+/// register array, and returns the position a match began at or `-1`. It writes
+/// only into the registers it was given, reads only within the length, and
+/// calls nothing.
 pub(crate) fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
-    if !straight_line(program) {
+    if !supported(program) {
         return Err(EmitError::Unsupported);
     }
-    // Every instruction that consumes a character, not just the literal ones:
-    // this count is what proves each load below is inside the subject.
-    let consumed = (0..program.instructions())
-        .filter(|&pc| consuming(program.instruction(pc)[0]))
-        .count();
-    if consumed >= 1 << 12 {
+    // What every match must consume, which is what proves each load below is
+    // inside the subject.
+    let least = least_from(program, 0);
+    if least >= 1 << 12 {
         return Err(EmitError::TooLarge);
     }
 
     let mut asm = Assembler::new(code);
-    let mut patches = [Patch::default(); MAX_PATCHES];
-    let mut waiting = 0;
+    // Failures with no repeat left to retreat give up on this start.
+    let mut next_start = Patches::new();
+    let mut repeats: [Option<Repeat>; MAX_REPEATS] = [None, None, None];
+    let mut depth = 0usize;
 
     let outer = asm.here();
-    // No room for the characters this must consume means no room at any later
+    // No room for what every match must consume means no room at any later
     // start either, so the same test ends the search.
-    asm.add_imm(AT, START, consumed as u32);
+    asm.add_imm(AT, START, least as u32);
     asm.cmp(AT, LENGTH);
     let exhausted = asm.b_cond_forward(Cond::Hi);
-
     asm.mov(AT, START);
-    for pc in 0..program.instructions() {
+
+    let mut pc = 0;
+    loop {
         let [op, a, b] = program.instruction(pc);
         match op {
-            SAVE => asm.str_index(AT, REGISTERS, a),
-            CHAR | CHAR_I => {
-                asm.ldrb(BYTE, SUBJECT, AT);
-                let byte = a as u8;
-                if op == CHAR_I && byte.is_ascii_alphabetic() {
-                    // Either case, which over this storage is the whole of what
-                    // folding means: the two non-ASCII characters that fold into
-                    // ASCII cannot occur in it.
-                    asm.cmp_imm32(BYTE, u32::from(byte.to_ascii_lowercase()));
-                    let matched = asm.b_cond_forward(Cond::Eq);
-                    asm.cmp_imm32(BYTE, u32::from(byte.to_ascii_uppercase()));
-                    fail_if(&mut asm, Cond::Ne, &mut patches, &mut waiting)?;
-                    asm.bind(matched);
-                } else {
-                    asm.cmp_imm32(BYTE, u32::from(byte));
-                    fail_if(&mut asm, Cond::Ne, &mut patches, &mut waiting)?;
-                }
-                asm.add_imm(AT, AT, 1);
-            }
-            // Anything, including a line terminator.
-            ANY_S => asm.add_imm(AT, AT, 1),
-            // Anything but a line terminator. On ASCII storage only the two
-            // single-byte terminators can occur; U+2028 and U+2029 are not
-            // representable in it.
-            ANY => {
-                asm.ldrb(BYTE, SUBJECT, AT);
-                asm.cmp_imm32(BYTE, u32::from(b'\n'));
-                fail_if(&mut asm, Cond::Eq, &mut patches, &mut waiting)?;
-                asm.cmp_imm32(BYTE, u32::from(b'\r'));
-                fail_if(&mut asm, Cond::Eq, &mut patches, &mut waiting)?;
-                asm.add_imm(AT, AT, 1);
-            }
-            CLASS => {
-                asm.ldrb(BYTE, SUBJECT, AT);
-                let count = b & !NEGATED;
-                let negated = b & NEGATED != 0;
-                // Each range jumps out when the byte is inside it. Falling
-                // past all of them means the byte is inside none.
-                let mut inside = [Patch::default(); MAX_RANGES];
-                if count as usize > MAX_RANGES {
-                    return Err(EmitError::TooLarge);
-                }
-                for (slot, index) in inside.iter_mut().zip(a..a + count) {
-                    let [lo, hi] = program.range(index as usize);
-                    asm.cmp_imm32(BYTE, lo);
-                    let below = asm.b_cond_forward(Cond::Lo);
-                    asm.cmp_imm32(BYTE, hi);
-                    *slot = asm.b_cond_forward(Cond::Ls);
-                    asm.bind(below);
-                }
-                if negated {
-                    // Inside none is what a negated class wants.
-                    let accepted = asm.b_forward();
-                    for patch in &inside[..count as usize] {
-                        asm.bind(*patch);
-                    }
-                    fail_here(&mut asm, &mut patches, &mut waiting)?;
-                    asm.bind(accepted);
-                } else {
-                    fail_here(&mut asm, &mut patches, &mut waiting)?;
-                    for patch in &inside[..count as usize] {
-                        asm.bind(*patch);
-                    }
-                }
-                asm.add_imm(AT, AT, 1);
+            SAVE => {
+                asm.str_index(AT, REGISTERS, a);
+                pc += 1;
             }
             MATCH => {
                 asm.mov(X0, START);
                 asm.ret();
+                break;
             }
-            // `straight_line` admitted every instruction, so nothing else can
-            // appear; treating it as unsupported rather than skipping it keeps
-            // the two in step if one of them changes.
-            _ => return Err(EmitError::Unsupported),
+            ATOM_REPEAT => {
+                let record = program.repeat(a as usize);
+                let (fewest, most, infinite) = (record[0], record[1], record[2] & 1 != 0);
+                let [body_op, body_a, body_b] = program.instruction(pc + 3);
+                let end = repeat_end(depth);
+                let floor = repeat_floor(depth);
+
+                // The earliest end the minimum allows, and the latest anything
+                // allows. Consuming past what the rest of the pattern still
+                // needs could only be given back again, and stopping there is
+                // also what keeps every load in the continuation inside the
+                // subject: the upfront bound covers the minimum, and a greedy
+                // repeat can take a subject to its end.
+                asm.add_imm(floor, AT, fewest);
+                let after = least_from(program, record[4] as usize);
+                if after >= 1 << 12 {
+                    return Err(EmitError::TooLarge);
+                }
+                asm.sub_imm(TMP, LENGTH, after as u32);
+                if !infinite {
+                    asm.add_imm(TMP2, AT, most);
+                    asm.cmp(TMP2, TMP);
+                    let room = asm.b_cond_forward(Cond::Hs);
+                    asm.mov(TMP, TMP2);
+                    asm.bind(room);
+                }
+
+                // Consume greedily up to that limit.
+                let scan = asm.here();
+                let mut stop = Patches::new();
+                asm.cmp(AT, TMP);
+                stop.push(asm.b_cond_forward(Cond::Hs))?;
+                emit_atom(&mut asm, program, body_op, body_a, body_b, &mut stop)?;
+                asm.add_imm(AT, AT, 1);
+                asm.b_back(scan);
+                stop.bind(&mut asm);
+
+                // Short of the minimum is failure, and retreating cannot help.
+                asm.mov(end, AT);
+                asm.cmp(end, floor);
+                let short = asm.b_cond_forward(Cond::Lo);
+                match depth {
+                    0 => next_start.push(short)?,
+                    _ => repeats[depth - 1]
+                        .as_mut()
+                        .expect("an open repeat")
+                        .failures
+                        .push(short)?,
+                }
+
+                // Everything after this is the continuation, re-entered from
+                // here each time this repeat gives a character back.
+                let retry = asm.here();
+                asm.mov(AT, end);
+                repeats[depth] = Some(Repeat {
+                    retry,
+                    failures: Patches::new(),
+                });
+                depth += 1;
+                pc = record[4] as usize;
+            }
+            _ => {
+                let mut fail = Patches::new();
+                emit_atom(&mut asm, program, op, a, b, &mut fail)?;
+                asm.add_imm(AT, AT, 1);
+                // A consuming atom that fails retreats the innermost repeat, or
+                // gives up on this start when there is none.
+                match depth {
+                    0 => next_start.take(&mut fail)?,
+                    _ => repeats[depth - 1]
+                        .as_mut()
+                        .expect("an open repeat")
+                        .failures
+                        .take(&mut fail)?,
+                }
+                pc += 1;
+            }
         }
     }
 
-    // A character did not match. The next start is one position on, and the
-    // bound above is what ends the loop.
-    for patch in &patches[..waiting] {
-        asm.bind(*patch);
+    // Retreat code, innermost first: give a character back and re-run the
+    // continuation, until the minimum stops it and the failure goes outward.
+    while depth > 0 {
+        depth -= 1;
+        let mut repeat = repeats[depth].take().expect("an open repeat");
+        repeat.failures.bind(&mut asm);
+        let end = repeat_end(depth);
+        let floor = repeat_floor(depth);
+        asm.cmp(end, floor);
+        let spent = asm.b_cond_forward(Cond::Ls);
+        asm.sub_imm(end, end, 1);
+        asm.b_back(repeat.retry);
+        match depth {
+            0 => next_start.push(spent)?,
+            _ => repeats[depth - 1]
+                .as_mut()
+                .expect("an open repeat")
+                .failures
+                .push(spent)?,
+        }
     }
+
+    next_start.bind(&mut asm);
     asm.add_imm(START, START, 1);
     asm.b_back(outer);
 
@@ -453,6 +639,24 @@ mod tests {
             ("a.", "s"),
             ("([a-z])(.)", ""),
             ("x[^\n]y", ""),
+            ("a+", ""),
+            ("a*", ""),
+            ("a?", ""),
+            ("a{2}", ""),
+            ("a{2,3}", ""),
+            ("[a-z]+", ""),
+            ("[a-z]+[0-9]+", ""),
+            ("[a-z]+x", ""),
+            ("a+b", ""),
+            ("a*b", ""),
+            (".+z", ""),
+            ("[0-9]*[a-z]", ""),
+            ("(a+)(b+)", ""),
+            ("([a-z]+)@([a-z]+)", ""),
+            ("x[a-z]*y", ""),
+            ("[^0-9]+9", ""),
+            ("a+a", ""),
+            ("a{1,2}b", ""),
         ];
         let subjects = [
             "",
@@ -479,6 +683,24 @@ mod tests {
             "xy",
             "x\ny",
             "abcdef",
+            "aaa",
+            "aaab",
+            "b",
+            "ab123",
+            "abc123xyz",
+            "xaaay",
+            "xy",
+            "user@example",
+            "9",
+            "a9",
+            "zzz9",
+            "aab",
+            "aaaaab",
+            "0a",
+            "0123a",
+            "az",
+            "aaz",
+            "  z",
         ];
         for (pattern, flags) in patterns {
             for subject in subjects {
@@ -522,7 +744,7 @@ mod tests {
     fn refuses_what_it_cannot_generate() {
         let mut code = [0u8; 4096];
         for (pattern, flags) in [
-            ("a+", ""),
+            ("a+?", ""),
             ("a|b", ""),
             ("[a-z]", "i"),
             ("a", "y"),
