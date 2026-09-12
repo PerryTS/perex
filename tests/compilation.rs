@@ -78,19 +78,41 @@ fn refuses_a_repeat_that_resets_captures() {
 }
 
 #[test]
+fn admits_folding_anchors_and_a_literal_lookbehind() {
+    // A folded ASCII comparison is exact on the storage this tier requires, the
+    // anchors are position tests, a word boundary is two membership tests, and a
+    // lookbehind whose body is a run of characters is a comparison against the
+    // bytes before the position -- which the executor already makes over bytes.
+    for (pattern, flags) in [
+        ("NeEdLe", "i"),
+        ("[a-z]", "i"),
+        ("^a", ""),
+        ("a$", ""),
+        ("^a$", "m"),
+        ("\\ba", ""),
+        ("(?<=abc)d", ""),
+        ("(?<!abc)d", ""),
+    ] {
+        assert!(
+            compilable(pattern, flags),
+            "/{pattern}/{flags} should be admitted"
+        );
+    }
+}
+
+#[test]
 fn refuses_what_the_subset_excludes() {
     for (pattern, flags) in [
-        ("a", "i"),                // folding
-        ("[a-z]", "i"),            // folded class
-        ("a|b", ""),               // alternation
+        ("a|b", ""),               // alternation needs branching control flow
         ("(a)\\1", ""),            // backreference
-        ("^a", ""),                // assertion
-        ("a$", ""),                // assertion
-        ("\\ba", ""),              // word boundary
-        ("(?=a)b", ""),            // lookahead
-        ("(?<=a)b", ""),           // lookbehind
+        ("(?=a)b", ""),            // lookahead needs a sub-search
+        ("(?!a)b", ""),            // so does a negative one
+        ("(?<=[ab])c", ""),        // a lookbehind body that is not a run
+        ("(?<=a+)b", ""),          // nor this one
+        ("(?<=(a))b", ""),         // nor this one
         ("\\p{L}", "u"),           // property table
         ("\u{e9}", ""),            // non-ASCII character
+        ("\u{e9}", "i"),           // and folded, where ASCII arithmetic is not exact
         ("[\u{100}-\u{200}]", ""), // non-ASCII range
     ] {
         assert!(

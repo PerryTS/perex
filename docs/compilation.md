@@ -86,10 +86,28 @@ where the gap is smallest is not worth building, and the requirement was wrong
 rather than the tier.
 
 With the budget bounding the pause instead, the same measurement admits eleven
-of fifteen, including both worst cases and all four repeat diagnostics. Against
-the twenty-five benchmark cases that is sixteen of the nineteen behind V8;
-folding, alternation, a lookbehind and an end anchor are what remain, and each
-is a separate decision to admit.
+of fifteen, including both worst cases and all four repeat diagnostics — sixteen
+of the nineteen cases behind V8. The three left out were folding, an end anchor
+and a lookbehind, each excluded for scope rather than because it could not be
+emitted, and each was then checked rather than assumed:
+
+- A folded ASCII comparison is exact on the storage this tier requires, because
+  the only two non-ASCII characters that fold into ASCII cannot occur in it.
+  That argument is already made, and already differentially verified, by the
+  start scan and by the retreat.
+- `^` and `$` are position tests, and `\b` is two membership tests of a range
+  set the emitter can write out.
+- A lookbehind whose body is a run of ASCII characters is a comparison against
+  the bytes just before the position, which the executor already makes over
+  bytes rather than by reversing direction.
+
+Admitting those takes the count to seventeen of eighteen patterns, and **all
+nineteen cases behind V8**. What still falls back is alternation, which needs
+branching control flow in generated code — and the one alternation case measured
+is already ahead of V8 at 0.51x, so the tier is not what it needs.
+
+The subset is therefore not a partial answer to the gap. It covers every case
+that is behind.
 
 ## Memory contract
 
@@ -137,11 +155,13 @@ the pausability argument above simple.
 
 ## What is compiled, and what proves it correct
 
-The first version compiles the smallest subset that covers the measured gap:
-entry `SAVE`s, ASCII `CHAR` runs, `CLASS` of ASCII ranges, `ANY`, repeats of
-those whether bounded or not, and `MATCH`. Everything else — folding,
-properties, backreferences, assertions, alternation, and any repeat that resets
-a capture per iteration — falls back.
+The first version compiles the subset that covers the measured gap: entry
+`SAVE`s, ASCII `CHAR` runs folded or not, `CLASS` of ASCII ranges folded or not,
+`ANY`, repeats of those whether bounded or not, the anchors and word boundary,
+a lookbehind whose body is a run of ASCII characters, and `MATCH`. What falls
+back is alternation, a lookahead or any other assertion needing a sub-search,
+properties, backreferences, non-ASCII characters and ranges, and any repeat that
+resets a capture per iteration.
 
 `Program::compilable` is that decision and is implemented; it is a property of
 the program alone, and the tier additionally requires wholly ASCII storage, a
@@ -185,6 +205,7 @@ the part compilation addresses:
 | Case | Now | Entry | Search | V8 `exec` | Search at 5x | At 10x |
 |---|---:|---:|---:|---:|---:|---:|
 | `/a/` against `"a"` | 44.8 ns | 15.5 | 29 | 33.7 | 21 ns | 18 ns |
+| Folded literal | 66.0 ns | 15.5 | 50 | 35.8 | 26 ns | 21 ns |
 | Class repeat, short | 306 ns | 15.5 | 290 | 93.1 | 74 ns | 45 ns |
 | Captures, 25 chars | 385 ns | 15.5 | 370 | 89.3 | 89 ns | 52 ns |
 

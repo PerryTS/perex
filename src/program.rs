@@ -617,6 +617,30 @@ impl<'a> Program<'a> {
         let at = HEADER + pc * 3;
         self.words[at..at + 3].try_into().unwrap()
     }
+    /// Whether the assertion at `at` has a body that is nothing but a run of
+    /// ASCII characters followed by its end, which is the shape the executor
+    /// already compares against original bytes.
+    fn literal_assertion(self, at: usize) -> bool {
+        let [_, after, _] = self.instruction(at);
+        let body = at + 1;
+        let Some(end) = (after as usize).checked_sub(1) else {
+            return false;
+        };
+        let Some(length) = end.checked_sub(body) else {
+            return false;
+        };
+        if length < 1 || length > LEADING_MAX as usize || end >= self.instructions() {
+            return false;
+        }
+        if self.instruction(end)[0] != ASSERT_END {
+            return false;
+        }
+        (body..end).all(|pc| {
+            let [op, a, _] = self.instruction(pc);
+            op == CHAR && a < 128
+        })
+    }
+
     /// Whether the compilation tier described in `docs/compilation.md` could
     /// emit code for this program, and whether its work at one start position is
     /// therefore statically bounded.
@@ -637,13 +661,35 @@ impl<'a> Program<'a> {
             let [op, a, b] = self.instruction(pc);
             let admitted = match op {
                 MATCH | SAVE => true,
-                CHAR => a < 128,
+                // A folded ASCII comparison is exact on the storage this tier
+                // requires: the only two non-ASCII characters that fold into
+                // ASCII, U+017F and U+212A, cannot occur in it. That is the
+                // same argument the start scan and the retreat already make,
+                // and the differential suite already covers it.
+                CHAR | CHAR_I => a < 128,
                 ANY | ANY_S => true,
-                CLASS => {
+                // Position against zero, against the length, or either side of
+                // a line terminator. None of them reads the subject beyond a
+                // byte, and none needs a table.
+                START | START_M | END | END_M => true,
+                // A word boundary over ASCII is two membership tests of a range
+                // set the emitter can write out.
+                WORD | WORD_I => true,
+                // A lookbehind whose body is a run of ASCII characters is a
+                // comparison against the bytes just before the position, which
+                // the interpreter already makes over bytes and an emitter can
+                // make the same way. Every other assertion needs a sub-search,
+                // which this subset does not do.
+                ASSERT => b & 2 != 0 && self.literal_assertion(pc),
+                ASSERT_END => true,
+                CLASS | CLASS_I => {
                     let count = b & !NEGATED;
                     // A property range needs the shared tables, which generated
                     // code does not carry, and a range past ASCII needs decoding
                     // this subset does not do.
+                    // A folded class is the range and its case-swapped
+                    // counterpart, which over ASCII is arithmetic rather than
+                    // the case-equivalence table the interpreter consults.
                     (a..a + count).all(|i| {
                         let [lo, hi] = self.range(i as usize);
                         lo & PROPERTY == 0 && hi < 128
