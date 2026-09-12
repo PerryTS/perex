@@ -47,6 +47,10 @@ scan runs only on wholly ASCII storage, and the two non-ASCII characters that
 fold into ASCII — U+017F and U+212A — cannot appear there at all, so no folded
 match can be missed and none can be invented.
 
+The same exactness is what lets the scan itself name the bytes a folded run
+admits, rather than the interval between them: either case of each of the first
+two characters, at most four pairs.
+
 A run is wholly folded or wholly not. A change of kind ends it like any other
 opcode, so `(?i:ab)cd` claims only `ab`.
 
@@ -67,14 +71,39 @@ all, and like the single-run count it is re-derived during validation.
 
 The scan itself also changes for an alternation. A union of first characters is
 widened into one interval for the word 7 descriptor, so `{h, n, t}` is scanned
-as `h` through `t`; the alternation instead scans the exact set of branch
-starts, with one word-parallel pass per member. Three members cost a fraction of
-a comparison per byte and stop at a third as many positions as the interval.
+as `h` through `t`; the alternation instead scans the exact pairs its branches
+begin with.
 
 A branch qualifies only if every alternative is a run of at least two ASCII
 characters. A jump, class, repeat, folded or non-ASCII character anywhere in the
 prefix makes it undecidable and disables the claim. At most eight alternatives
 are walked, each needing one stack slot and no match state.
+
+## Scanning for two characters
+
+Deciding a position on its first byte alone admits far more of them than can
+match. `/needle/` over the 256 KiB benchmark subject stops at every `n`, 7,281
+of them; `/NeEdLe/i` stops wherever the interval from `N` to `n` holds, which
+ordinary lowercase text does at a third of its positions; the three-way
+alternation stops at 21,843. Each of those was then compared against the prefix,
+and that comparison, not the scan, was where the time went.
+
+Both claims already prove a second character: a recorded run is at least two
+characters, and every branch of an admitted alternation is too. A position is
+therefore decided on the pair. The second byte is as much a necessary condition
+of a match as the first, so this skips nothing a match could have started at,
+and on ordinary text it admits almost nothing: none of `ne`, `th` or `ha` occurs
+in the benchmark subject's repeating alphabet at all.
+
+Both bytes of every pair are compared against a block of thirty-two lanes at a
+time, in the shape [performance](performance.md) records as widening into the
+target's vector comparisons, and against one word below a block's length, so a
+short subject reaches a widened form too. A scan split into rounds by the
+quantum reads past its own chunk to decide that chunk's last position, and
+bounds only the positions it decides, so a pair is never split between rounds.
+
+The pairs are derived once per round, and only for a program carrying a claim:
+for a short subject, describing the scan costs more than the scan itself.
 
 ## Execution, lifetime and work
 
@@ -82,9 +111,10 @@ The scan borrows the original validated bytes and applies only to ASCII storage,
 where byte offsets, character offsets and UTF-16 offsets coincide. Mixed
 WTF-8 and native UTF-16 subjects keep the general start search unchanged.
 
-Within one scan step the existing word-parallel search locates the next position
-the word 7 descriptor admits. When word 9 is set, the remaining characters are
-compared against the program's instructions before that position becomes a
+Within one scan step a word-parallel search locates the next position that can
+begin a match: the pair search above when word 9 is set, and the word 7
+descriptor's interval otherwise. When word 9 is set, the remaining characters
+are compared against the program's instructions before that position becomes a
 start. A mismatch resumes the search at the following byte inside the same
 bounded step; a match publishes the start exactly as before. Every compared
 position is charged, so the comparison cannot outrun its allowance, and the
@@ -123,6 +153,23 @@ These are single-case standalone figures; they are not a whole-application
 result and do not establish a win for patterns without a leading run. Cases
 whose first characters usually do continue into the run pay the comparison
 without removing a trial, and must stay visible in comparisons.
+
+Deciding a position on two characters rather than one was measured against V8
+on the same machine, both drivers reporting process CPU time, with the case
+list and raw results under `secret-tests/perex-bench`:
+
+| Case | One character | Two | V8 |
+|---|---:|---:|---:|
+| `/needle/` over 256 KiB | 57.7 µs | 11.4 µs | 70.8 µs |
+| The same, missing | 57.7 µs | 11.4 µs | 128 µs |
+| `(?:needle\|thimble\|haystack)` over 256 KiB | 186 µs | 21.8 µs | 42.7 µs |
+| `/NeEdLe/i` over 29 characters | 87.2 ns | 66.3 ns | 21.7 ns |
+| `/needle/` over 29 characters | 50.2 ns | 52.0 ns | 43.1 ns |
+
+The last row is the case the paragraph above warns about: a short subject whose
+scan ends at the match anyway, where describing the pairs is not repaid. It is
+within this machine's noise either way, and it is why the description is built
+only for a program that carries a claim, and only once per round.
 
 ## Not executing what the scan already compared
 
