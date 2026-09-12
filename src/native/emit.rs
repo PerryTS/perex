@@ -13,7 +13,9 @@
 #![allow(dead_code)]
 
 use super::a64::{Assembler, Cond, EncodeError, Patch, Reg, X0, X1, X2, X3};
-use crate::program::{CHAR, CHAR_I, MATCH, Program, SAVE, Y};
+use crate::program::{
+    ANY, ANY_S, CHAR, CHAR_I, CLASS, MATCH, NEGATED, PROPERTY, Program, SAVE, Y, consuming,
+};
 
 /// Where the arguments arrive, and what the generated code keeps in each
 /// register. The first six follow the C calling convention this targets.
@@ -27,9 +29,12 @@ const AT: Reg = Reg(6);
 const BYTE: Reg = Reg(7);
 
 /// Failure branches waiting for the "try the next start" label. A straight-line
-/// program emits at most two per character, and a program with more characters
-/// than this is not one worth compiling.
-const MAX_PATCHES: usize = 256;
+/// program emits a few per character, and a program with more characters than
+/// this is not one worth compiling.
+const MAX_PATCHES: usize = 512;
+
+/// Ranges one class may hold and still have code generated for it.
+const MAX_RANGES: usize = 64;
 
 /// Why a program could not have code generated for it. Distinct from
 /// [`EncodeError`], which is about instructions rather than programs.
@@ -50,6 +55,35 @@ impl From<EncodeError> for EmitError {
     }
 }
 
+/// Record a conditional branch that gives up on this start position.
+fn fail_if(
+    asm: &mut Assembler<'_>,
+    cond: Cond,
+    patches: &mut [Patch; MAX_PATCHES],
+    waiting: &mut usize,
+) -> Result<(), EmitError> {
+    if *waiting == MAX_PATCHES {
+        return Err(EmitError::TooLarge);
+    }
+    patches[*waiting] = asm.b_cond_forward(cond);
+    *waiting += 1;
+    Ok(())
+}
+
+/// The same, unconditionally.
+fn fail_here(
+    asm: &mut Assembler<'_>,
+    patches: &mut [Patch; MAX_PATCHES],
+    waiting: &mut usize,
+) -> Result<(), EmitError> {
+    if *waiting == MAX_PATCHES {
+        return Err(EmitError::TooLarge);
+    }
+    patches[*waiting] = asm.b_forward();
+    *waiting += 1;
+    Ok(())
+}
+
 /// Whether this program consumes a fixed sequence of characters, with capture
 /// bookkeeping around them and nothing else.
 pub(crate) fn straight_line(program: Program<'_>) -> bool {
@@ -59,10 +93,25 @@ pub(crate) fn straight_line(program: Program<'_>) -> bool {
         return false;
     }
     (0..program.instructions()).all(|pc| {
-        let [op, a, _] = program.instruction(pc);
+        let [op, a, b] = program.instruction(pc);
         match op {
             MATCH | SAVE => true,
             CHAR | CHAR_I => a < 128,
+            ANY | ANY_S => true,
+            // A folded class is left to the interpreter for now: over ASCII it
+            // is the range and its case-swapped counterpart, which is arithmetic
+            // this generator does not do yet. `Program::compilable` admits it,
+            // because the tier will; this predicate is what the generator has
+            // actually been written for, and the two are allowed to differ in
+            // that direction only.
+            CLASS => {
+                let count = b & !NEGATED;
+                count > 0
+                    && (a..a + count).all(|i| {
+                        let [lo, hi] = program.range(i as usize);
+                        lo & PROPERTY == 0 && hi < 128
+                    })
+            }
             _ => false,
         }
     })
@@ -82,8 +131,10 @@ pub(crate) fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize
     if !straight_line(program) {
         return Err(EmitError::Unsupported);
     }
+    // Every instruction that consumes a character, not just the literal ones:
+    // this count is what proves each load below is inside the subject.
     let consumed = (0..program.instructions())
-        .filter(|&pc| matches!(program.instruction(pc)[0], CHAR | CHAR_I))
+        .filter(|&pc| consuming(program.instruction(pc)[0]))
         .count();
     if consumed >= 1 << 12 {
         return Err(EmitError::TooLarge);
@@ -102,33 +153,71 @@ pub(crate) fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize
 
     asm.mov(AT, START);
     for pc in 0..program.instructions() {
-        let [op, a, _] = program.instruction(pc);
+        let [op, a, b] = program.instruction(pc);
         match op {
             SAVE => asm.str_index(AT, REGISTERS, a),
             CHAR | CHAR_I => {
                 asm.ldrb(BYTE, SUBJECT, AT);
                 let byte = a as u8;
-                let folded = op == CHAR_I && byte.is_ascii_alphabetic();
-                if folded {
+                if op == CHAR_I && byte.is_ascii_alphabetic() {
                     // Either case, which over this storage is the whole of what
                     // folding means: the two non-ASCII characters that fold into
                     // ASCII cannot occur in it.
                     asm.cmp_imm32(BYTE, u32::from(byte.to_ascii_lowercase()));
                     let matched = asm.b_cond_forward(Cond::Eq);
                     asm.cmp_imm32(BYTE, u32::from(byte.to_ascii_uppercase()));
-                    if waiting == MAX_PATCHES {
-                        return Err(EmitError::TooLarge);
-                    }
-                    patches[waiting] = asm.b_cond_forward(Cond::Ne);
-                    waiting += 1;
+                    fail_if(&mut asm, Cond::Ne, &mut patches, &mut waiting)?;
                     asm.bind(matched);
                 } else {
                     asm.cmp_imm32(BYTE, u32::from(byte));
-                    if waiting == MAX_PATCHES {
-                        return Err(EmitError::TooLarge);
+                    fail_if(&mut asm, Cond::Ne, &mut patches, &mut waiting)?;
+                }
+                asm.add_imm(AT, AT, 1);
+            }
+            // Anything, including a line terminator.
+            ANY_S => asm.add_imm(AT, AT, 1),
+            // Anything but a line terminator. On ASCII storage only the two
+            // single-byte terminators can occur; U+2028 and U+2029 are not
+            // representable in it.
+            ANY => {
+                asm.ldrb(BYTE, SUBJECT, AT);
+                asm.cmp_imm32(BYTE, u32::from(b'\n'));
+                fail_if(&mut asm, Cond::Eq, &mut patches, &mut waiting)?;
+                asm.cmp_imm32(BYTE, u32::from(b'\r'));
+                fail_if(&mut asm, Cond::Eq, &mut patches, &mut waiting)?;
+                asm.add_imm(AT, AT, 1);
+            }
+            CLASS => {
+                asm.ldrb(BYTE, SUBJECT, AT);
+                let count = b & !NEGATED;
+                let negated = b & NEGATED != 0;
+                // Each range jumps out when the byte is inside it. Falling
+                // past all of them means the byte is inside none.
+                let mut inside = [Patch::default(); MAX_RANGES];
+                if count as usize > MAX_RANGES {
+                    return Err(EmitError::TooLarge);
+                }
+                for (slot, index) in inside.iter_mut().zip(a..a + count) {
+                    let [lo, hi] = program.range(index as usize);
+                    asm.cmp_imm32(BYTE, lo);
+                    let below = asm.b_cond_forward(Cond::Lo);
+                    asm.cmp_imm32(BYTE, hi);
+                    *slot = asm.b_cond_forward(Cond::Ls);
+                    asm.bind(below);
+                }
+                if negated {
+                    // Inside none is what a negated class wants.
+                    let accepted = asm.b_forward();
+                    for patch in &inside[..count as usize] {
+                        asm.bind(*patch);
                     }
-                    patches[waiting] = asm.b_cond_forward(Cond::Ne);
-                    waiting += 1;
+                    fail_here(&mut asm, &mut patches, &mut waiting)?;
+                    asm.bind(accepted);
+                } else {
+                    fail_here(&mut asm, &mut patches, &mut waiting)?;
+                    for patch in &inside[..count as usize] {
+                        asm.bind(*patch);
+                    }
                 }
                 asm.add_imm(AT, AT, 1);
             }
@@ -352,6 +441,18 @@ mod tests {
             ("(ab)c", ""),
             ("x", ""),
             ("", ""),
+            ("[a-z]", ""),
+            ("[a-z][0-9]", ""),
+            ("[^a-z]", ""),
+            ("[^0-9]x", ""),
+            ("[abc]", ""),
+            ("[a-z0-9_]", ""),
+            (".", ""),
+            ("a.c", ""),
+            (".", "s"),
+            ("a.", "s"),
+            ("([a-z])(.)", ""),
+            ("x[^\n]y", ""),
         ];
         let subjects = [
             "",
@@ -368,6 +469,16 @@ mod tests {
             "ba",
             "aaaa",
             "cba",
+            "a1",
+            "1a",
+            "a\nb",
+            "a\rb",
+            "_z9",
+            "A",
+            "  ",
+            "xy",
+            "x\ny",
+            "abcdef",
         ];
         for (pattern, flags) in patterns {
             for subject in subjects {
@@ -410,7 +521,15 @@ mod tests {
     #[test]
     fn refuses_what_it_cannot_generate() {
         let mut code = [0u8; 4096];
-        for (pattern, flags) in [("a+", ""), ("a|b", ""), ("[a-z]", ""), ("a", "y")] {
+        for (pattern, flags) in [
+            ("a+", ""),
+            ("a|b", ""),
+            ("[a-z]", "i"),
+            ("a", "y"),
+            ("^a", ""),
+            ("(?<=a)b", ""),
+            ("\\p{L}", "u"),
+        ] {
             let source = Input::utf8(pattern);
             let mut nodes = [Node::default(); 256];
             let mut ranges = [Range::default(); 512];
