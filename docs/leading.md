@@ -156,7 +156,7 @@ without removing a trial, and must stay visible in comparisons.
 
 Deciding a position on two characters rather than one was measured against V8
 on the same machine, both drivers reporting process CPU time, with the case
-list and raw results under `secret-tests/perex-bench`:
+list and raw results under `bench/`:
 
 | Case | One character | Two | V8 |
 |---|---:|---:|---:|

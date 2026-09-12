@@ -2,7 +2,9 @@
 
 An independent ECMAScript regex engine being developed for [Perry](https://github.com/PerryTS/perry) and other embedders.
 
-**Status: experimental compiler, matcher, borrowed input and capture spans.** One evaluator implements core matching, numbered/named captures, repetition, scoped flags, assertions and backreferences using caller-owned storage and original subject bytes. Experimental pause/resume retains offset state between scoped borrows, supports explicit scratch replacement and reborrows through immutable owner bindings without rescanning. Full Unicode/grammar support, actual host invariants and Perry integration remain outstanding. Resumable execution has measured CPU regressions that remain optimization work; there is no demonstrated all-case CPU/RSS win or production adoption. The crate has no dependencies, uses no standard library, and is not published.
+**Status: experimental compiler, matcher, borrowed input and capture spans.** One evaluator implements core matching, numbered/named captures, repetition, scoped flags, assertions and backreferences using caller-owned storage and original subject bytes. Experimental pause/resume retains offset state between scoped borrows, supports explicit scratch replacement and reborrows through immutable owner bindings without rescanning. Full Unicode/grammar support, actual host invariants and Perry integration remain outstanding. There is no production adoption. The crate has no dependencies and uses no standard library.
+
+Against V8, on the twenty-five authored cases in [`bench/`](bench/), Perex is at or better than V8 on every one when the faster of its two execution paths is taken — but taking it is the open part: nothing yet chooses between the interpreter and the [compilation tier](docs/compilation.md), and the tier is AArch64-only and loses badly on long subjects. [`docs/performance.md`](docs/performance.md) records the figures, the method, and every measurement that refuted an idea, which is the standard this project holds its own claims to.
 
 Perex is designed around one matching engine and explicit host memory ownership:
 
@@ -14,6 +16,61 @@ Perex is designed around one matching engine and explicit host memory ownership:
 - No hidden process-global cache or second runtime heap.
 
 The public API will be Rust. Implementation-language choices remain open. A future convenience API can use ordinary owned Rust buffers while executing the same core.
+
+## Using it
+
+```sh
+cargo add perex
+```
+
+The engine never allocates. A caller supplies the arena a pattern is parsed
+into, the buffer its program is written to, and the registers, frames and undo
+trail a search runs on:
+
+```rust
+use perex::{Budget, compiler::{Node, Range, compile}, executor::{Frame, Scratch, Undo, find},
+            input::Input, span::Span};
+
+let pattern = Input::utf8(r"(\w+)@(\w+)\.com");
+let mut nodes = vec![Node::default(); 256];
+let mut ranges = vec![Range::default(); 512];
+let mut words = vec![0u32; 2048];
+let mut budget = Budget::new(1_000_000);
+let program = compile(pattern, "", &mut nodes, &mut ranges, &mut words, &mut budget).unwrap();
+
+let mut registers = vec![0usize; program.register_count()];
+let mut frames = vec![Frame::default(); 256];
+let mut undo = vec![Undo::default(); 1024];
+let mut captures = vec![None::<Span>; program.capture_count()];
+let mut budget = Budget::new(1_000_000);
+
+let found = find(
+    program,
+    Input::utf8("mail user@example.com now"),
+    0,
+    Scratch { registers: &mut registers, frames: &mut frames, undo: &mut undo },
+    &mut captures,
+    &mut budget,
+).unwrap();
+
+assert!(found);
+assert_eq!(captures[0].map(|s| (s.start(), s.end())), Some((5, 21)));
+assert_eq!(captures[1].map(|s| (s.start(), s.end())), Some((5, 9)));
+```
+
+That example is [`examples/basic.rs`](examples/basic.rs), so it is compiled by
+`cargo check --all-targets` and cannot rot.
+
+`Budget` bounds a whole compile or search and is never reset per start position,
+so a pattern cannot spend unbounded time on a subject. The buffers above are
+`Vec` for brevity; nothing requires them to be.
+
+## Benchmarks
+
+[`bench/`](bench/) holds two development-only drivers: a cross-engine comparison
+against `regress`, `regex` and `fancy-regex`, and a comparison against V8 at
+both of its entry points. A third maps and executes what the compilation tier
+emits. See [`bench/README.md`](bench/README.md).
 
 ## Project boundary
 

@@ -56,7 +56,7 @@ compared against `test` alone, which overstated the gap on every capturing case:
 the worst reads 6.41x against `test` and 4.31x against `exec`.
 
 The harness, cases and raw results are the host's, under
-`secret-tests/perex-bench`.
+`bench/`.
 
 ### Ahead
 

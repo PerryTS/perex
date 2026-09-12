@@ -2,3 +2,5 @@
 /artifacts/
 __pycache__/
 .DS_Store
+/bench/target/
+/bench/Cargo.lock

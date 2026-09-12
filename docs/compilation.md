@@ -198,7 +198,7 @@ liability with no benefit.
 
 ## What it buys, measured
 
-The tier is implemented far enough to execute, and `secret-tests/perex-native`
+The tier is implemented far enough to execute, and `bench`
 does: it maps what the generator emits, calls it, checks every answer against
 the interpreter at every start position first, and times both. Process CPU time,
 best of five rounds, the same machine as every other figure here.

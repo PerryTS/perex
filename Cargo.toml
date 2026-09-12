@@ -1,11 +1,30 @@
 [package]
 name = "perex"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "An ECMAScript regex engine designed for explicit host memory ownership"
 license = "MIT AND Unicode-3.0"
 repository = "https://github.com/PerryTS/perex"
+homepage = "https://github.com/PerryTS/perex"
+documentation = "https://docs.rs/perex"
 readme = "README.md"
-publish = false
+keywords = ["regex", "regexp", "ecmascript", "javascript", "no-std"]
+categories = ["text-processing", "no-std", "algorithms"]
+
+# The published crate carries the engine, its documentation and the licences it
+# is bound by. The pinned Unicode source that generates `src/*_data.rs` is 5 MB
+# and is a repository concern: the receipt and the licence that cover it ship,
+# the inputs themselves do not. Tests, fixtures, benchmarks and the differential
+# harnesses stay in the repository too.
+include = [
+    "src/**/*.rs",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+    "docs/**/*.md",
+    "third_party/unicode/17.0.0/LICENSE.txt",
+    "third_party/unicode/17.0.0/receipt.json",
+]
 
 [dependencies]
