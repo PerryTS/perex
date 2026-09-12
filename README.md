@@ -62,6 +62,7 @@ node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/
 node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/atom-filter-q17 --quantum 17 --relocate --grow
 node tools/check-modifiers.mjs target/release/examples/engine_probe
 node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets
+node tools/check-sets.mjs target/release/examples/engine_probe artifacts/sets
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate
 node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate
 node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate-q1 --quantum 1 --relocate --grow
@@ -97,6 +98,8 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 [Required-text admission](docs/admission.md) uses a condition proved by the compiler and original subject storage. Its correctness and CPU/RSS costs require separate checks.
 
 [Candidate-start scanning](docs/candidate.md) skips impossible ASCII start positions using the same evaluator and original storage. Complete-answer and relocation checks precede performance claims.
+
+[Unicode sets](docs/sets.md) implements the `v` union grammar, its escaping and reserved-punctuation rules, and its complement-after-folding rule. Set operators, string members and properties of strings remain explicit gaps rather than approximations.
 
 [Test262 pattern conformance](docs/conformance.md) compares every pattern harvested from the suite's regular-expression tests against Node, for syntax acceptance and complete match answers. The one remaining gap is Unicode-sets class syntax.
 

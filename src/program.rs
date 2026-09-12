@@ -25,7 +25,11 @@ pub(crate) const LEADING_MASK: u32 = 255;
 const LEADING_SCAN: usize = 128;
 pub(crate) const NEGATED: u32 = 1 << 31;
 // A class-table record is either (literal low, literal high), or
-// (PROPERTY | shared property id, complemented). Both words are relocatable.
+// (PROPERTY | shared property id, complement kind). Both words are relocatable.
+// The complement kind is 0 for a plain term, 1 for `\P` under `u`, where the
+// complement is tested for each case equivalent, and 2 for `\P` under `v`,
+// where the set is closed under case folding before it is complemented. The
+// two differ only when `i` is also set; see `docs/sets.md`.
 pub(crate) const PROPERTY: u32 = 1 << 30;
 pub(crate) const MATCH: u32 = 0;
 pub(crate) const CHAR: u32 = 1;
@@ -325,7 +329,7 @@ impl<'a> Program<'a> {
             budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
             let [lo, hi] = p.range(i);
             let valid = if lo & PROPERTY != 0 {
-                p.unicode() && properties::valid(lo & !PROPERTY) && hi <= 1
+                p.unicode() && properties::valid(lo & !PROPERTY) && hi <= 2
             } else {
                 lo <= hi && hi <= if p.unicode() { 0x10ffff } else { 0xffff }
             };

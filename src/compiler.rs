@@ -69,6 +69,18 @@ pub struct Prepared<'s> {
     forward: bool,
 }
 
+/// Properties of strings, which only `v` accepts and only unnegated. Their
+/// members are sequences rather than code points.
+const STRING_PROPERTIES: [&str; 7] = [
+    "Basic_Emoji",
+    "Emoji_Keycap_Sequence",
+    "RGI_Emoji",
+    "RGI_Emoji_Flag_Sequence",
+    "RGI_Emoji_Modifier_Sequence",
+    "RGI_Emoji_Tag_Sequence",
+    "RGI_Emoji_ZWJ_Sequence",
+];
+
 const EMPTY: u32 = 32;
 const SEQ: u32 = 33;
 const ALT: u32 = 34;
@@ -84,6 +96,7 @@ mod escapes;
 mod names;
 mod prepared;
 mod repetition;
+mod sets;
 
 struct Parser<'a, 's> {
     pattern: Input<'a>,
@@ -523,14 +536,6 @@ impl Parser<'_, '_> {
         Ok(length)
     }
     fn property(&mut self, negative: bool) -> Result<(), CompileError> {
-        if self.unicode_sets {
-            // v properties include strings, and vi complements must fold
-            // before subtraction. Do not silently reuse the u evaluator.
-            return Err(CompileError::Unsupported {
-                feature: "Unicode sets",
-                utf16_offset: self.cursor.position(),
-            });
-        }
         if !self.eat(b'{')? {
             return Err(self.error());
         }
@@ -543,11 +548,39 @@ impl Parser<'_, '_> {
         } else {
             None
         };
-        let id = properties::resolve(&name[..name_len], value).ok_or_else(|| self.error())?;
+        let Some(id) = properties::resolve(&name[..name_len], value) else {
+            // A property of strings is valid only under `v`, and only
+            // unnegated. Matching one needs the evaluator to consume more than
+            // one character, so report the gap rather than a false syntax
+            // error; every other unknown name is still a syntax error.
+            if self.unicode_sets
+                && !negative
+                && value.is_none()
+                && STRING_PROPERTIES
+                    .iter()
+                    .any(|known| known.as_bytes() == &name[..name_len])
+            {
+                return Err(CompileError::Unsupported {
+                    feature: "Unicode sets",
+                    utf16_offset: self.cursor.position(),
+                });
+            }
+            return Err(self.error());
+        };
         if !self.eat(b'}')? {
             return Err(self.error());
         }
-        self.range(PROPERTY | id, u32::from(negative))
+        // Under `v` the set is closed under case folding before it is
+        // complemented, which `u` does not do; the encodings differ so the
+        // evaluator can tell them apart.
+        self.range(
+            PROPERTY | id,
+            match (negative, self.unicode_sets) {
+                (false, _) => 0,
+                (true, false) => 1,
+                (true, true) => 2,
+            },
+        )
     }
     fn hex(&mut self, n: usize) -> Result<Option<u32>, CompileError> {
         let saved = self.cursor;
@@ -699,13 +732,7 @@ impl Parser<'_, '_> {
     }
     fn class(&mut self) -> Result<u32, CompileError> {
         if self.unicode_sets {
-            // Nested sets, reserved punctuation and string members have a
-            // distinct grammar. Until that compiler path is complete, keep
-            // its explicit unsupported result instead of accepting u syntax.
-            return Err(CompileError::Unsupported {
-                feature: "Unicode sets",
-                utf16_offset: self.cursor.position(),
-            });
+            return self.class_set();
         }
         let negative = self.eat(b'^')?;
         let start = self.range_used;

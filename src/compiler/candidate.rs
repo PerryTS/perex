@@ -114,13 +114,21 @@ impl Prepared<'_> {
                             for index in n.a..end {
                                 self.step()?;
                                 let r = self.ranges[index as usize];
-                                found = values.iter().any(|&v| {
-                                    if r.lo & PROPERTY != 0 {
-                                        properties::contains(r.lo & !PROPERTY, v) != (r.hi != 0)
-                                    } else {
-                                        v >= r.lo && v <= r.hi
-                                    }
-                                });
+                                // A `v` complement negates membership of the
+                                // whole closure, matching the evaluator.
+                                found = if r.lo & PROPERTY != 0 && r.hi == 2 {
+                                    !values
+                                        .iter()
+                                        .any(|&v| properties::contains(r.lo & !PROPERTY, v))
+                                } else {
+                                    values.iter().any(|&v| {
+                                        if r.lo & PROPERTY != 0 {
+                                            properties::contains(r.lo & !PROPERTY, v) != (r.hi != 0)
+                                        } else {
+                                            v >= r.lo && v <= r.hi
+                                        }
+                                    })
+                                };
                                 if found {
                                     break;
                                 }

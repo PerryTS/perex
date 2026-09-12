@@ -43,22 +43,23 @@ threshold. That gives 48,720 cases.
 
 | | |
 |---|---|
-| Cases compared | 47,108 |
+| Cases compared | 47,658 |
 | **Differences** | **0** |
-| Syntax rejections, both engines | 3,040 |
+| Syntax rejections, both engines | 3,390 |
 | Syntax disagreements | **0** |
-| Unsupported (Unicode sets) | 1,610 cases, 161 distinct patterns |
+| Unsupported (Unicode sets) | 1,060 cases, 106 distinct patterns |
 | Oracle could not finish | 2 cases |
 | Unstable oracle answers | 0 |
 
 Syntax agreement is exact: of every harvested pattern, the two engines reject
-the same 3,040 cases and accept the rest, with no pattern accepted by one and
+the same 3,390 cases and accept the rest, with no pattern accepted by one and
 rejected by the other.
 
-The one gap is **Unicode sets**: 161 distinct patterns using `v`-flag class
-syntax — string sets `\q{…}`, subtraction `--` and intersection `&&` — which
-Perex reports as an explicit unsupported feature rather than answering wrongly.
-This is the same gap the engine's own omission list records.
+The one gap is **Unicode sets**: 106 distinct patterns, which Perex reports as
+an explicit unsupported feature rather than answering wrongly. They are 41
+properties of strings, 33 string disjunctions `\q{…}`, 16 subtractions `--` and
+16 intersections `&&` — 74 needing string matching and 32 needing set
+operators. The `v` union grammar itself is implemented; see [sets](sets.md).
 
 ## Cost, not correctness
 

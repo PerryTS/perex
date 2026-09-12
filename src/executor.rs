@@ -592,6 +592,20 @@ impl Vm<'_, '_, '_, '_> {
         for index in index..stop {
             self.charge(1)?;
             let [lo, hi] = self.program.range(index as usize);
+            // A `v` complement (kind 2) negates membership of the whole case
+            // closure, not of each equivalent separately. Under `i` those give
+            // different answers: `[\P{Ll}]` excludes `A`, because `a` folds
+            // into the set the complement removes.
+            if lo & PROPERTY != 0 && hi == 2 {
+                let inside = values
+                    .iter()
+                    .any(|&value| properties::contains(lo & !PROPERTY, value));
+                if !inside {
+                    self.class_result(true, negated, context);
+                    return Ok(());
+                }
+                continue;
+            }
             let found = values.iter().any(|&value| {
                 if lo & PROPERTY != 0 {
                     properties::contains(lo & !PROPERTY, value) != (hi != 0)

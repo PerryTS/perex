@@ -124,7 +124,9 @@ fn property_programs_use_bounded_references_and_validate_relocation() {
         );
         assert_eq!(captures, [Span::new(0, 1)]);
         let end = moved.len();
-        moved[end - 1] = 2; // Complement is a Boolean, not arbitrary flags.
+        // 0, 1 and 2 are the plain, `u` complement and `v` complement kinds;
+        // anything above them is not a defined encoding.
+        moved[end - 1] = 3;
         assert_eq!(
             Program::from_words(&moved, &mut Budget::new(10000)).unwrap_err(),
             ProgramError::Invalid

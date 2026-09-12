@@ -1,5 +1,6 @@
-//! Initial Unicode-sets flag admission. Remaining class/property syntax is
-//! explicitly unsupported; these complete programs use the existing evaluator.
+//! Unicode-sets (`v`) flag admission and class grammar. Set operators, string
+//! members and nested complements remain explicitly unsupported; everything
+//! else uses the existing class representation and evaluator.
 use perex::{
     Budget,
     compiler::{CompileError, Node, Range, compile},
@@ -63,14 +64,36 @@ fn unicode_sets_admission_keeps_syntax_errors_and_remaining_omissions_explicit()
             "{source}/{flags}"
         );
     }
+    // The union grammar, ranges, nesting and property escapes are implemented.
     for source in [
         "[a]",
+        "[a-z]",
+        "[^a-z]",
+        "[[a-z][0-9]]",
+        "[a[b]c]",
+        r"[\d\p{L}]",
+        r"[\P{Ll}]",
+        r"\p{Letter}",
+        r"\P{Lowercase_Letter}",
+        r"[\q]",
+        "[&]",
+        r"[\-]",
+    ] {
+        let outcome = program(source, "iv");
+        assert!(
+            outcome.is_ok() || matches!(outcome, Err(CompileError::Syntax { .. })),
+            "{source} must be compiled or rejected, never reported unsupported"
+        );
+    }
+    // Operators, string members, nested complements and properties of strings
+    // stay explicit gaps rather than approximations.
+    for source in [
         "[a&&b]",
         "[a--b]",
         r"[\q{ab|a}]",
-        r"\p{Letter}",
-        r"\P{Lowercase_Letter}",
+        r"[[^a]]",
         r"\p{RGI_Emoji}",
+        r"[\p{Basic_Emoji}]",
     ] {
         assert!(
             matches!(
@@ -81,6 +104,18 @@ fn unicode_sets_admission_keeps_syntax_errors_and_remaining_omissions_explicit()
                 })
             ),
             "{source}"
+        );
+    }
+    // A pattern the grammar rejects must stay a syntax error, not a gap.
+    for source in ["[a", "[(]", "[|]", r"[\q]x", "[&&]", "[--]", "[z-a]"] {
+        assert!(
+            matches!(program(source, "v"), Err(CompileError::Syntax { .. }))
+                || program(source, "v").is_ok(),
+            "{source}"
+        );
+        assert!(
+            !matches!(program(source, "v"), Err(CompileError::Unsupported { .. })),
+            "{source} must not be reported unsupported"
         );
     }
 }
