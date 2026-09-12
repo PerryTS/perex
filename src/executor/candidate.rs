@@ -2,6 +2,18 @@
 //! is a necessary first-character range, never a substitute for capture logic.
 use super::*;
 
+/// The byte pairs a start scan looks for, decided once per round of the
+/// candidate phase. A pattern without a leading claim carries none, and builds
+/// none: for a short subject the description costs more than the scan it steers.
+#[derive(Clone, Copy)]
+struct Prefix {
+    first: [u8; LEADING_BRANCHES],
+    /// The character after each first one. Every leading run and every branch
+    /// of an admitted alternation holds at least two, so this is always known.
+    second: [u8; LEADING_BRANCHES],
+    members: usize,
+}
+
 impl Vm<'_, '_, '_, '_> {
     pub(super) fn end_candidate(&mut self) -> Result<bool, ExecError> {
         // The upper byte is the length bound, not part of this descriptor.
@@ -33,13 +45,26 @@ impl Vm<'_, '_, '_, '_> {
             Phase::Initialize(0)
         };
     }
-    /// The first byte of every branch of the entry alternation. The derivation
-    /// proved each branch begins with at least two ASCII characters, so each
-    /// contributes exactly one byte, and there are at most `LEADING_BRANCHES`.
-    fn branch_bytes(&self) -> ([u8; LEADING_BRANCHES], [u32; LEADING_BRANCHES], usize) {
-        let mut first = [0; LEADING_BRANCHES];
-        let mut starts = [0; LEADING_BRANCHES];
-        let mut count = 0;
+    /// What the scan should look for, for a program that carries a leading
+    /// claim.
+    fn prefix(&self, leading: usize) -> Prefix {
+        if leading == LEADING_ALTERNATION as usize {
+            self.branch_pairs()
+        } else {
+            self.literal_pairs()
+        }
+    }
+
+    /// The first two characters of every branch of the entry alternation. The
+    /// derivation proved every branch begins with at least two ASCII
+    /// characters, so each contributes exactly one pair, and there are at most
+    /// `LEADING_BRANCHES` of them.
+    fn branch_pairs(&self) -> Prefix {
+        let mut prefix = Prefix {
+            first: [0; LEADING_BRANCHES],
+            second: [0; LEADING_BRANCHES],
+            members: 0,
+        };
         let mut pending = [0usize; LEADING_BRANCHES];
         let mut depth = 0;
         let mut pc = self.program.leading_pc();
@@ -47,63 +72,63 @@ impl Vm<'_, '_, '_, '_> {
             let [op, a, b] = self.program.instruction(pc);
             if op == SPLIT {
                 if depth == pending.len() {
-                    return (first, starts, 0);
+                    prefix.members = 0;
+                    return prefix;
                 }
                 pending[depth] = b as usize;
                 depth += 1;
                 pc = a as usize;
                 continue;
             }
-            if count == first.len() {
-                return (first, starts, 0);
+            if prefix.members == prefix.first.len() {
+                prefix.members = 0;
+                return prefix;
             }
-            first[count] = self.program.instruction(pc)[1] as u8;
-            starts[count] = pc as u32;
-            count += 1;
+            prefix.first[prefix.members] = self.program.instruction(pc)[1] as u8;
+            prefix.second[prefix.members] = self.program.instruction(pc + 1)[1] as u8;
+            prefix.members += 1;
             if depth == 0 {
-                return (first, starts, count);
+                return prefix;
             }
             depth -= 1;
             pc = pending[depth];
         }
     }
 
-    /// Compare only the branches whose first character is the byte the scan
-    /// stopped at. Walking the whole `SPLIT` structure would re-test that byte
-    /// against every branch, which the scan has already decided.
-    fn selected_branches(
-        &mut self,
-        bytes: &[u8],
-        at: usize,
-        set: &[u8],
-        starts: &[u32],
-    ) -> Result<bool, ExecError> {
-        let byte = bytes[at];
-        for (index, &first) in set.iter().enumerate() {
-            if first != byte {
-                continue;
-            }
-            let mut pc = starts[index] as usize;
-            let mut offset = 0;
-            let matched = loop {
-                if self.program.instruction(pc)[0] != CHAR {
-                    break true;
+    /// The byte pairs a leading literal admits at its first two characters. A
+    /// folded run admits either case of each, and `derive_leading` accepts only
+    /// ASCII characters, so every admitted byte is a single one. This scans
+    /// wholly ASCII storage, where an ASCII-insensitive comparison is exact for
+    /// a folded run.
+    fn literal_pairs(&self) -> Prefix {
+        let mut prefix = Prefix {
+            first: [0; LEADING_BRANCHES],
+            second: [0; LEADING_BRANCHES],
+            members: 0,
+        };
+        let pc = self.program.leading_pc();
+        let one = self.program.instruction(pc)[1] as u8;
+        let two = self.program.instruction(pc + 1)[1] as u8;
+        if !self.program.leading_fold() {
+            prefix.first[0] = one;
+            prefix.second[0] = two;
+            prefix.members = 1;
+            return prefix;
+        }
+        for a in [one.to_ascii_lowercase(), one.to_ascii_uppercase()] {
+            for b in [two.to_ascii_lowercase(), two.to_ascii_uppercase()] {
+                let held = prefix.first[..prefix.members]
+                    .iter()
+                    .zip(&prefix.second[..prefix.members])
+                    .any(|(&f, &s)| f == a && s == b);
+                if !held {
+                    prefix.first[prefix.members] = a;
+                    prefix.second[prefix.members] = b;
+                    prefix.members += 1;
                 }
-                self.charge(1)?;
-                let want = self.program.instruction(pc)[1];
-                match bytes.get(at + offset) {
-                    Some(&b) if u32::from(b) == want => {
-                        pc += 1;
-                        offset += 1;
-                    }
-                    _ => break false,
-                }
-            };
-            if matched {
-                return Ok(true);
             }
         }
-        Ok(false)
+        prefix
     }
 
     /// Compare the entry alternation's branches against original bytes at `at`,
@@ -236,21 +261,24 @@ impl Vm<'_, '_, '_, '_> {
         // The ASCII path already proves the storage is wholly ASCII, which is
         // what a folded comparison needs.
         let leading = self.program.leading();
-        // An alternation scans the exact set of branch starts rather than the
-        // widened interval the descriptor holds, which on ordinary text stops
-        // at a small fraction of the positions the interval does.
-        let (set, starts, members) = if leading == LEADING_ALTERNATION as usize {
-            self.branch_bytes()
-        } else {
-            ([0; LEADING_BRANCHES], [0; LEADING_BRANCHES], 0)
-        };
+        // A leading run and an alternation both name the exact bytes their
+        // first two characters admit, which on ordinary text stops at a small
+        // fraction of the positions the descriptor's widened interval does.
+        let prefix = (leading != 0).then(|| self.prefix(leading));
         let mut scanned = 0;
         let found = loop {
-            let window = &bytes[start + scanned..start + count];
-            let (found, inspected) = if members != 0 {
-                first_in_set(window, &set[..members])
-            } else {
-                first_in_range::<false, false>(window, lo, hi)
+            let (found, inspected) = match &prefix {
+                // A pair needs the byte after the position it decides, which
+                // for the last position of a chunked scan lies past the chunk.
+                // The scan reads to the subject's end and bounds only the
+                // positions it decides, so a pair is never split between rounds.
+                Some(p) if p.members != 0 => first_in_pairs(
+                    &bytes[start + scanned..],
+                    count - scanned,
+                    &p.first[..p.members],
+                    &p.second[..p.members],
+                ),
+                _ => first_in_range::<false, false>(&bytes[start + scanned..start + count], lo, hi),
             };
             self.charge(inspected)?;
             let Some(index) = found else { break None };
@@ -258,13 +286,8 @@ impl Vm<'_, '_, '_, '_> {
             if leading == 0 {
                 break Some(at);
             }
-            let outcome = if members != 0 {
-                self.selected_branches(bytes, at, &set[..members], &starts[..members])
-                    .map(Some)
-            } else {
-                self.leading_matches(bytes, at, leading)
-            };
-            match outcome? {
+            let outcome = self.leading_matches(bytes, at, leading)?;
+            match outcome {
                 Some(true) => break Some(at),
                 // The literal cannot fit before the subject's end, so it cannot
                 // fit at any later start either.
@@ -359,43 +382,83 @@ impl Vm<'_, '_, '_, '_> {
 /// Scanning the exact set instead stops only where a branch can begin. The set
 /// is small, so one word-parallel pass per member still costs a fraction of a
 /// comparison per byte.
-pub(super) fn first_in_set(bytes: &[u8], set: &[u8]) -> (Option<usize>, usize) {
-    // A block at a time, with a fixed trip count and no exit inside the block,
-    // so the comparisons widen into whatever vector width the target has. The
-    // same source stays correct, and as fast as the lane arithmetic below, on a
-    // target with none. A member's test is independent of every other, so the
-    // cost grows far more slowly with the set than one pass per member does.
+/// First of `limit` positions whose byte, and the byte after it, match one of
+/// the pairs. `bytes` may run past `limit`, and must, to decide the last
+/// position; a scan split into rounds therefore never splits a pair.
+///
+/// Deciding a position on one byte admits one every few dozen bytes of
+/// ordinary text, and a folded first character far more than that. Deciding it
+/// on two admits almost none, which is what the positions this admits cost:
+/// each is published as a start, or compared against the whole prefix.
+pub(super) fn first_in_pairs(
+    bytes: &[u8],
+    limit: usize,
+    first: &[u8],
+    second: &[u8],
+) -> (Option<usize>, usize) {
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    const ONES: u64 = 0x0101_0101_0101_0101;
     const LANES: usize = 32;
     const BLOCK_MIN: usize = 256;
     let mut base = 0;
-    while bytes.len() >= BLOCK_MIN && base + LANES <= bytes.len() {
+    // A block at a time, with a fixed trip count and no exit inside the block,
+    // so the comparisons widen into whatever vector width the target has. The
+    // same source stays correct, and as fast as the lane arithmetic below, on a
+    // target with none. A pair's test is independent of every other, so the
+    // cost grows far more slowly with the set than one pass per pair does.
+    while limit >= BLOCK_MIN && base + LANES <= limit && base + LANES < bytes.len() {
         let block: [u8; LANES] = bytes[base..base + LANES].try_into().unwrap();
+        let after: [u8; LANES] = bytes[base + 1..base + 1 + LANES].try_into().unwrap();
         let mut hit = [0u8; LANES];
-        for &member in set {
+        for (&one, &two) in first.iter().zip(second) {
             for lane in 0..LANES {
-                hit[lane] |= u8::from(block[lane] == member);
+                hit[lane] |= u8::from(block[lane] == one) & u8::from(after[lane] == two);
             }
         }
-        let mut any = 0;
-        for &lane in &hit {
-            any |= lane;
-        }
-        if any != 0 {
-            for (lane, &found) in hit.iter().enumerate() {
-                if found != 0 {
-                    return (Some(base + lane), base + lane + 1);
-                }
+        // Find the marked lane through the word it lands in. A scalar pass over
+        // every lane runs on every block once the pairs are dense enough to hit
+        // one, and then costs more than the comparisons it follows.
+        for (word, marks) in hit.chunks_exact(8).enumerate() {
+            let marks = u64::from_le_bytes(marks.try_into().unwrap());
+            if marks != 0 {
+                let lane = word * 8 + marks.trailing_zeros() as usize / 8;
+                return (Some(base + lane), base + lane + 1);
             }
         }
         base += LANES;
     }
-    while base < bytes.len() {
-        if set.contains(&bytes[base]) {
+    // Eight positions at a time below a block's worth, comparing both bytes of
+    // every pair against a whole word. A short subject reaches only this, where
+    // one position at a time would cost more than the interval scan it replaces.
+    while base + 8 <= limit && base + 9 <= bytes.len() {
+        let word = u64::from_le_bytes(bytes[base..base + 8].try_into().unwrap());
+        let after = u64::from_le_bytes(bytes[base + 1..base + 9].try_into().unwrap());
+        let mut hit = 0;
+        for (&one, &two) in first.iter().zip(second) {
+            // High bit set for each lane holding exactly the wanted byte.
+            let a = word ^ (u64::from(one) * ONES);
+            let b = after ^ (u64::from(two) * ONES);
+            hit |= a.wrapping_sub(ONES) & !a & b.wrapping_sub(ONES) & !b & HIGH;
+        }
+        if hit != 0 {
+            let lane = hit.trailing_zeros() as usize / 8;
+            return (Some(base + lane), base + lane + 1);
+        }
+        base += 8;
+    }
+    while base < limit {
+        let byte = bytes[base];
+        let next = bytes.get(base + 1).copied();
+        if first
+            .iter()
+            .zip(second)
+            .any(|(&one, &two)| byte == one && next == Some(two))
+        {
             return (Some(base), base + 1);
         }
         base += 1;
     }
-    (None, bytes.len())
+    (None, limit)
 }
 
 pub(super) fn first_in_range<const MIXED: bool, const STOP_NON_ASCII: bool>(
