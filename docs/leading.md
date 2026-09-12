@@ -123,3 +123,34 @@ These are single-case standalone figures; they are not a whole-application
 result and do not establish a win for patterns without a leading run. Cases
 whose first characters usually do continue into the run pay the comparison
 without removing a trial, and must stay visible in comparisons.
+
+## Not executing what the scan already compared
+
+A start published by the leading-run comparison has had each of those
+characters compared against the subject. Executing their instructions repeats
+that comparison, and cannot fail: the run is unconditional, so the trial begins
+after it instead.
+
+Only the contiguous-run claim does this. An alternation records nothing, because
+which branch matched decides how far to skip and that is not what the claim
+carries.
+
+The entry `SAVE` instructions before the run still run, since they record where
+the match began, and the skipped instructions are charged exactly as executing
+them would charge. A search's total work is therefore unchanged, which is what
+lets a paused search still reach an unpaused one's total.
+
+Measured on literals of increasing length, always matching at position zero,
+process CPU time per search:
+
+| Pattern | Before | After |
+|---|---:|---:|
+| `/a/` | 45.6 ns | 44.1 ns |
+| `/aa/` | 52.3 ns | 43.0 ns |
+| `/aaaa/` | 61.3 ns | 43.8 ns |
+| `/aaaaaaaa/` | 91.3 ns | 45.0 ns |
+| `/a{16}/` written out | 143.6 ns | 47.9 ns |
+
+The cost per additional character fell from about 6.5 ns to about 0.25 ns, so a
+literal's length now barely affects its search. The authored short literal case
+fell from 69 ns to 45 ns, which matches V8's reading in the same window.

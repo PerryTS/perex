@@ -180,6 +180,10 @@ pub(super) struct State {
     /// Offset from which the condition has not yet been searched. The search
     /// only moves forward, so the whole bound costs one pass over the subject.
     pub required_from: usize,
+    /// Leading characters the start scan already compared against the subject
+    /// for this start. Executing their instructions would repeat that work and
+    /// cannot fail, so the trial resumes after them.
+    pub verified: usize,
     /// Where the leading atom repeat's run ended for the current start. Every
     /// start before it inside the run is proved to fail with it, so the next
     /// start is taken from here instead of the following character.
@@ -205,6 +209,7 @@ impl State {
             work: Work::Idle,
             required_at: UNSET,
             required_from: 0,
+            verified: 0,
             run_end: UNSET,
         }
     }
@@ -218,9 +223,9 @@ mod tests {
         assert!(core::mem::size_of::<Work>() <= 40);
         assert_eq!(core::mem::size_of::<Frame>(), 48);
         assert_eq!(core::mem::size_of::<Phase>(), 48);
-        // Two offsets carry the condition bound and one the leading run's end.
-        // One execution state holds them; they add no frame, undo entry or
-        // per-position storage.
-        assert_eq!(core::mem::size_of::<State>(), 192);
+        // Offsets for the condition bound, the leading run's end and the
+        // characters the start scan confirmed. One execution state holds them;
+        // they add no frame, undo entry or per-position storage.
+        assert_eq!(core::mem::size_of::<State>(), 200);
     }
 }

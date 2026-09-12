@@ -239,6 +239,11 @@ impl Vm<'_, '_, '_, '_> {
             } else {
                 self.cursor = self.input.cursor_at(at).ok_or(ExecError::InvalidProgram)?;
                 self.state.start = self.cursor.mark();
+                // A contiguous run was compared byte for byte to reach here, so
+                // its instructions would only repeat that comparison. An
+                // alternation records nothing: which branch matched decides how
+                // far to skip, and that is not what this claim carries.
+                self.state.verified = if leading >= 2 { leading } else { 0 };
                 self.state.phase = Phase::Initialize(0);
             }
         } else if self.program.words[2] & Y != 0 || start + count == bytes.len() {

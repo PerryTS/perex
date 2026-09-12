@@ -632,6 +632,34 @@ impl Vm<'_, '_, '_, '_> {
         }
         Ok(())
     }
+    /// Begin after the leading characters the start scan already confirmed.
+    /// Their instructions are entry `SAVE`s, which record the start, and
+    /// `CHAR`s that compared equal; running them would repeat a comparison that
+    /// cannot fail. They are charged exactly as executing them would charge, so
+    /// a search's total work is unchanged.
+    fn skip_verified(&mut self) -> Result<(), ExecError> {
+        let verified = core::mem::replace(&mut self.state.verified, 0);
+        if verified == 0 {
+            return Ok(());
+        }
+        let entry = self.program.leading_pc();
+        self.charge(entry + verified)?;
+        let position = self.cursor.position();
+        for pc in 0..entry {
+            let [op, a, _] = self.program.instruction(pc);
+            if op != SAVE {
+                return Err(ExecError::InvalidProgram);
+            }
+            self.store(a as usize, position)?;
+        }
+        self.cursor = self
+            .input
+            .cursor_at(position + verified)
+            .ok_or(ExecError::InvalidProgram)?;
+        self.state.pc = entry + verified;
+        Ok(())
+    }
+
     fn begin_trial(&mut self) {
         self.state.pc = 0;
         self.state.frames = 0;
@@ -745,6 +773,7 @@ impl Vm<'_, '_, '_, '_> {
                 Phase::Initialize(index) => {
                     if index == self.program.register_count() {
                         self.begin_trial();
+                        self.skip_verified()?;
                     } else {
                         let end = self
                             .program
@@ -754,6 +783,7 @@ impl Vm<'_, '_, '_, '_> {
                         self.scratch.registers[index..end].fill(UNSET);
                         if end == self.program.register_count() {
                             self.begin_trial();
+                            self.skip_verified()?;
                         } else {
                             self.state.phase = Phase::Initialize(end);
                         }
