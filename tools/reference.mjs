@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -104,8 +105,48 @@ function readExpected(input) {
   return expected;
 }
 
+// The oracle's answers can depend on accumulated V8 state: a pattern that
+// matches in a clean process has been observed to report no match after a large
+// unrelated regexp workload in the same process. Recomputing a small set of
+// cases in a fresh process removes that measurement artifact. It never changes
+// or hides an answer; a difference that survives re-verification is reported.
+export function freshAnswers(rows) {
+  if (!rows.length) return new Map();
+  const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--answers'], {
+    input: JSON.stringify(rows),
+    encoding: 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+    timeout: 300_000,
+  });
+  if (child.error) throw child.error;
+  if (child.status !== 0) throw new Error(`reference --answers failed: ${child.stderr}`);
+  return parseAnswers(child.stdout);
+}
+
+// Compare, then recompute only the disagreeing cases in a clean process and
+// compare those again. A difference that survives is reported unchanged; the
+// number whose oracle answer was unstable is published alongside it.
+export function stableDifferences(expected, actual, cases) {
+  const first = compareAnswers(expected, actual);
+  if (!first.length) return { differences: first, unstable: 0 };
+  const byId = new Map(cases.map(row => [row.id, row]));
+  const rows = first.map(d => byId.get(d.id));
+  if (rows.some(row => row === undefined)) return { differences: first, unstable: 0 };
+  const fresh = freshAnswers(rows);
+  const subset = new Map(
+    [...fresh.keys()].filter(id => actual.has(id)).map(id => [id, actual.get(id)]),
+  );
+  const persistent = compareAnswers(fresh, subset);
+  return { differences: persistent, unstable: first.length - persistent.length };
+}
+
 export function main(args = process.argv.slice(2)) {
   const mode = args[0] ?? '--check';
+  if (mode === '--answers') {
+    const rows = JSON.parse(readFileSync(0, 'utf8'));
+    process.stdout.write(rows.map(row => JSON.stringify(runCase(row))).join('\n') + '\n');
+    return 0;
+  }
   if (!['--emit', '--write', '--check', '--compare'].includes(mode) ||
       args.length > (mode === '--compare' ? 2 : 1) || (mode === '--compare' && !args[1])) {
     throw new Error('Usage: reference.mjs [--check | --emit | --write | --compare FILE]');

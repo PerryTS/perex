@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
-import {runCase,parseAnswers,compareAnswers} from './reference.mjs';
+import {runCase,parseAnswers,compareAnswers,stableDifferences} from './reference.mjs';
 const args=process.argv.slice(2),probe=args.shift();
 assert(probe,'usage: check-names.mjs PROBE [--output DIR]');
 const outIndex=args.indexOf('--output'),output=outIndex<0?null:args[outIndex+1];
@@ -86,8 +86,8 @@ function encode(s){
 const expectedText=cases.map(row=>JSON.stringify(runCase(row))).join('\n')+'\n';
 const run=spawnSync(resolve(probe),[],{input:cases.map(r=>[r.id,encode(r.source),r.flags,encode(r.subject),r.start_utf16].join('\t')).join('\n')+'\n',encoding:'utf8',maxBuffer:256*1024*1024,timeout:120_000});
 assert.ifError(run.error);assert.equal(run.status,0,run.stderr);
-const differences=compareAnswers(parseAnswers(expectedText),parseAnswers(run.stdout));
-const summary={node:process.version,unicode:process.versions.unicode,cases:cases.length,identifier_boundary_values:points.size,differences:differences.length,first_differences:differences.slice(0,25).map(d=>({...d,case:cases.find(c=>c.id===d.id)}))};
+const {differences,unstable}=stableDifferences(parseAnswers(expectedText),parseAnswers(run.stdout),cases);
+const summary={node:process.version,unicode:process.versions.unicode,cases:cases.length,identifier_boundary_values:points.size,unstable_oracle_answers:unstable,differences:differences.length,first_differences:differences.slice(0,25).map(d=>({...d,case:cases.find(c=>c.id===d.id)}))};
 if(output){mkdirSync(output,{recursive:true});writeFileSync(resolve(output,'cases.json'),JSON.stringify({cases}));writeFileSync(resolve(output,'expected.jsonl'),expectedText);writeFileSync(resolve(output,'actual.jsonl'),run.stdout);writeFileSync(resolve(output,'summary.json'),JSON.stringify(summary,null,2)+'\n');}
 console.log(JSON.stringify(summary,null,2));
 process.exitCode=differences.length?1:0;

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {writeFileSync,mkdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
-import {runCase,parseAnswers,compareAnswers} from './reference.mjs';
+import {runCase,parseAnswers,compareAnswers,stableDifferences} from './reference.mjs';
 const [probe,output]=process.argv.slice(2);assert(probe,'usage: check-admission.mjs PROBE [OUTPUT_DIR]');
 const cases=[];
 function add(source,flags,subject,start_utf16=0){cases.push({id:`admission:${cases.length}`,source,flags:`d${flags}`,subject,start_utf16});}
@@ -43,5 +43,5 @@ for(let i=0;i<512;i++){const source=`(?:${pattern(2)})+Q`;for(const flags of [''
 function encode(s){const b=[];for(const ch of s){const p=ch.codePointAt(0);if(p<128)b.push(p);else if(p<2048)b.push(0xc0|p>>6,0x80|p&63);else if(p<65536)b.push(0xe0|p>>12,0x80|p>>6&63,0x80|p&63);else b.push(0xf0|p>>18,0x80|p>>12&63,0x80|p>>6&63,0x80|p&63);}return Buffer.from(b).toString('hex');}
 const expectedText=cases.map(r=>JSON.stringify(runCase(r))).join('\n')+'\n';
 const run=spawnSync(resolve(probe),[],{input:cases.map(r=>[r.id,encode(r.source),r.flags,encode(r.subject),r.start_utf16].join('\t')).join('\n')+'\n',encoding:'utf8',maxBuffer:256*1024*1024,timeout:120_000});assert.ifError(run.error);assert.equal(run.status,0,run.stderr);
-const differences=compareAnswers(parseAnswers(expectedText),parseAnswers(run.stdout));const report={node:process.version,cases:cases.length,differences:differences.length,first_differences:differences.slice(0,25).map(d=>({...d,case:cases.find(r=>r.id===d.id)}))};
+const {differences,unstable}=stableDifferences(parseAnswers(expectedText),parseAnswers(run.stdout),cases);const report={node:process.version,cases:cases.length,unstable_oracle_answers:unstable,differences:differences.length,first_differences:differences.slice(0,25).map(d=>({...d,case:cases.find(r=>r.id===d.id)}))};
 if(output){mkdirSync(output,{recursive:true});writeFileSync(resolve(output,'cases.json'),JSON.stringify({cases}));writeFileSync(resolve(output,'expected.jsonl'),expectedText);writeFileSync(resolve(output,'actual.jsonl'),run.stdout);writeFileSync(resolve(output,'summary.json'),JSON.stringify(report,null,2)+'\n');}console.log(JSON.stringify(report,null,2));process.exitCode=differences.length?1:0;

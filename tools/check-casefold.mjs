@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { runCase, parseAnswers, compareAnswers } from './reference.mjs';
+import { runCase, parseAnswers, compareAnswers ,stableDifferences} from './reference.mjs';
 const [probe, output] = process.argv.slice(2);
 assert(probe, 'usage: check-casefold.mjs PROBE [OUTPUT_DIR]');
 const data = new URL('../third_party/unicode/17.0.0/', import.meta.url);
@@ -84,8 +84,9 @@ if(output) {
   writeFileSync(resolve(output,'stderr.txt'),run.stderr ?? '');
 }
 assert.ifError(run.error); assert.equal(run.status,0,run.stderr);
-const differences=compareAnswers(parseAnswers(expectedText),parseAnswers(run.stdout));
+const {differences,unstable}=stableDifferences(parseAnswers(expectedText),parseAnswers(run.stdout),cases);
 const report={node:process.version,unicode:process.versions.unicode,pairs:pairs.size,cases:cases.length,
+  unstable_oracle_answers:unstable,
   differences:differences.length,first_differences:differences.slice(0,20)};
 if(output) writeFileSync(resolve(output,'summary.json'),JSON.stringify(report,null,2)+'\n');
 console.log(JSON.stringify(report,null,2));

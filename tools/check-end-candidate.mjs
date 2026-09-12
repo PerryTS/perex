@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
-import { parseAnswers, compareAnswers } from './reference.mjs';
+import { parseAnswers, compareAnswers ,stableDifferences} from './reference.mjs';
 
 const [probe, output, ...probeArgs] = process.argv.slice(2);
 assert(output, 'usage: check-end-candidate.mjs PROBE OUTPUT_DIR [PROBE_ARGS...]');
@@ -94,9 +94,10 @@ assert.ifError(run.error);
 assert.equal(run.status, 0, run.stderr);
 const actual = parseAnswers(run.stdout);
 assert.equal(actual.size, cases.length);
-const differences = compareAnswers(parseAnswers(expectedText), actual);
+const {differences,unstable}=stableDifferences(parseAnswers(expectedText),actual,cases);
 const report = {
   node: process.version, cases: cases.length, probe_args: probeArgs,
+  unstable_oracle_answers: unstable,
   differences: differences.length,
   first_differences: differences.slice(0, 25).map(d => ({ ...d, case: cases.find(row => row.id === d.id) })),
 };

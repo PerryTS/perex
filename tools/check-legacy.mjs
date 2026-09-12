@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {writeFileSync,mkdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
-import {runCase,parseAnswers,compareAnswers} from './reference.mjs';
+import {runCase,parseAnswers,compareAnswers,stableDifferences} from './reference.mjs';
 const [probe,output]=process.argv.slice(2);
 assert(probe,'usage: check-legacy.mjs PROBE [OUTPUT_DIR]');
 const cases=[];
@@ -51,7 +51,7 @@ function encode(s){const bytes=[];for(const ch of s){const p=ch.codePointAt(0);i
 const expectedText=cases.map(r=>JSON.stringify(runCase(r))).join('\n')+'\n';
 const run=spawnSync(resolve(probe),[],{input:cases.map(r=>[r.id,encode(r.source),r.flags,encode(r.subject),0].join('\t')).join('\n')+'\n',encoding:'utf8',maxBuffer:512*1024*1024,timeout:120_000});
 assert.ifError(run.error);assert.equal(run.status,0,run.stderr);
-const differences=compareAnswers(parseAnswers(expectedText),parseAnswers(run.stdout));
-const report={node:process.version,cases:cases.length,numeric_spellings:numbers.size,differences:differences.length,first_differences:differences.slice(0,25).map(d=>({...d,case:cases.find(r=>r.id===d.id)}))};
+const {differences,unstable}=stableDifferences(parseAnswers(expectedText),parseAnswers(run.stdout),cases);
+const report={node:process.version,cases:cases.length,numeric_spellings:numbers.size,unstable_oracle_answers:unstable,differences:differences.length,first_differences:differences.slice(0,25).map(d=>({...d,case:cases.find(r=>r.id===d.id)}))};
 if(output){mkdirSync(output,{recursive:true});writeFileSync(resolve(output,'cases.json'),JSON.stringify({cases}));writeFileSync(resolve(output,'expected.jsonl'),expectedText);writeFileSync(resolve(output,'actual.jsonl'),run.stdout);writeFileSync(resolve(output,'summary.json'),JSON.stringify(report,null,2)+'\n');}
 console.log(JSON.stringify(report,null,2));process.exitCode=differences.length?1:0;

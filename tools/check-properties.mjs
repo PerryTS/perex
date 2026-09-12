@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { runCase, parseAnswers, compareAnswers } from './reference.mjs';
+import { runCase, parseAnswers, compareAnswers ,stableDifferences} from './reference.mjs';
 const args=process.argv.slice(2);
 const allowReviewed=args.includes('--allow-reviewed-reference-disagreements');
 const [propertyProbe,engineProbe,output] = args.filter(a=>a!=='--allow-reviewed-reference-disagreements');
@@ -90,7 +90,7 @@ const check=spawnSync(resolve(engineProbe),[],{
 });
 save('actual.jsonl',check.stdout??'');save('stderr.txt',check.stderr??'');
 assert.ifError(check.error);assert.equal(check.status,0,check.stderr);
-const differences=compareAnswers(parseAnswers(expectedText),parseAnswers(check.stdout));
+const {differences,unstable}=stableDifferences(parseAnswers(expectedText),parseAnswers(check.stdout),cases);
 let reviewedCases=0,reviewedMembership=0;
 if(allowReviewed) {
   const reviewed=JSON.parse(readFileSync(new URL('../tests/fixtures/property-reference-disagreements.json',import.meta.url)));
@@ -104,7 +104,7 @@ if(allowReviewed) {
 const report={node:process.version,unicode:process.versions.unicode,properties:expected.length,
   perex_membership_values:0x110000*expected.length,
   node_membership_values:0x110000*expected.filter(r=>!r.outcome).length,membership_differences:membershipDifferences,
-  cases:cases.length,differences:differences.length,node_agreements:cases.length-differences.length,
+  cases:cases.length,unstable_oracle_answers:unstable,differences:differences.length,node_agreements:cases.length-differences.length,
   reviewed_cases:reviewedCases,reviewed_membership:reviewedMembership,
   unreviewed_differences:membershipDifferences.length+differences.length-reviewedCases-reviewedMembership,
   first_differences:differences.slice(0,12)};
