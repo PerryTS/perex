@@ -2,6 +2,40 @@
 //! and retreat uses the current original input view; pauses retain offsets only.
 use super::*;
 
+/// What a fixed-charge atom accepts, as a predicate over original ASCII bytes.
+#[derive(Clone, Copy)]
+enum AtomBytes {
+    /// Inside an inclusive range, as a plain single-range class.
+    Inside(u8, u8),
+    /// Outside one, as that class negated.
+    Outside(u8, u8),
+    /// Anything but a line terminator, as `.` without the `s` flag. On ASCII
+    /// storage only the two single-byte terminators can occur.
+    Unlined,
+    /// Anything, as `.` with the `s` flag.
+    Every,
+    /// Inside any of several inclusive ranges, or outside all of them when
+    /// negated. Only ranges an ASCII subject can reach are kept.
+    Ranges([(u8, u8); ATOM_CLASS_RANGES as usize], u8, bool),
+}
+
+impl AtomBytes {
+    fn holds(self, byte: u8) -> bool {
+        match self {
+            Self::Inside(lo, hi) => byte >= lo && byte <= hi,
+            Self::Outside(lo, hi) => byte < lo || byte > hi,
+            Self::Unlined => byte != b'\n' && byte != b'\r',
+            Self::Every => true,
+            Self::Ranges(ranges, count, negated) => {
+                let inside = ranges[..count as usize]
+                    .iter()
+                    .any(|&(lo, hi)| byte >= lo && byte <= hi);
+                inside != negated
+            }
+        }
+    }
+}
+
 /// Ranges a repeated class may hold and still be tested in one step. The step
 /// stays bounded work, like the sorted-class search, while covering the small
 /// classes ordinary patterns repeat.
@@ -35,9 +69,13 @@ impl Vm<'_, '_, '_, '_> {
             CHAR => equal(self.program, c, a, false),
             ANY | ANY_S => op == ANY_S || !line_terminator(c),
             _ => {
+                // Charged for the whole class rather than per range examined.
+                // A byte scan cannot know which range matched, and a paused
+                // search must reach the same total as an unpaused one, so the
+                // cost of a repeated class is its size either way.
+                self.charge((b & !NEGATED) as usize)?;
                 let mut found = false;
                 for index in a..a + (b & !NEGATED) {
-                    self.charge(1)?;
                     let [lo, hi] = self.program.range(index as usize);
                     found = if lo & PROPERTY != 0 {
                         if hi == 2 {
@@ -60,15 +98,43 @@ impl Vm<'_, '_, '_, '_> {
     /// The charge one character of this atom always costs, when that is the
     /// same whatever the character is. `None` when it is data-dependent, which
     /// a byte scan could not reproduce and so must not replace.
-    fn fixed_atom_charge(&self, op: u32, a: u32, b: u32) -> Option<(usize, u8, u8)> {
+    /// The charge one character of this atom always costs, when that is the
+    /// same whatever the character is, with the predicate to walk it by. `None`
+    /// when the charge is data-dependent, which a byte scan cannot reproduce.
+    fn fixed_atom_charge(&self, op: u32, a: u32, b: u32) -> Option<(usize, AtomBytes)> {
         match op {
             // One unit for the character; `equal` charges nothing.
-            CHAR if a < 128 => Some((1, a as u8, a as u8)),
+            CHAR if a < 128 => Some((1, AtomBytes::Inside(a as u8, a as u8))),
+            ANY => Some((1, AtomBytes::Unlined)),
+            ANY_S => Some((1, AtomBytes::Every)),
             // One unit for the character and one for the single range examined,
             // which is the same whether or not it matches.
-            CLASS if b == 1 => {
-                let [lo, hi] = self.program.range(a as usize);
-                (lo & PROPERTY == 0 && hi < 128).then_some((2, lo as u8, hi as u8))
+            CLASS if b & !NEGATED <= ATOM_CLASS_RANGES && b & !NEGATED != 0 => {
+                let count = b & !NEGATED;
+                let mut ranges = [(0, 0); ATOM_CLASS_RANGES as usize];
+                let mut kept = 0;
+                for index in a..a + count {
+                    let [lo, hi] = self.program.range(index as usize);
+                    if lo & PROPERTY != 0 || lo > hi {
+                        return None;
+                    }
+                    // A range beyond ASCII can never match this storage, so it
+                    // is dropped rather than making the class ineligible.
+                    if lo < 128 {
+                        ranges[kept] = (lo as u8, hi.min(127) as u8);
+                        kept += 1;
+                    }
+                }
+                let negated = b & NEGATED != 0;
+                // One range keeps its own predicate: the general form walks a
+                // slice per word, which costs more than the single comparison
+                // the common case needs.
+                let accepts = match (kept, negated) {
+                    (1, false) => AtomBytes::Inside(ranges[0].0, ranges[0].1),
+                    (1, true) => AtomBytes::Outside(ranges[0].0, ranges[0].1),
+                    _ => AtomBytes::Ranges(ranges, kept as u8, negated),
+                };
+                Some((1 + count as usize, accepts))
             }
             _ => None,
         }
@@ -77,23 +143,52 @@ impl Vm<'_, '_, '_, '_> {
     /// Walk a run of a fixed-charge atom directly over original bytes, which
     /// costs a fraction of decoding each character through the cursor. Returns
     /// how many characters the run holds from `start`.
-    fn byte_run(bytes: &[u8], start: usize, lo: u8, hi: u8, limit: usize) -> usize {
+    fn byte_run(bytes: &[u8], start: usize, accepts: AtomBytes, limit: usize) -> usize {
         const HIGH: u64 = 0x8080_8080_8080_8080;
         const ONES: u64 = 0x0101_0101_0101_0101;
         let end = bytes.len().min(start + limit);
+        if let AtomBytes::Every = accepts {
+            return end - start;
+        }
         let mut i = start;
-        let (lower, upper) = (u64::from(lo) * ONES, u64::from(hi) * ONES);
         while i + 8 <= end {
             let word = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
-            // High bit set for each lane inside the range, as in the start scan.
-            let inside =
-                ((word | HIGH).wrapping_sub(lower)) & ((upper | HIGH).wrapping_sub(word)) & HIGH;
-            if inside != HIGH {
-                return i - start + (!inside & HIGH).trailing_zeros() as usize / 8;
+            // High bit set for each lane the atom does not accept.
+            let rejected = match accepts {
+                AtomBytes::Inside(lo, hi) | AtomBytes::Outside(lo, hi) => {
+                    let (lower, upper) = (u64::from(lo) * ONES, u64::from(hi) * ONES);
+                    let inside = ((word | HIGH).wrapping_sub(lower))
+                        & ((upper | HIGH).wrapping_sub(word))
+                        & HIGH;
+                    if matches!(accepts, AtomBytes::Inside(..)) {
+                        !inside & HIGH
+                    } else {
+                        inside
+                    }
+                }
+                AtomBytes::Unlined => {
+                    let nl = word ^ (u64::from(b'\n') * ONES);
+                    let cr = word ^ (u64::from(b'\r') * ONES);
+                    (nl.wrapping_sub(ONES) & !nl & HIGH) | (cr.wrapping_sub(ONES) & !cr & HIGH)
+                }
+                AtomBytes::Every => 0,
+                AtomBytes::Ranges(ranges, count, negated) => {
+                    let mut inside = 0;
+                    for &(lo, hi) in &ranges[..count as usize] {
+                        let (lower, upper) = (u64::from(lo) * ONES, u64::from(hi) * ONES);
+                        inside |= ((word | HIGH).wrapping_sub(lower))
+                            & ((upper | HIGH).wrapping_sub(word))
+                            & HIGH;
+                    }
+                    if negated { inside } else { !inside & HIGH }
+                }
+            };
+            if rejected != 0 {
+                return i - start + rejected.trailing_zeros() as usize / 8;
             }
             i += 8;
         }
-        while i < end && bytes[i] >= lo && bytes[i] <= hi {
+        while i < end && accepts.holds(bytes[i]) {
             i += 1;
         }
         i - start
@@ -125,13 +220,13 @@ impl Vm<'_, '_, '_, '_> {
             // A fixed-charge atom over ASCII storage is walked as bytes. The
             // charge is identical to deciding each character separately, so a
             // pause still reaches the same total, and the cursor moves once.
-            if let Some((per, lo, hi)) = self.fixed_atom_charge(op, a, b)
+            if let Some((per, accepts)) = self.fixed_atom_charge(op, a, b)
                 && let Some(bytes) = self.input.ascii_bytes()
                 && !self.state.reverse
             {
                 let start = self.cursor.position();
                 let limit = (available / per).min(self.budget.remaining() / per);
-                let run = Self::byte_run(bytes, start, lo, hi, limit);
+                let run = Self::byte_run(bytes, start, accepts, limit);
                 if run != 0 {
                     self.charge(run * per)?;
                     atom.before = self
@@ -201,41 +296,31 @@ impl Vm<'_, '_, '_, '_> {
                 // search and classes too large for one step; building and taking
                 // it apart again per character costs several times the
                 // membership test itself, and this is the engine's hottest loop.
+                // The same test the run and byte scans use, so every path
+                // through a repeated class charges it identically.
                 CLASS if (b & !NEGATED) <= ATOM_CLASS_RANGES => {
-                    let mut found = false;
-                    for index in a..a + (b & !NEGATED) {
-                        if self.charge(1).is_err() {
+                    match self.atom_holds(op, a, b, c) {
+                        Ok(held) => held,
+                        Err(error) => {
                             // Resume through the phase, which re-tests the class
-                            // from its first range with the character already read.
-                            self.begin_class(
-                                a,
-                                b,
-                                c,
-                                if extend {
-                                    ClassUse::AtomExtend
-                                } else {
-                                    ClassUse::AtomScan
-                                },
-                                false,
-                                false,
-                            );
-                            return Err(ExecError::WorkLimit);
-                        }
-                        let [lo, hi] = self.program.range(index as usize);
-                        found = if lo & PROPERTY != 0 {
-                            if hi == 2 {
-                                !properties::contains(lo & !PROPERTY, c)
-                            } else {
-                                properties::contains(lo & !PROPERTY, c) != (hi != 0)
+                            // with the character already read.
+                            if matches!(error, ExecError::WorkLimit) {
+                                self.begin_class(
+                                    a,
+                                    b,
+                                    c,
+                                    if extend {
+                                        ClassUse::AtomExtend
+                                    } else {
+                                        ClassUse::AtomScan
+                                    },
+                                    false,
+                                    false,
+                                );
                             }
-                        } else {
-                            c >= lo && c <= hi
-                        };
-                        if found {
-                            break;
+                            return Err(error);
                         }
                     }
-                    found != (b & NEGATED != 0)
                 }
                 CLASS | CLASS_I | CLASS_SORTED | CLASS_SORTED_I => {
                     self.begin_class(

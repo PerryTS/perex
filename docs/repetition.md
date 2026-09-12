@@ -215,11 +215,16 @@ over original bytes with the same lane arithmetic the start scan uses, moving
 the cursor once at the end.
 
 The charge has to be identical either way, because a paused search must reach
-the same total as an unpaused one. It is fixed for an ASCII character, which
-costs one unit, and for a single-range ASCII class, which costs two: one for the
-character and one for the range examined, whether or not it matches. A class of
-several ranges charges according to which range matched, which a byte scan
-cannot reproduce, so those keep the character-at-a-time path.
+the same total as an unpaused one. A repeated class is therefore charged for its
+whole size rather than for the ranges examined before one matched: the size is
+the same whatever the character is, so a byte scan can reproduce it, where
+"however far the walk got" could not. Every path through a repeated class uses
+that charge, so a small quantum and a large one still reach the same total.
+
+An ASCII character costs one unit, `.` one, and a class one plus its range
+count. A folded, sorted or larger class keeps the character-at-a-time path.
+A single range keeps its own predicate, since walking a slice of ranges per word
+costs more than the one comparison that case needs.
 
 The stopping character is always left to the ordinary step, which charges and
 decides it exactly as before.
@@ -228,8 +233,10 @@ Measured on a sixty-character run, process CPU time per search:
 
 | Pattern | Phase per character | Run loop | Byte run |
 |---|---:|---:|---:|
-| `/a+!/` | 716 ns | 277 ns | 82 ns |
-| `/[a-z]+!/` | 1204 ns | 364 ns | 89 ns |
+| `/a+!/` | 716 ns | 277 ns | 86 ns |
+| `/[a-z]+!/` | 1204 ns | 364 ns | 106 ns |
+| `/\w+!/` | 1493 ns | 601 ns | 139 ns |
+| `/[^0-9]+!/` | 1275 ns | 379 ns | 123 ns |
 
-Both are now faster than `regress` and Rust `regex` on this shape, and within
-about 2.3x of V8. A multi-range class keeps the run loop's figure.
+All four are now at or better than `regress` on this shape, and three of the
+four beat Rust `regex` as well.
