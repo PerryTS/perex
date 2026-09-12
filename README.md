@@ -48,6 +48,7 @@ cargo test --locked
 cargo test --locked --release
 python3 tools/generate-casefold.py --check
 python3 tools/generate-properties.py --check
+cargo run --locked --release --example compilable
 cargo build --locked --release --example input_probe
 node tools/check-input.mjs target/release/examples/input_probe
 cargo build --locked --release --example engine_probe

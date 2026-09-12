@@ -617,6 +617,60 @@ impl<'a> Program<'a> {
         let at = HEADER + pc * 3;
         self.words[at..at + 3].try_into().unwrap()
     }
+    /// Whether the compilation tier described in `docs/compilation.md` could
+    /// emit code for this program, and whether its work at one start position is
+    /// therefore statically bounded.
+    ///
+    /// This is a property of the program alone. It is not a promise that a
+    /// search will be compiled: the tier also requires wholly ASCII subject
+    /// storage, a host-owned code buffer, and a target it has an encoder for.
+    /// A program this rejects is not refused — it is searched by the
+    /// interpreter, which is the only definition of what a pattern means.
+    ///
+    /// The subset is deliberately small. It covers a leading capture's
+    /// bookkeeping, ASCII characters, classes of ASCII ranges, `.`, and bounded
+    /// repeats of those. Folding, properties, sorted classes, assertions,
+    /// alternation, backreferences and unbounded repeats are all excluded, and
+    /// each would be a separate decision to admit.
+    pub fn compilable(self) -> bool {
+        for pc in 0..self.instructions() {
+            let [op, a, b] = self.instruction(pc);
+            let admitted = match op {
+                MATCH | SAVE => true,
+                CHAR => a < 128,
+                ANY | ANY_S => true,
+                CLASS => {
+                    let count = b & !NEGATED;
+                    // A property range needs the shared tables, which generated
+                    // code does not carry, and a range past ASCII needs decoding
+                    // this subset does not do.
+                    (a..a + count).all(|i| {
+                        let [lo, hi] = self.range(i as usize);
+                        lo & PROPERTY == 0 && hi < 128
+                    })
+                }
+                // Bounded or not. An unbounded repeat makes a search's work
+                // depend on the subject, but what bounds how long generated
+                // code runs before the collector may have it is the budget it
+                // is given, not the pattern: a search that exhausts that budget
+                // returns and is re-run by the interpreter. Requiring a static
+                // bound here instead admitted only trivial literals, which are
+                // the cases already within 2x of V8.
+                ATOM_REPEAT => true,
+                // A repeat's own structure around its body. `REPEAT_INIT` is
+                // absent from this list: a repeat that needs it has captures or
+                // nullability to reset per iteration, which is a separate
+                // decision to admit.
+                REPEAT_CHOICE | REPEAT_BODY | REPEAT_NEXT => true,
+                _ => false,
+            };
+            if !admitted {
+                return false;
+            }
+        }
+        true
+    }
+
     pub(crate) fn range(self, i: usize) -> [u32; 2] {
         let at = HEADER + self.instructions() * 3 + i * 2;
         self.words[at..at + 2].try_into().unwrap()
