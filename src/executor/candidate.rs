@@ -4,7 +4,8 @@ use super::*;
 
 impl Vm<'_, '_, '_, '_> {
     pub(super) fn end_candidate(&mut self) -> Result<bool, ExecError> {
-        let descriptor = self.program.words[8];
+        // The upper byte is the length bound, not part of this descriptor.
+        let descriptor = self.program.words[8] & 0xff_ffff;
         if descriptor == 0 {
             return Ok(true);
         }

@@ -706,7 +706,25 @@ impl Vm<'_, '_, '_, '_> {
                 | Phase::AdmitScan
                 | Phase::AdmitProbe { .. } => self.admit_step(available)?,
                 Phase::Start => {
-                    self.seek(self.state.requested_start, AfterSeek::Start, available)?
+                    // An end-anchored match of bounded length cannot begin more
+                    // than that many units from the subject's end, so the whole
+                    // prefix before that is skipped instead of scanned.
+                    let mut target = self.state.requested_start;
+                    if let Some(bound) = self.program.end_bound() {
+                        let earliest = self.input.len_utf16().saturating_sub(bound);
+                        if target < earliest {
+                            if self.program.words[2] & Y != 0 {
+                                // A sticky search only tries its own position,
+                                // which this proves cannot match.
+                                self.charge(1)?;
+                                self.state.phase = Phase::Finished(false);
+                                continue;
+                            }
+                            self.charge(1)?;
+                            target = earliest;
+                        }
+                    }
+                    self.seek(target, AfterSeek::Start, available)?
                 }
                 Phase::Seek { target, after } => {
                     if self.cursor.position() == target {

@@ -24,6 +24,34 @@ for (const source of patterns) {
     }
   }
 }
+// The length bound only applies on a subject longer than the match can be, so
+// these are the cases where a skipped prefix could hide an answer. Zero-width
+// matches at the end, astral characters whose unit count exceeds their
+// character count, nullable and multiline endings, and sticky starts on both
+// sides of the bound are all included.
+{
+  const filler = 'abcdefghij'.repeat(12);
+  const anchored = [
+    'needle$', 'zzneedle$', '$', 'a?$', '(a)?$', '(?<=abcdefghij)$', '(?<=zz)$',
+    '(?:a|bb|ccc)$', '[a-j]$', '[a-j][a-j]$', '(?:ab)$', '\\uD83D\\uDE00$',
+    '(\\uD83D\\uDE00)?$', 'j\\uD83D\\uDE00$', '(?m:j$)', '(?-m:j$)',
+    'j{2}$', '[a-j]{3}$', '(?=j)j$', '(?!z)j$', '(?:j$|ij$)',
+  ];
+  const tails = ['', 'needle', 'j', 'ij', '\uD83D\uDE00', 'j\uD83D\uDE00', '\uD800', 'z'];
+  for (const source of anchored) {
+    for (const flags of ['g', 'gm', 'gi', 'gu', 'gy', 'guy']) {
+      for (const tail of tails) {
+        const subject = filler + tail;
+        for (const start of new Set([
+          0, 1, subject.length - 3, subject.length - 1, subject.length, subject.length + 1,
+        ])) {
+          if (start >= 0) add(source, flags, subject, start);
+        }
+      }
+    }
+  }
+}
+
 // Independently exercise every ASCII member at interval and complement edges.
 for (let c = 0; c < 128; c++) {
   const hex = n => `\\x${n.toString(16).padStart(2, '0')}`;

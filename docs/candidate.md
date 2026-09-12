@@ -113,3 +113,58 @@ Capture answers, errors and resource limits remain the evaluator's responsibilit
 and one-/seventeen-work-unit advances with relocation and scratch replacement.
 The bounded Rust witness also removes the descriptor and requires work exhaustion,
 so a missing check cannot make the test itself run without a bound.
+
+## Bounded end-anchored starts
+
+The strict end condition above rejects a search whose final character cannot
+match. When the pattern is also *bounded* in length, the same end assertion
+proves something stronger: where a match can begin.
+
+If every successful path ends at a non-multiline end assertion and consumes at
+most `k` UTF-16 units, then a match starting at `s` ends at `s + k` or earlier,
+and it must end at the subject's end, so `s` is at least `len - k`. Every
+position before that is skipped without being scanned or tried.
+
+The compiler derives `k` in the same bottom-up pass that derives the end
+assertion, reusing the spare bits of the node field that already carries the
+`consumes` and `anchored` facts. A character contributes one unit, or two above
+the basic plane; `.` and a class contribute two, since either can match an
+astral character. A sequence adds its parts, an alternative takes the larger,
+an assertion contributes nothing. A repetition or a backreference has no bound
+this pass can establish, so it disables the claim rather than guessing one —
+`[a-j]{3}$` is bounded in principle but is not claimed here.
+
+Word 8's upper byte holds `k + 1`, so zero means no bound. The range descriptor
+keeps the low 24 bits, and readers of it must mask the upper byte off: a bound
+present with a disabled range descriptor would otherwise look like a range of
+`[0,0]` and reject every subject. Like the other descriptors, the bound's
+representation is validated and its semantic guarantee belongs to the compiler.
+
+A sticky search whose requested position is before the bound cannot match, and
+reports that without scanning. A non-sticky search seeks forward to the bound
+and proceeds normally from there.
+
+The zero-length case is the one to be careful about: `(?<=abc)$` consumes
+nothing, so its bound is zero and the search starts at the subject's end, where
+a zero-width match is exactly what should be found.
+
+### Measurement
+
+Alternating the identical driver between both binaries on a 256 KiB subject:
+
+| Case | Before | After | Work before/after |
+|---|---:|---:|---|
+| `/needle$/` hit | 77.2 µs | 82 ns | 305,825 / 24 |
+| `/zzneedle$/` miss | 58.5 µs | 34 ns | 320,372 / 11 |
+
+The work-unit reduction is deterministic and independent of machine load; the
+wall-clock ratios were measured under a load average near 50 and are reported
+as ratios for that reason. A short anchored subject and an unanchored control
+were unchanged at 1.0x, so this removes work without adding any to patterns it
+does not apply to.
+
+`tools/check-end-candidate.mjs` covers the bound over subjects longer than the
+match can be, including zero-width endings, astral characters whose unit count
+exceeds their character count, nullable and multiline endings, repetitions that
+disable the claim, and sticky starts on both sides of the bound: 34,395 cases
+with no differences, unchanged under one-unit resumption with relocation.

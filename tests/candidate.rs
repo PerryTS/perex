@@ -134,7 +134,7 @@ fn candidate_skipping_is_required_for_the_bounded_long_miss() {
 fn descriptors_are_validated_and_old_formats_rejected() {
     let original = words("needle", "");
     for slot in [7, 8] {
-        for descriptor in [3, 2 | (9 << 8) | (8 << 16), 2 | (128 << 16), 2 | (1 << 24)] {
+        for descriptor in [3, 2 | (9 << 8) | (8 << 16), 2 | (128 << 16)] {
             let mut bad = original.clone();
             bad[slot] = descriptor;
             assert_eq!(
@@ -143,6 +143,17 @@ fn descriptors_are_validated_and_old_formats_rejected() {
             );
         }
     }
+    // Word 7 has no field above its range; word 8's upper byte is the
+    // end-anchored length bound, so the same bits are valid there.
+    let mut bad = original.clone();
+    bad[7] = 2 | (1 << 24);
+    assert_eq!(
+        Program::from_words(&bad, &mut Budget::new(1000)).unwrap_err(),
+        ProgramError::Invalid
+    );
+    let mut bounded = original.clone();
+    bounded[8] = original[8] | (7 << 24);
+    assert!(Program::from_words(&bounded, &mut Budget::new(1000)).is_ok());
     for version in [7, 8, 9] {
         let mut bad = original.clone();
         bad[1] = version;

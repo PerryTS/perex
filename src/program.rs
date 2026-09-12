@@ -20,6 +20,9 @@ pub(crate) const LEADING_MAX: u32 = 32;
 pub(crate) const ADMISSION_FORWARD: u32 = 1 << 31;
 /// Word 9 bits outside the leading run and the forward claim are reserved.
 pub(crate) const LEADING_MASK: u32 = 255;
+/// Longest end-anchored match word 8 can bound, in UTF-16 units. The stored
+/// value is one more than the length, so zero means no bound was derived.
+pub(crate) const MAX_END_UNITS: u32 = 254;
 /// Instructions word 9's derivation may inspect. Interior `SAVE` bookkeeping
 /// consumes nothing, so a bounded number is skipped while collecting the run.
 const LEADING_SCAN: usize = 128;
@@ -181,10 +184,23 @@ impl<'a> Program<'a> {
         {
             return Err(bad);
         }
-        for &candidate in &words[7..9] {
-            let lo = (candidate >> 8) & 255;
-            let hi = (candidate >> 16) & 255;
-            if candidate > 1 && (candidate != (2 | (lo << 8) | (hi << 16)) || lo > hi || hi > 127) {
+        // Word 8's upper byte carries the end-anchored length bound; word 7 has
+        // no such field. Both share the character-range encoding below it. Like
+        // the range descriptors, the bound's representation is checked here and
+        // its semantic guarantee belongs to the compiler.
+        for (index, &candidate) in words[7..9].iter().enumerate() {
+            let descriptor = if index == 1 {
+                candidate & 0xff_ffff
+            } else {
+                candidate
+            };
+            if index == 0 && candidate != descriptor {
+                return Err(bad);
+            }
+            let lo = (descriptor >> 8) & 255;
+            let hi = (descriptor >> 16) & 255;
+            if descriptor > 1 && (descriptor != (2 | (lo << 8) | (hi << 16)) || lo > hi || hi > 127)
+            {
                 return Err(bad);
             }
         }
@@ -394,6 +410,14 @@ impl<'a> Program<'a> {
     /// no match can begin at or after that position.
     pub(crate) fn admission_forward(self) -> bool {
         self.words[9] & ADMISSION_FORWARD != 0
+    }
+    /// Units an end-anchored match can span, so no match can begin earlier than
+    /// that far from the subject's end. Zero when no bound was derived.
+    pub(crate) fn end_bound(self) -> Option<usize> {
+        match self.words[8] >> 24 {
+            0 => None,
+            packed => Some((packed - 1) as usize),
+        }
     }
     /// Instruction holding the first character of [`Program::leading`].
     pub(crate) fn leading_pc(self) -> usize {

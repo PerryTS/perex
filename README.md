@@ -99,6 +99,8 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 
 [Candidate-start scanning](docs/candidate.md) skips impossible ASCII start positions using the same evaluator and original storage. Complete-answer and relocation checks precede performance claims.
 
+[Bounded end-anchored starts](docs/candidate.md) skip the whole prefix a match anchored at the subject's end cannot begin in, which removed a 256 KiB scan from 305,825 work units to 24.
+
 [Unicode sets](docs/sets.md) implements the `v` union grammar, its escaping and reserved-punctuation rules, and its complement-after-folding rule. Set operators, string members and properties of strings remain explicit gaps rather than approximations.
 
 [Test262 pattern conformance](docs/conformance.md) compares every pattern harvested from the suite's regular-expression tests against Node, for syntax acceptance and complete match answers. The one remaining gap is Unicode-sets class syntax.
