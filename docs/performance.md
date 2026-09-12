@@ -41,16 +41,10 @@ V8 is the engine Perry replaces, so it is the comparison that decides adoption.
 Earlier comparisons in this project used `regress` and Rust `regex`; the latter
 is a linear-time automaton with SIMD prefilters and answers a different
 question. Both drivers measure process CPU time, because this host is shared and
-its load average reached 108 during these runs, where wall clock measures how
-often the scheduler ran a process rather than how much work it did.
-
-The figures below are one pass with both engines run adjacent in time at load
-average 19 to 30. A three-pass run taking the minimum per case, which is the
-method used for earlier revisions here, was started and abandoned when another
-user's benchmark took the machine to load 108: passes taken there would only
-have been worse than the one kept, and the minimum would have come from it
-anyway. The per-case figures agree within this machine's noise with three
-separate Perex-only runs made while the changes were being measured.
+its load average ranged from 19 to 108 during these runs, where wall clock
+measures how often the scheduler ran a process rather than how much work it did.
+The figure for each case is the minimum of three passes, with the two engines
+alternating so the same load applies to both.
 
 The harness, cases and raw results are the host's, under
 `secret-tests/perex-bench`.
@@ -61,10 +55,10 @@ The harness, cases and raw results are the host's, under
 |---|---:|---:|
 | Required text before its prefix | 1.80 µs | 24.0 ms |
 | Required text absent, 4 KiB of `a` | 1.65 µs | 24.0 ms |
-| Class miss over 256 KiB | 20.9 µs | 922 µs |
+| Class miss over 256 KiB | 20.7 µs | 917 µs |
 | Long literal miss, 256 KiB | 11.4 µs | 128 µs |
 | Long literal, 256 KiB | 11.4 µs | 70.8 µs |
-| Three-way alternation, 256 KiB | 21.8 µs | 42.7 µs |
+| Three-way alternation, 256 KiB | 21.8 µs | 42.2 µs |
 
 The first two are the catastrophic-backtracking shapes. Bounded work and the
 admission bound are not a curiosity against a backtracking competitor: they are
@@ -74,29 +68,32 @@ The last four are the scan-bound cases, and they are here because of one change
 rather than a class of them: every start scan used to decide a position on its
 first byte alone and compare the prefix at each position that admitted, and
 [leading](leading.md) records why deciding on two bytes was available for free.
-The alternation moved from 4.5x behind to 0.51x ahead, and the long literal from
+The alternation moved from 4.5x behind to 0.52x ahead, and the long literal from
 0.83x to 0.16x.
 
 ### Behind
 
-Between 1.21x and 7.24x, in nineteen of twenty-five cases.
+Between 1.38x and 7.13x, in nineteen of twenty-five cases.
 
 | Case | Perex | V8 | |
 |---|---:|---:|---:|
-| Captures, 25-character subject | 440 ns | 60.8 ns | 7.24x |
-| Class repeat, short subject | 294 ns | 69.0 ns | 4.26x |
-| `\w+` over a 60-character run | 146 ns | 40.5 ns | 3.60x |
-| Folded literal, 29 characters | 66.3 ns | 21.7 ns | 3.06x |
-| End-anchored hit, 256 KiB | 54.9 ns | 18.2 ns | 3.02x |
-| Literal lookbehind, 256 KiB | 115 ns | 60.5 ns | 1.90x |
-| Short literal | 52.0 ns | 43.1 ns | 1.21x |
+| Captures, 25-character subject | 430 ns | 60.2 ns | 7.13x |
+| Class repeat, short subject | 290 ns | 67.8 ns | 4.27x |
+| `\w+` over a 60-character run | 142 ns | 40.4 ns | 3.52x |
+| Folded literal, 29 characters | 66.3 ns | 21.4 ns | 3.10x |
+| End-anchored hit, 256 KiB | 54.5 ns | 17.7 ns | 3.08x |
+| Literal lookbehind, 256 KiB | 114 ns | 42.0 ns | 2.73x |
+| Short literal, 29 characters | 52.0 ns | 36.7 ns | 1.42x |
 
-Every one of them is a search short enough that starting one dominates it. The
-literal ladder makes that explicit: a one-character literal costs 46.3 ns and a
-sixteen-character one 53.7 ns, so length is worth about 0.5 ns per character
-while the search itself costs forty. The two long-subject entries above are the
-same thing — both find their match almost immediately and then pay the same flat
-cost.
+Most of them are searches short enough that starting one dominates. The literal
+ladder makes that explicit: a one-character literal costs 45.3 ns and a
+sixteen-character one 52.5 ns, so length is worth about half a nanosecond per
+character while the search itself costs forty-five. The two long-subject entries
+are the same thing — both find their match almost immediately and then pay the
+same flat cost.
+
+The first two are not that, and are treated separately below: 430 ns and 290 ns
+leave far more above the flat cost than it accounts for.
 
 ### The floor, and what it is
 
@@ -104,13 +101,13 @@ A diagnostic ladder separates fixed cost from marginal cost:
 
 | Case | Perex | V8 | |
 |---|---:|---:|---:|
-| `/z/` against `""` | 16.5 ns | 11.7 ns | 1.41x |
-| `/z/` against `"a"` | 20.1 ns | 14.3 ns | 1.41x |
-| `/a/` against `"a"` | 46.1 ns | 17.3 ns | 2.66x |
+| `/z/` against `""` | 16.1 ns | 11.6 ns | 1.39x |
+| `/z/` against `"a"` | 19.5 ns | 14.1 ns | 1.38x |
+| `/a/` against `"a"` | 46.1 ns | 17.1 ns | 2.70x |
 
-An empty search is 1.41x: that is the cost of a bytecode pausable at every
+An empty search is 1.39x: that is the cost of a bytecode pausable at every
 instruction so the host's collector can run, which is why this engine exists.
-The step from a miss to a hit is 26 ns against V8's 3, and it buys register
+The step from a miss to a hit is 27 ns against V8's 3, and it buys register
 initialization, four instructions, capture validation and copying the result
 out — about 2 to 3 ns for each primitive operation, which is what a bytecode
 interpreter with bounds-checked scratch costs and roughly ten times what

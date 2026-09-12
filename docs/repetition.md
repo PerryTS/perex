@@ -236,6 +236,25 @@ start scan in [leading](leading.md).
 The stopping character is always left to the ordinary step, which charges and
 decides it exactly as before.
 
+## Retreating past endpoints the continuation cannot start at
+
+A greedy repeat that has consumed too much walks back one endpoint at a time,
+and each endpoint the VM is handed costs a retry frame, a rollback and a trial
+that fails on its first instruction. The continuation's own first consumed
+character is a necessary condition of that trial, so an endpoint it cannot start
+at needs none of them, and the walk skips it.
+
+That first consumed character is not always the continuation's first
+instruction. A capture group closing around the repeat puts its `SAVE` between
+them, and `(\w+)@` therefore looked like a continuation that stated no
+condition, dropping every endpoint back to the character-at-a-time path that the
+identical `\w+@` avoided. A `SAVE` consumes nothing and cannot fail, so the walk
+now looks past a bounded number of them to the instruction that does consume.
+
+`(\w+)@(\w+)\.com` against `mail user@example.com now` fell from 470 to 415 ns
+of process CPU time, which is where `\w+@\w+\.com` against the same subject
+already was.
+
 Measured on a sixty-character run, process CPU time per search:
 
 | Pattern | Phase per character | Run loop | Byte run |

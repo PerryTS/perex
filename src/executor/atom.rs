@@ -44,6 +44,11 @@ const BLOCK_MIN: usize = 256;
 const HIGH: u64 = 0x8080_8080_8080_8080;
 const ONES: u64 = 0x0101_0101_0101_0101;
 
+/// Bookkeeping instructions a retreat looks past to find the continuation's
+/// first consumed character. Only `SAVE` qualifies, and a bound keeps the
+/// uncharged program reads constant.
+const RETREAT_SCAN: usize = 8;
+
 /// Ranges a repeated class may hold and still be tested in one step. The step
 /// stays bounded work, like the sorted-class search, while covering the small
 /// classes ordinary patterns repeat.
@@ -520,7 +525,25 @@ impl Vm<'_, '_, '_, '_> {
         {
             return Err(ExecError::InvalidProgram);
         }
-        let [next, value, third] = self.program.instruction(r[4] as usize);
+        // A capture group closing around the repeat puts its `SAVE` between the
+        // repeat and whatever consumes next. That instruction consumes nothing
+        // and cannot fail, so the condition the continuation states is the one
+        // after it, and stopping at it gave every endpoint of a captured repeat
+        // the character-at-a-time walk that an identical uncaptured one avoids.
+        // The scan is bounded, so it cannot outrun a budget it does not charge.
+        let mut at = r[4] as usize;
+        let mut skipped = 0;
+        while skipped < RETREAT_SCAN
+            && at < self.program.instructions()
+            && self.program.instruction(at)[0] == SAVE
+        {
+            at += 1;
+            skipped += 1;
+        }
+        if at >= self.program.instructions() {
+            return Err(ExecError::InvalidProgram);
+        }
+        let [next, value, third] = self.program.instruction(at);
         if matches!(next, CHAR | CHAR_I) {
             return self.retreat_literal(atom.minimum_end, value, next == CHAR_I, available);
         }
@@ -530,7 +553,7 @@ impl Vm<'_, '_, '_, '_> {
         // no character and so states no condition.
         let probe = if next == ATOM_REPEAT {
             let inner = self.program.repeat(value as usize);
-            let body = r[4] as usize + 3;
+            let body = at + 3;
             (inner[0] >= 1 && body < self.program.instructions())
                 .then(|| self.program.instruction(body))
         } else {
