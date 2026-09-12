@@ -46,6 +46,15 @@ measures how often the scheduler ran a process rather than how much work it did.
 The figure for each case is the minimum of three passes, with the two engines
 alternating so the same load applies to both.
 
+V8 is timed at two entry points, because neither is a like-for-like comparison
+on its own. `find` always produces captures. `test` does not produce them, so it
+is timed against a Perex doing work it skips; `exec` does produce them, and also
+allocates a result array of substrings that `find` never builds. The work `find`
+does sits between the two, so every case below is reported as a bracket rather
+than a single ratio. This was measured only after several revisions had been
+compared against `test` alone, which overstated the gap on every capturing case:
+the worst reads 6.41x against `test` and 4.31x against `exec`.
+
 The harness, cases and raw results are the host's, under
 `secret-tests/perex-bench`.
 
@@ -73,17 +82,18 @@ The alternation moved from 4.5x behind to 0.52x ahead, and the long literal from
 
 ### Behind
 
-Between 1.38x and 6.55x, in nineteen of twenty-five cases.
+Nineteen of twenty-five cases, on both entry points: between 1.24x and 6.41x
+against the boolean test, and between 1.09x and 4.31x against the capturing one.
 
-| Case | Perex | V8 | |
-|---|---:|---:|---:|
-| Captures, 25-character subject | 379 ns | 57.9 ns | 6.55x |
-| Class repeat, short subject | 300 ns | 66.0 ns | 4.55x |
-| `\w+` over a 60-character run | 142 ns | 38.8 ns | 3.65x |
-| Folded literal, 29 characters | 65.0 ns | 20.9 ns | 3.11x |
-| End-anchored hit, 256 KiB | 51.7 ns | 16.9 ns | 3.06x |
-| Literal lookbehind, 256 KiB | 111 ns | 39.5 ns | 2.81x |
-| Short literal, 29 characters | 50.3 ns | 34.3 ns | 1.47x |
+| Case | Perex | V8 `test` | V8 `exec` | vs test | vs exec |
+|---|---:|---:|---:|---:|---:|
+| Captures, 25-character subject | 385 ns | 60.1 ns | 89.3 ns | 6.41x | 4.31x |
+| Class repeat, short subject | 306 ns | 68.2 ns | 93.1 ns | 4.48x | 3.28x |
+| `\w+` over a 60-character run | 144 ns | 36.4 ns | 49.8 ns | 3.96x | 2.90x |
+| End-anchored hit, 256 KiB | 53.4 ns | 13.8 ns | 32.8 ns | 3.87x | 1.63x |
+| Literal lookbehind, 256 KiB | 115 ns | 30.0 ns | 41.0 ns | 3.82x | 2.79x |
+| Folded literal, 29 characters | 66.0 ns | 17.3 ns | 35.8 ns | 3.82x | 1.84x |
+| Short literal, 29 characters | 51.9 ns | 38.8 ns | 43.2 ns | 1.34x | 1.20x |
 
 Most of them are searches short enough that starting one dominates. The literal
 ladder makes that explicit: a one-character literal costs 43.6 ns and a
@@ -122,19 +132,22 @@ between — the same thing the ladder below measures, paid twice.
 
 A diagnostic ladder separates fixed cost from marginal cost:
 
-| Case | Perex | V8 | |
+| Case | Perex | V8 `test` | V8 `exec` |
 |---|---:|---:|---:|
-| `/z/` against `""` | 15.3 ns | 11.1 ns | 1.38x |
-| `/z/` against `"a"` | 20.1 ns | 13.7 ns | 1.47x |
-| `/a/` against `"a"` | 43.9 ns | 16.6 ns | 2.64x |
+| `/z/` against `""` | 15.5 ns | 12.5 ns | 14.2 ns |
+| `/z/` against `"a"` | 20.5 ns | 15.1 ns | 16.9 ns |
+| `/a/` against `"a"` | 44.8 ns | 18.2 ns | 33.7 ns |
 
-An empty search is 1.38x: that is the cost of a bytecode pausable at every
+An empty search is 1.24x against the boolean test and 1.09x against the
+capturing one: that is the cost of a bytecode pausable at every
 instruction so the host's collector can run, which is why this engine exists.
-The step from a miss to a hit is 24 ns against V8's 3, and it buys register
-initialization, four instructions, capture validation and copying the result
-out — about 2 to 3 ns for each primitive operation, which is what a bytecode
-interpreter with bounds-checked scratch costs and roughly ten times what
-compiled code costs. V8 emits native code and owes a collector nothing.
+The step from a miss to a hit is 24 ns, against V8's 3 for the boolean test and
+17 for the capturing one — and the capturing one is the comparison that matches
+what a hit here produces. It buys register initialization, four instructions,
+capture validation and copying the result out, about 2 to 3 ns for each
+primitive operation, which is what a bytecode interpreter with bounds-checked
+scratch costs and several times what compiled code costs. V8 emits native code
+and owes a collector nothing.
 
 There is no remaining hot spot behind that number, and it was priced rather
 than assumed. Removing one piece of the successful path at a time, and measuring
