@@ -154,6 +154,13 @@ as one that confirmed it, and because each of these looked obviously right.
   again after the step was enlarged sixteenfold and the first-byte filter
   restored. Reading an instruction per character is not the cost that the
   arithmetic suggested it was.
+- **A fixed count of range comparisons for a repeated class.** A class of two
+  to four ranges is decided by a loop that exits at the range that matches, and
+  a run shorter than a word reaches only that loop. Padding the unused slots
+  with a range nothing is inside, so the count is fixed and the compiler can
+  unroll it without a branch, was slower on all five cases measured, by two to
+  four percent each. Reverting restored them, so it was the change and not the
+  machine. Branching out of two comparisons beats not branching out of eight.
 - **Hoisting the atom scan's byte predicate out of its entry.** A profile
   taken with the hot functions forced out of line put twelve percent of the
   worst case in rebuilding that predicate. Recovering it gained nothing: the

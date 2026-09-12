@@ -172,7 +172,7 @@ impl Vm<'_, '_, '_, '_> {
             AtomBytes::Outside(lo, hi) => Self::run_range(bytes, start, end, lo, hi, true),
             AtomBytes::Unlined => Self::run_unlined(bytes, start, end),
             AtomBytes::Ranges(ranges, count, negated) => {
-                Self::run_ranges(bytes, start, end, &ranges[..count as usize], negated)
+                Self::run_ranges(bytes, start, end, ranges, count as usize, negated)
             }
         }
     }
@@ -228,9 +228,11 @@ impl Vm<'_, '_, '_, '_> {
         bytes: &[u8],
         start: usize,
         end: usize,
-        ranges: &[(u8, u8)],
+        ranges: [(u8, u8); ATOM_CLASS_RANGES as usize],
+        count: usize,
         negated: bool,
     ) -> usize {
+        let ranges = &ranges[..count];
         // Past a few blocks, testing each range against every lane of a block
         // widens into vector comparisons where the target has them. Below that
         // the block's own setup costs more than the lane arithmetic it
@@ -262,23 +264,27 @@ impl Vm<'_, '_, '_, '_> {
         }
         // Each bound spread over a word's lanes, built once for the whole run
         // rather than once per word: the multiplies cost more than the
-        // comparisons they serve.
-        let mut bounds = [(0u64, 0u64); ATOM_CLASS_RANGES as usize];
-        for (bound, &(lo, hi)) in bounds.iter_mut().zip(ranges) {
-            *bound = (u64::from(lo) * ONES, u64::from(hi) * ONES);
-        }
-        let bounds = &bounds[..ranges.len()];
-        while base + 8 <= end {
-            let word = u64::from_le_bytes(bytes[base..base + 8].try_into().unwrap());
-            let mut inside = 0;
-            for &(lower, upper) in bounds {
-                inside |= Self::inside_lanes(word, lower, upper);
+        // comparisons they serve. A run shorter than a word never reaches the
+        // loop that wants them, and is most of what an ordinary pattern
+        // matches, so it does not build them either.
+        if base + 8 <= end {
+            let mut bounds = [(0u64, 0u64); ATOM_CLASS_RANGES as usize];
+            for (bound, &(lo, hi)) in bounds.iter_mut().zip(ranges) {
+                *bound = (u64::from(lo) * ONES, u64::from(hi) * ONES);
             }
-            let rejected = if negated { inside } else { !inside & HIGH };
-            if rejected != 0 {
-                return base - start + rejected.trailing_zeros() as usize / 8;
+            let bounds = &bounds[..count];
+            while base + 8 <= end {
+                let word = u64::from_le_bytes(bytes[base..base + 8].try_into().unwrap());
+                let mut inside = 0;
+                for &(lower, upper) in bounds {
+                    inside |= Self::inside_lanes(word, lower, upper);
+                }
+                let rejected = if negated { inside } else { !inside & HIGH };
+                if rejected != 0 {
+                    return base - start + rejected.trailing_zeros() as usize / 8;
+                }
+                base += 8;
             }
-            base += 8;
         }
         while base < end
             && (ranges
@@ -585,6 +591,55 @@ impl Vm<'_, '_, '_, '_> {
         Ok(())
     }
 
+    /// Walk a greedy repeat's endpoints back over original bytes, stopping at
+    /// the first one the continuation could start at, or at the minimum. Every
+    /// endpoint this storage holds is one byte, so the whole walk is a reverse
+    /// scan rather than a cursor decode and a probe decode each; the cursor
+    /// moves once, at the end.
+    ///
+    /// Each endpoint is charged `per`, exactly as deciding it one at a time
+    /// charged, so a paused walk reaches the same total as an unpaused one. The
+    /// count is bounded by the quantum and the budget before anything is
+    /// charged, so no charge inside can fail and leave the walk part-way.
+    fn retreat_bytes(
+        &mut self,
+        minimum_end: usize,
+        limit: usize,
+        per: usize,
+        length: usize,
+        holds: impl Fn(usize) -> bool,
+    ) -> Result<(), ExecError> {
+        let from = self.cursor.position();
+        if from <= minimum_end || from > length {
+            return Err(ExecError::InvalidProgram);
+        }
+        let allowed = (limit / per)
+            .min(self.budget.remaining() / per)
+            .min(from - minimum_end)
+            .max(1);
+        let mut position = from;
+        let mut walked = 0;
+        let stopped = loop {
+            if walked == allowed {
+                break false;
+            }
+            position -= 1;
+            walked += 1;
+            if holds(position) || position == minimum_end {
+                break true;
+            }
+        };
+        self.charge(walked * per)?;
+        self.cursor = self
+            .input
+            .cursor_at(position)
+            .ok_or(ExecError::InvalidProgram)?;
+        if stopped {
+            self.state.phase = Phase::AtomCommit;
+        }
+        Ok(())
+    }
+
     /// The same retreat as `retreat_literal`, for a continuation whose first
     /// consumed character is a class or `.` rather than a literal.
     #[inline(never)]
@@ -606,6 +661,11 @@ impl Vm<'_, '_, '_, '_> {
             .then(|| self.fixed_atom_charge(op, a, b))
             .flatten()
             .zip(self.input.ascii_bytes());
+        if let Some(((per, accepts), bytes)) = direct {
+            return self.retreat_bytes(minimum_end, limit, per, bytes.len(), |position| {
+                bytes.get(position).is_some_and(|&byte| accepts.holds(byte))
+            });
+        }
         loop {
             self.charge(1)?;
             read(
@@ -622,10 +682,7 @@ impl Vm<'_, '_, '_, '_> {
             } {
                 return Err(ExecError::InvalidProgram);
             }
-            let possible = if let Some(((per, accepts), bytes)) = direct {
-                self.charge(per - 1)?;
-                bytes.get(position).is_some_and(|&byte| accepts.holds(byte))
-            } else {
+            let possible = {
                 let mut ahead = self.cursor;
                 match read(&mut ahead, self.program.unicode(), self.state.reverse) {
                     Some(c) => self.atom_holds(op, a, b, c)?,
@@ -655,6 +712,25 @@ impl Vm<'_, '_, '_, '_> {
     ) -> Result<(), ExecError> {
         let initial = self.budget.remaining();
         let limit = available.min(256);
+        // Over ASCII storage this is a byte comparison against each endpoint,
+        // and `equal` on two ASCII characters is ASCII equality, folded or not:
+        // the two non-ASCII characters that fold into ASCII cannot occur in
+        // this storage. Two units an endpoint either way.
+        if !self.state.reverse
+            && value < 128
+            && let Some(bytes) = self.input.ascii_bytes()
+        {
+            let want = value as u8;
+            return self.retreat_bytes(minimum_end, limit, 2, bytes.len(), |position| {
+                bytes.get(position).is_some_and(|&byte| {
+                    if fold {
+                        byte.eq_ignore_ascii_case(&want)
+                    } else {
+                        byte == want
+                    }
+                })
+            });
+        }
         loop {
             self.charge(1)?;
             read(

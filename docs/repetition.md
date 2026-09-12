@@ -255,6 +255,23 @@ now looks past a bounded number of them to the instruction that does consume.
 of process CPU time, which is where `\w+@\w+\.com` against the same subject
 already was.
 
+The walk itself was then a cursor decode for each endpoint and a second one to
+probe it, which over ASCII storage is a byte read and a byte comparison. It is
+now a reverse scan that moves the cursor once, at the position it stops at, and
+charges each endpoint exactly what deciding it one at a time charged. Measured
+by lengthening the run a failed start walks back over, `[a-z]+[0-9]+` against
+`v` repeated n times followed by ` abc123 end`:
+
+| n | Before | After |
+|---:|---:|---:|
+| 5 | 311 ns | 295 ns |
+| 20 | 400 ns | 340 ns |
+| 50 | 580 ns | 455 ns |
+
+The slope over n falls from about 6.0 to 3.9 ns, which covers both the forward
+run and the backward walk; the walk is roughly half of it. Charged work is
+identical at every n.
+
 Measured on a sixty-character run, process CPU time per search:
 
 | Pattern | Phase per character | Run loop | Byte run |
