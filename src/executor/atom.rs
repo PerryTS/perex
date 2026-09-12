@@ -516,6 +516,14 @@ impl Vm<'_, '_, '_, '_> {
     ) -> Result<(), ExecError> {
         let initial = self.budget.remaining();
         let limit = available.min(256);
+        // Over ASCII storage the endpoints this walks back through are bytes,
+        // so the continuation's own condition is a byte test. Decoding each one
+        // through the cursor costs several times that, and this walk is what a
+        // failed greedy repeat spends most of its time in.
+        let direct = (!self.state.reverse)
+            .then(|| self.fixed_atom_charge(op, a, b))
+            .flatten()
+            .zip(self.input.ascii_bytes());
         loop {
             self.charge(1)?;
             read(
@@ -532,10 +540,15 @@ impl Vm<'_, '_, '_, '_> {
             } {
                 return Err(ExecError::InvalidProgram);
             }
-            let mut ahead = self.cursor;
-            let possible = match read(&mut ahead, self.program.unicode(), self.state.reverse) {
-                Some(c) => self.atom_holds(op, a, b, c)?,
-                None => false,
+            let possible = if let Some(((per, accepts), bytes)) = direct {
+                self.charge(per - 1)?;
+                bytes.get(position).is_some_and(|&byte| accepts.holds(byte))
+            } else {
+                let mut ahead = self.cursor;
+                match read(&mut ahead, self.program.unicode(), self.state.reverse) {
+                    Some(c) => self.atom_holds(op, a, b, c)?,
+                    None => false,
+                }
             };
             if possible || position == minimum_end {
                 self.state.phase = Phase::AtomCommit;
