@@ -45,13 +45,23 @@ pub(crate) enum Cond {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Label(usize);
 
-/// A branch that has been emitted but whose target is not known yet. The
-/// default is a branch that was never emitted, which [`Assembler::bind`]
-/// ignores, so a generator can carry a fixed array of them.
+/// What an unbound reference will become once its target is known.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum Kind {
+    #[default]
+    CondBranch,
+    Branch,
+    /// A PC-relative address rather than a jump, whose offset counts bytes.
+    Address,
+}
+
+/// A reference that has been emitted but whose target is not known yet. The
+/// default is one that was never emitted, which [`Assembler::bind`] ignores, so
+/// a generator can carry a fixed array of them.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Patch {
     at: usize,
-    conditional: bool,
+    kind: Kind,
     live: bool,
 }
 
@@ -196,6 +206,54 @@ impl<'a> Assembler<'a> {
         self.word(0xf900_0000 | (index << 10) | (u32::from(rn.0) << 5) | u32::from(rt.0));
     }
 
+    /// `LDRB Wt, [Xn, #offset]`, a zero-extending byte load at a fixed offset.
+    pub(crate) fn ldrb_imm(&mut self, rt: Reg, rn: Reg, offset: u32) {
+        if offset >= 1 << 12 {
+            self.fail(EncodeError::Immediate);
+            return;
+        }
+        self.word(0x3940_0000 | (offset << 10) | (u32::from(rn.0) << 5) | u32::from(rt.0));
+    }
+
+    /// `ADD Xd, Xn, Xm`.
+    pub(crate) fn add_reg(&mut self, rd: Reg, rn: Reg, rm: Reg) {
+        self.word(0x8b00_0000 | (u32::from(rm.0) << 16) | (u32::from(rn.0) << 5) | u32::from(rd.0));
+    }
+
+    /// `SUB Wd, Wn, #imm12`, the 32-bit form, for reducing a byte to an offset
+    /// within a range.
+    pub(crate) fn sub_imm32(&mut self, rd: Reg, rn: Reg, imm: u32) {
+        if imm >= 1 << 12 {
+            self.fail(EncodeError::Immediate);
+            return;
+        }
+        self.word(0x5100_0000 | (imm << 10) | (u32::from(rn.0) << 5) | u32::from(rd.0));
+    }
+
+    /// `ADR Xd, label`, a PC-relative address for something not emitted yet.
+    pub(crate) fn adr_forward(&mut self, rd: Reg) -> Patch {
+        let at = self.at;
+        self.word(0x1000_0000 | u32::from(rd.0));
+        Patch {
+            at,
+            kind: Kind::Address,
+            live: true,
+        }
+    }
+
+    /// Raw bytes, for a table the code reads rather than executes.
+    pub(crate) fn data(&mut self, bytes: &[u8]) {
+        if self.failed.is_some() {
+            return;
+        }
+        let Some(slot) = self.code.get_mut(self.at..self.at + bytes.len()) else {
+            self.fail(EncodeError::Capacity);
+            return;
+        };
+        slot.copy_from_slice(bytes);
+        self.at += bytes.len();
+    }
+
     /// `LDR Xt, [Xn, #index * 8]`, the scaled unsigned-offset form, so `index`
     /// counts registers rather than bytes.
     pub(crate) fn ldr_index(&mut self, rt: Reg, rn: Reg, index: u32) {
@@ -245,7 +303,7 @@ impl<'a> Assembler<'a> {
         self.word(0x5400_0000 | (cond as u32));
         Patch {
             at,
-            conditional: true,
+            kind: Kind::CondBranch,
             live: true,
         }
     }
@@ -256,7 +314,7 @@ impl<'a> Assembler<'a> {
         self.word(0x1400_0000);
         Patch {
             at,
-            conditional: false,
+            kind: Kind::Branch,
             live: true,
         }
     }
@@ -270,13 +328,13 @@ impl<'a> Assembler<'a> {
             self.fail(EncodeError::Range);
             return;
         };
-        let offset = distance / 4;
-        let (bits, mask) = if patch.conditional {
-            (19, 0x7_ffff)
-        } else {
-            (26, 0x3ff_ffff)
+        let (value, bits, shift, mask) = match patch.kind {
+            // A branch counts instructions; an address counts bytes.
+            Kind::CondBranch => (distance / 4, 19, 5, 0x7_ffff),
+            Kind::Branch => (distance / 4, 26, 0, 0x3ff_ffff),
+            Kind::Address => (distance, 21, 0, 0),
         };
-        if !fits_signed(offset, bits) {
+        if !fits_signed(value, bits) {
             self.fail(EncodeError::Range);
             return;
         }
@@ -285,8 +343,13 @@ impl<'a> Assembler<'a> {
             return;
         };
         let mut instruction = u32::from_le_bytes([slot[0], slot[1], slot[2], slot[3]]);
-        let shift = if patch.conditional { 5 } else { 0 };
-        instruction |= (offset as u32 & mask) << shift;
+        instruction |= match patch.kind {
+            Kind::Address => {
+                let value = value as u32;
+                ((value & 3) << 29) | ((value >> 2) << 5)
+            }
+            _ => (value as u32 & mask) << shift,
+        };
         slot.copy_from_slice(&instruction.to_le_bytes());
     }
 
@@ -336,6 +399,14 @@ mod tests {
         assert_eq!(assemble(|a| a.sub_imm(X0, X1, 1)), [0xd100_0420]);
         assert_eq!(assemble(|a| a.str_index(X2, X3, 2)), [0xf900_0862]);
         assert_eq!(assemble(|a| a.mov(Reg(7), Reg(8))), [0xaa08_03e7]);
+        assert_eq!(assemble(|a| a.ldrb_imm(Reg(7), X4, 0)), [0x3940_0087]);
+        assert_eq!(assemble(|a| a.ldrb_imm(Reg(7), X4, 1)), [0x3940_0487]);
+        assert_eq!(assemble(|a| a.ldrb_imm(Reg(7), Reg(7), 7)), [0x3940_1ce7]);
+        assert_eq!(assemble(|a| a.add_reg(X4, X0, Reg(6))), [0x8b06_0004]);
+        assert_eq!(assemble(|a| a.sub_imm32(Reg(7), Reg(7), 97)), [0x5101_84e7]);
+        assert_eq!(assemble(|a| a.movn(X0, 0)), [0x9280_0000]);
+        assert_eq!(assemble(|a| a.movn(Reg(6), 1)), [0x9280_0026]);
+        assert_eq!(assemble(|a| a.ldr_index(Reg(9), X3, 3)), [0xf940_0c69]);
     }
 
     #[test]
@@ -379,6 +450,41 @@ mod tests {
             }),
             [0xd65f_03c0, 0x54ff_ffe1]
         );
+    }
+
+    #[test]
+    fn encodes_a_pc_relative_address() {
+        // `adr x5, .+8` over one instruction, and `adr x9, .+16` over three.
+        assert_eq!(
+            assemble(|a| {
+                let patch = a.adr_forward(X5);
+                a.ret();
+                a.bind(patch);
+            }),
+            [0x1000_0045, 0xd65f_03c0]
+        );
+        assert_eq!(
+            assemble(|a| {
+                let patch = a.adr_forward(Reg(9));
+                a.ret();
+                a.ret();
+                a.ret();
+                a.bind(patch);
+            }),
+            [0x1000_0089, 0xd65f_03c0, 0xd65f_03c0, 0xd65f_03c0]
+        );
+    }
+
+    #[test]
+    fn writes_data_after_the_code_that_reads_it() {
+        let mut code = [0u8; 32];
+        let mut assembler = Assembler::new(&mut code);
+        let table = assembler.adr_forward(X5);
+        assembler.ret();
+        assembler.bind(table);
+        assembler.data(&[1, 0, 1, 0]);
+        assert_eq!(assembler.finish(), Ok(12));
+        assert_eq!(&code[8..12], &[1, 0, 1, 0]);
     }
 
     #[test]

@@ -34,6 +34,9 @@ const BYTE: Reg = Reg(7);
 /// Scratch within a single step.
 const TMP: Reg = Reg(8);
 const TMP2: Reg = Reg(15);
+/// The membership table a repeated multi-range class is tested through, held
+/// across that repeat's scan.
+const TABLE: Reg = Reg(5);
 
 /// Open repeats keep two registers each: where the run currently ends, and the
 /// earliest end its minimum allows. Three is what X9 through X14 hold, and
@@ -52,6 +55,15 @@ const MAX_PATCHES: usize = 512;
 
 /// Ranges one class may hold and still have code generated for it.
 const MAX_RANGES: usize = 64;
+
+/// Ranges past which a class is tested through a table rather than by comparing
+/// each of them. Two comparisons and two branches per range is what a repeated
+/// class pays for every byte of its run, and one load does not grow with the
+/// class at all.
+const TABLE_RANGES: u32 = 2;
+
+/// Membership tables one program may carry.
+const MAX_TABLES: usize = 8;
 
 /// Why a program could not have code generated for it. Distinct from
 /// [`EncodeError`], which is about instructions rather than programs.
@@ -180,6 +192,58 @@ fn atom(program: Program<'_>, op: u32, a: u32, b: u32) -> bool {
     }
 }
 
+/// Membership tables, written after the code that reads them.
+struct Tables {
+    data: [[u8; 256]; MAX_TABLES],
+    at: [Patch; MAX_TABLES],
+    count: usize,
+}
+
+impl Tables {
+    fn new() -> Self {
+        Self {
+            data: [[0; 256]; MAX_TABLES],
+            at: [Patch::default(); MAX_TABLES],
+            count: 0,
+        }
+    }
+
+    /// Emit an address for a table of everything this class admits, and keep
+    /// the table to be written once the code is done.
+    fn address(
+        &mut self,
+        asm: &mut Assembler<'_>,
+        program: Program<'_>,
+        into: Reg,
+        a: u32,
+        b: u32,
+    ) -> Result<(), EmitError> {
+        if self.count == MAX_TABLES {
+            return Err(EmitError::TooLarge);
+        }
+        let count = b & !NEGATED;
+        let negated = b & NEGATED != 0;
+        for byte in 0..=255u32 {
+            let inside = (a..a + count).any(|i| {
+                let [lo, hi] = program.range(i as usize);
+                byte >= lo && byte <= hi
+            });
+            self.data[self.count][byte as usize] = u8::from(inside != negated);
+        }
+        self.at[self.count] = asm.adr_forward(into);
+        self.count += 1;
+        Ok(())
+    }
+
+    /// Write every table where the addresses above point.
+    fn place(&mut self, asm: &mut Assembler<'_>) {
+        for index in 0..self.count {
+            asm.bind(self.at[index]);
+            asm.data(&self.data[index]);
+        }
+    }
+}
+
 /// Characters every match must still consume from `pc` onwards. A repeat
 /// contributes its minimum, since that is all it is obliged to take.
 fn least_from(program: Program<'_>, mut pc: usize) -> usize {
@@ -210,6 +274,7 @@ fn emit_atom(
     op: u32,
     a: u32,
     b: u32,
+    table: Option<Reg>,
     fail: &mut Patches,
 ) -> Result<(), EmitError> {
     match op {
@@ -246,28 +311,45 @@ fn emit_atom(
             asm.ldrb(BYTE, SUBJECT, AT);
             let count = b & !NEGATED;
             let negated = b & NEGATED != 0;
-            // Each range jumps out when the byte is inside it. Falling past all
-            // of them means the byte is inside none.
-            let mut inside = [Patch::default(); MAX_RANGES];
-            for (slot, index) in inside.iter_mut().zip(a..a + count) {
-                let [lo, hi] = program.range(index as usize);
-                asm.cmp_imm32(BYTE, lo);
-                let below = asm.b_cond_forward(Cond::Lo);
-                asm.cmp_imm32(BYTE, hi);
-                *slot = asm.b_cond_forward(Cond::Ls);
-                asm.bind(below);
-            }
-            if negated {
-                let accepted = asm.b_forward();
-                for patch in &inside[..count as usize] {
-                    asm.bind(*patch);
-                }
-                fail.push(asm.b_forward())?;
-                asm.bind(accepted);
+            if let Some(table) = table {
+                // One load, whatever the class holds.
+                asm.ldrb(BYTE, table, BYTE);
+                asm.cmp_imm32(BYTE, 0);
+                fail.push(asm.b_cond_forward(Cond::Eq))?;
+            } else if count == 1 {
+                // A byte is inside one range exactly when subtracting the low
+                // bound leaves something no larger than the range is wide,
+                // which is one subtraction and one comparison rather than two
+                // comparisons and two branches.
+                let [lo, hi] = program.range(a as usize);
+                asm.sub_imm32(TMP2, BYTE, lo);
+                asm.cmp_imm32(TMP2, hi - lo);
+                let outside = if negated { Cond::Ls } else { Cond::Hi };
+                fail.push(asm.b_cond_forward(outside))?;
             } else {
-                fail.push(asm.b_forward())?;
-                for patch in &inside[..count as usize] {
-                    asm.bind(*patch);
+                // Each range jumps out when the byte is inside it. Falling past
+                // all of them means the byte is inside none.
+                let mut inside = [Patch::default(); MAX_RANGES];
+                for (slot, index) in inside.iter_mut().zip(a..a + count) {
+                    let [lo, hi] = program.range(index as usize);
+                    asm.cmp_imm32(BYTE, lo);
+                    let below = asm.b_cond_forward(Cond::Lo);
+                    asm.cmp_imm32(BYTE, hi);
+                    *slot = asm.b_cond_forward(Cond::Ls);
+                    asm.bind(below);
+                }
+                if negated {
+                    let accepted = asm.b_forward();
+                    for patch in &inside[..count as usize] {
+                        asm.bind(*patch);
+                    }
+                    fail.push(asm.b_forward())?;
+                    asm.bind(accepted);
+                } else {
+                    fail.push(asm.b_forward())?;
+                    for patch in &inside[..count as usize] {
+                        asm.bind(*patch);
+                    }
                 }
             }
         }
@@ -294,6 +376,7 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
     }
 
     let mut asm = Assembler::new(code);
+    let mut tables = Tables::new();
     // Failures with no repeat left to retreat give up on this start.
     let mut next_start = Patches::new();
     let mut repeats: [Option<Repeat>; MAX_REPEATS] = [None, None, None];
@@ -347,12 +430,24 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
                     asm.bind(room);
                 }
 
+                // A repeated class of several ranges is tested through a
+                // table, whose address is taken once here rather than in the
+                // loop that reads it.
+                let scan_table = if body_op == CLASS && body_b & !NEGATED >= TABLE_RANGES {
+                    tables.address(&mut asm, program, TABLE, body_a, body_b)?;
+                    Some(TABLE)
+                } else {
+                    None
+                };
+
                 // Consume greedily up to that limit.
                 let scan = asm.here();
                 let mut stop = Patches::new();
                 asm.cmp(AT, TMP);
                 stop.push(asm.b_cond_forward(Cond::Hs))?;
-                emit_atom(&mut asm, program, body_op, body_a, body_b, &mut stop)?;
+                emit_atom(
+                    &mut asm, program, body_op, body_a, body_b, scan_table, &mut stop,
+                )?;
                 asm.add_imm(AT, AT, 1);
                 asm.b_back(scan);
                 stop.bind(&mut asm);
@@ -383,7 +478,7 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
             }
             _ => {
                 let mut fail = Patches::new();
-                emit_atom(&mut asm, program, op, a, b, &mut fail)?;
+                emit_atom(&mut asm, program, op, a, b, None, &mut fail)?;
                 asm.add_imm(AT, AT, 1);
                 // A consuming atom that fails retreats the innermost repeat, or
                 // gives up on this start when there is none.
@@ -429,6 +524,7 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
     asm.bind(exhausted);
     asm.movn(X0, 0);
     asm.ret();
+    tables.place(&mut asm);
     asm.finish().map_err(EmitError::from)
 }
 
@@ -448,11 +544,17 @@ mod tests {
     /// It decodes rather than trusting the encoder's own idea of what it wrote:
     /// an emulator built from the same constants as the emitter would agree
     /// with it whatever either of them did.
+    /// A table lives in the code buffer, so a base address says which of the
+    /// two regions a load reads. Real hardware needs no such tag; this is the
+    /// emulator standing in for one address space.
+    const CODE_BASE: u64 = 1 << 40;
+
     struct Machine<'a> {
         x: [u64; 32],
         z: bool,
         c: bool,
         subject: &'a [u8],
+        code: &'a [u8],
         registers: &'a mut [u64],
     }
 
@@ -472,6 +574,20 @@ mod tests {
         fn flags(&mut self, a: u64, b: u64) {
             self.z = a == b;
             self.c = a >= b;
+        }
+        /// Read one byte from whichever region the address names.
+        fn load(&self, at: u64) -> u8 {
+            if at >= CODE_BASE {
+                *self
+                    .code
+                    .get((at - CODE_BASE) as usize)
+                    .expect("load inside the code")
+            } else {
+                *self
+                    .subject
+                    .get(at as usize)
+                    .expect("load inside the subject")
+            }
         }
         fn holds(&self, cond: u32) -> bool {
             match cond {
@@ -517,9 +633,23 @@ mod tests {
                     let (a, b) = (self.read(rn), self.read(rm));
                     self.flags(a, b);
                 } else if w & 0xffe0_fc00 == 0x3860_6800 {
-                    let at = self.read(rn).wrapping_add(self.read(rm)) as usize;
-                    let byte = *self.subject.get(at).expect("load inside the subject");
-                    self.write(rd, u64::from(byte));
+                    let at = self.read(rn).wrapping_add(self.read(rm));
+                    self.write(rd, u64::from(self.load(at)));
+                } else if w & 0xffc0_0000 == 0x3940_0000 {
+                    let at = self.read(rn).wrapping_add(u64::from(imm12));
+                    self.write(rd, u64::from(self.load(at)));
+                } else if w & 0xff80_0000 == 0x5100_0000 {
+                    let value = (self.read(rn) as u32).wrapping_sub(imm12);
+                    self.write(rd, u64::from(value));
+                } else if w & 0x8b20_0000 == 0x8b00_0000 && w & 0x7fe0_fc00 == 0x0b00_0000 {
+                    let value = self.read(rn).wrapping_add(self.read(rm));
+                    self.write(rd, value);
+                } else if w & 0x9f00_0000 == 0x1000_0000 {
+                    let immlo = (w >> 29) & 3;
+                    let immhi = (w >> 5) & 0x7_ffff;
+                    let offset = (((immhi << 2) | immlo) as i32) << 11 >> 11;
+                    let at = (pc as i64 - 4 + i64::from(offset)) as u64;
+                    self.write(rd, CODE_BASE + at);
                 } else if w & 0xffc0_0000 == 0xf900_0000 {
                     let slot = (self.read(rn) as usize) / 8 + imm12 as usize;
                     let value = self.read(rd);
@@ -565,15 +695,17 @@ mod tests {
         let mut code = [0u8; 4096];
         let length = emit_search(program, &mut code).ok()?;
         let mut registers = [u64::MAX; 16];
+        let emitted = &code[..length];
         let mut machine = Machine {
             x: [0; 32],
             z: false,
             c: false,
             subject: subject.as_bytes(),
+            code: emitted,
             registers: &mut registers,
         };
         machine.x[1] = subject.len() as u64;
-        let answer = machine.run(&code[..length]);
+        let answer = machine.run(emitted);
         Some((answer, registers))
     }
 
