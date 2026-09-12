@@ -17,15 +17,15 @@
 
 use super::a64::{Assembler, Cond, EncodeError, Label, Patch, Reg, X0, X1, X2, X3};
 use crate::program::{
-    ANY, ANY_S, ATOM_REPEAT, CHAR, CHAR_I, CLASS, MATCH, NEGATED, PROPERTY, Program, SAVE, Y,
-    consuming,
+    ANY, ANY_S, ASSERT, ASSERT_END, ATOM_REPEAT, CHAR, CHAR_I, CLASS, END, MATCH, NEGATED,
+    PROPERTY, Program, SAVE, START, Y, consuming,
 };
 
 /// Where the arguments arrive. The first four follow the C calling convention
 /// this targets; the rest are scratch it may use freely.
 const SUBJECT: Reg = X0;
 const LENGTH: Reg = X1;
-const START: Reg = X2;
+const START_REG: Reg = X2;
 const REGISTERS: Reg = X3;
 /// The position inside the current attempt.
 const AT: Reg = Reg(6);
@@ -144,7 +144,13 @@ pub fn supported(program: Program<'_>) -> bool {
         let [op, a, b] = program.instruction(pc);
         match op {
             MATCH => return true,
-            SAVE => pc += 1,
+            // Position tests, which consume nothing. The multiline forms also
+            // match at a line terminator, which is a different test and a
+            // separate decision to admit.
+            SAVE | START | END => pc += 1,
+            // A lookbehind over a run of characters. Its body and end are
+            // stepped over, not visited: the comparison replaces them.
+            ASSERT if literal_lookbehind(program, pc).is_some() => pc = a as usize,
             ATOM_REPEAT => {
                 let record = program.repeat(a as usize);
                 // A lazy repeat takes its continuation before its body, which
@@ -189,6 +195,52 @@ fn atom(program: Program<'_>, op: u32, a: u32, b: u32) -> bool {
                 })
         }
         _ => false,
+    }
+}
+
+/// The body of a lookbehind that is nothing but a run of ASCII characters,
+/// which is a comparison against the bytes just before the position rather than
+/// a reversed sub-search. `None` for any other assertion.
+///
+/// This is the same shape the interpreter already compares over bytes.
+fn literal_lookbehind(program: Program<'_>, pc: usize) -> Option<(usize, usize)> {
+    let [_, after, flags] = program.instruction(pc);
+    // Bit one is the reverse direction; a lookahead needs a sub-search.
+    if flags & 2 == 0 {
+        return None;
+    }
+    let body = pc + 1;
+    let end = (after as usize).checked_sub(1)?;
+    let length = end.checked_sub(body)?;
+    if !(1..1 << 12).contains(&length) || end >= program.instructions() {
+        return None;
+    }
+    if program.instruction(end)[0] != ASSERT_END {
+        return None;
+    }
+    (body..end)
+        .all(|pc| {
+            let [op, a, _] = program.instruction(pc);
+            op == CHAR && a < 128
+        })
+        .then_some((body, length))
+}
+
+/// Send a failure to the innermost repeat that can retreat, or to the next
+/// start when there is none.
+fn give_up(
+    next_start: &mut Patches,
+    repeats: &mut [Option<Repeat>; MAX_REPEATS],
+    depth: usize,
+    patch: Patch,
+) -> Result<(), EmitError> {
+    match depth {
+        0 => next_start.push(patch),
+        _ => repeats[depth - 1]
+            .as_mut()
+            .expect("an open repeat")
+            .failures
+            .push(patch),
     }
 }
 
@@ -257,6 +309,10 @@ fn least_from(program: Program<'_>, mut pc: usize) -> usize {
                 least += record[0] as usize;
                 pc = record[4] as usize;
             }
+            // An assertion consumes nothing, and the characters in its body are
+            // not the match's: walking into them would count them twice over
+            // and reject starts that do fit.
+            ASSERT => pc = a as usize,
             other => {
                 least += usize::from(consuming(other));
                 pc += 1;
@@ -382,13 +438,32 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
     let mut repeats: [Option<Repeat>; MAX_REPEATS] = [None, None, None];
     let mut depth = 0usize;
 
+    // An end-anchored match of bounded length cannot begin more than that many
+    // positions from the subject's end, so the whole prefix before that is
+    // skipped rather than scanned. Without this the generated code tries every
+    // start of a long subject where the interpreter tries one, and is four
+    // thousand times slower for it.
+    if let Some(bound) = program.end_bound() {
+        if bound >= 1 << 12 {
+            return Err(EmitError::TooLarge);
+        }
+        asm.cmp_imm32(LENGTH, bound as u32);
+        let whole = asm.b_cond_forward(Cond::Lo);
+        asm.sub_imm(TMP, LENGTH, bound as u32);
+        asm.cmp(START_REG, TMP);
+        let already = asm.b_cond_forward(Cond::Hs);
+        asm.mov(START_REG, TMP);
+        asm.bind(already);
+        asm.bind(whole);
+    }
+
     let outer = asm.here();
     // No room for what every match must consume means no room at any later
     // start either, so the same test ends the search.
-    asm.add_imm(AT, START, least as u32);
+    asm.add_imm(AT, START_REG, least as u32);
     asm.cmp(AT, LENGTH);
     let exhausted = asm.b_cond_forward(Cond::Hi);
-    asm.mov(AT, START);
+    asm.mov(AT, START_REG);
 
     let mut pc = 0;
     loop {
@@ -399,9 +474,61 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
                 pc += 1;
             }
             MATCH => {
-                asm.mov(X0, START);
+                asm.mov(X0, START_REG);
                 asm.ret();
                 break;
+            }
+            // `^` without `m`: only the subject's own beginning.
+            START => {
+                asm.cmp_imm32(AT, 0);
+                let elsewhere = asm.b_cond_forward(Cond::Ne);
+                give_up(&mut next_start, &mut repeats, depth, elsewhere)?;
+                pc += 1;
+            }
+            // `$` without `m`: only the subject's own end.
+            END => {
+                asm.cmp(AT, LENGTH);
+                let elsewhere = asm.b_cond_forward(Cond::Ne);
+                give_up(&mut next_start, &mut repeats, depth, elsewhere)?;
+                pc += 1;
+            }
+            ASSERT => {
+                let (body, length) =
+                    literal_lookbehind(program, pc).ok_or(EmitError::Unsupported)?;
+                let negative = b & 1 != 0;
+                let mut absent = Patches::new();
+                // Too near the beginning for the text to be there at all.
+                asm.cmp_imm32(AT, length as u32);
+                absent.push(asm.b_cond_forward(Cond::Lo))?;
+                asm.sub_imm(TMP, AT, length as u32);
+                asm.add_reg(TMP2, SUBJECT, TMP);
+                // The body is stored in the order a lookbehind reads it, which
+                // is backwards: its first character is the one just before the
+                // position. So body `offset` is the byte `length - 1 - offset`
+                // into the window this compares.
+                for offset in 0..length {
+                    asm.ldrb_imm(BYTE, TMP2, (length - 1 - offset) as u32);
+                    asm.cmp_imm32(BYTE, program.instruction(body + offset)[1]);
+                    absent.push(asm.b_cond_forward(Cond::Ne))?;
+                }
+                if negative {
+                    // Every character matched, so the text this describes is
+                    // there, which is what the negative form fails on.
+                    let present = asm.b_forward();
+                    absent.bind(&mut asm);
+                    let accepted = asm.b_forward();
+                    asm.bind(present);
+                    give_up(&mut next_start, &mut repeats, depth, asm.b_forward())?;
+                    asm.bind(accepted);
+                } else {
+                    for index in 0..absent.count {
+                        let patch = absent.list[index];
+                        give_up(&mut next_start, &mut repeats, depth, patch)?;
+                    }
+                }
+                // The assertion consumes nothing, and its body and end are
+                // replaced by the comparison above.
+                pc = a as usize;
             }
             ATOM_REPEAT => {
                 let record = program.repeat(a as usize);
@@ -518,7 +645,7 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
     }
 
     next_start.bind(&mut asm);
-    asm.add_imm(START, START, 1);
+    asm.add_imm(START_REG, START_REG, 1);
     asm.b_back(outer);
 
     asm.bind(exhausted);
@@ -789,6 +916,31 @@ mod tests {
             ("[^0-9]+9", ""),
             ("a+a", ""),
             ("a{1,2}b", ""),
+            ("^a", ""),
+            ("a$", ""),
+            ("^abc$", ""),
+            ("^a+$", ""),
+            ("[a-z]+$", ""),
+            ("^[a-z]+[0-9]$", ""),
+            ("needle$", ""),
+            ("^(a)(b)$", ""),
+            ("a$", ""),
+            // Repeated multi-range classes, which are the only shape that
+            // reaches the membership table.
+            (r"\w+", ""),
+            (r"\w+!", ""),
+            (r"\d+", ""),
+            ("[a-z0-9_]+x", ""),
+            ("[^a-z0-9]+", ""),
+            (r"(\w+)@(\w+)", ""),
+            ("[a-cx-z]+q", ""),
+            ("(?<=abc)d", ""),
+            ("(?<!abc)d", ""),
+            ("(?<=0123456789)abc", ""),
+            ("(?<=a)b", ""),
+            ("(?<!a)b", ""),
+            ("x(?<=x)y", ""),
+            ("(?<=ab)c$", ""),
         ];
         let subjects = [
             "",
@@ -833,6 +985,35 @@ mod tests {
             "az",
             "aaz",
             "  z",
+            // Bytes immediately outside the ranges above, which an off-by-one
+            // on a bound would accept or reject wrongly.
+            "{",
+            "a{",
+            "`a",
+            "z{",
+            "09:",
+            "/0",
+            "AZ[",
+            "@A",
+            "_",
+            "^_`",
+            "a_9Z",
+            "  \t ",
+            "w+x",
+            "abc@def",
+            "xyzq",
+            "abcq",
+            "abcd",
+            "xabcd",
+            "d",
+            "bd",
+            "0123456789abc",
+            "x0123456789abc",
+            "ab",
+            "xb",
+            "xy",
+            "xxy",
+            "abc",
         ];
         for (pattern, flags) in patterns {
             for subject in subjects {
@@ -880,8 +1061,14 @@ mod tests {
             ("a|b", ""),
             ("[a-z]", "i"),
             ("a", "y"),
-            ("^a", ""),
-            ("(?<=a)b", ""),
+            ("^a", "m"),
+            ("a$", "m"),
+            ("\\ba", ""),
+            // Classes reaching past ASCII, which this storage cannot hold but
+            // the table would have to describe.
+            (r"\W", ""),
+            (r"\s", ""),
+            (r"\W+", ""),
             ("\\p{L}", "u"),
         ] {
             let source = Input::utf8(pattern);

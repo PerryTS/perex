@@ -200,45 +200,44 @@ liability with no benefit.
 
 The tier is implemented far enough to execute, and `secret-tests/perex-native`
 does: it maps what the generator emits, calls it, checks every answer against
-the interpreter first, and times both. Process CPU time, best of five rounds,
-the same machine as every other figure here.
+the interpreter at every start position first, and times both. Process CPU time,
+best of five rounds, the same machine as every other figure here.
 
 | Case | Interpreter | Generated | V8 `test` | V8 `exec` |
 |---|---:|---:|---:|---:|
-| Captures, 25 characters | 385 ns | **57.5 ns** | 60.1 | 89.3 |
-| Class repeat, short | 306 ns | **50.6 ns** | 68.2 | 93.1 |
+| Captures, 25 characters | 385 ns | **30.2 ns** | 60.1 | 89.3 |
+| Class repeat, short | 306 ns | **37.7 ns** | 68.2 | 93.1 |
+| `\w+!` over sixty | 144 ns | **21.2 ns** | 36.4 | 49.8 |
 | Folded literal | 66.0 ns | **14.2 ns** | 17.3 | 35.8 |
+| Literal lookbehind, 256 KiB | 115 ns | **29.8 ns** | 30.0 | 41.0 |
+| End-anchored hit, 256 KiB | 53.4 ns | **2.0 ns** | 13.8 | 32.8 |
 | Short literal | 51.9 ns | **12.5 ns** | 38.8 | 43.2 |
 | `/a/` against `"a"` | 44.8 ns | **1.0 ns** | 18.2 | 33.7 |
 | `/z/` against `""` | 15.5 ns | **1.3 ns** | 12.5 | 14.2 |
-| `\w+!` over sixty | 144 ns | 95.6 ns | 36.4 | 49.8 |
-| `/needle/` over 256 KiB | 11.6 µs | 234 µs | 69.8 | 69.9 |
+| `/needle/` over 256 KiB | **11.6 µs** | 217 µs | 69.8 | 69.9 |
 
-Taking whichever path wins per case, the position against V8 moves from nineteen
-of twenty-five behind to **five** against the boolean entry point and **four**
-against the capturing one. The estimate this section used to hold was five to
-ten times on the search portion; the measured figure is seven times on the worst
-case and considerably more on the short ones, where the generated code replaces
-a whole phase machine rather than a dispatch loop.
+Taking whichever path wins per case, **every one of the twenty-five measured
+cases is at or better than V8**, on both of its entry points. The worst ratio is
+0.99x against the boolean one; the estimate this section used to hold was five to
+ten times on the search portion, and the measured figure ranges from four times
+on the worst case to more than forty on the shortest.
 
-What remains behind, and why each one is a piece of work rather than a wall:
+Two things that number depends on, and neither is done.
 
-- The end anchor and the literal lookbehind are not generated yet, so both of
-  those cases still run on the interpreter and are where they always were.
-- A repeated class is generated as a compare and a branch per range per byte,
-  where the interpreter compares a whole word at a time. On a sixty-character
-  run of `\w`, four ranges, that loses: 95.6 ns against the interpreter's 144
-  but V8's 36.4. The generated scan needs the same word-at-a-time shape the
-  interpreter already has.
+**The path has to be chosen, and nothing chooses it yet.** The last row is the
+warning: over 256 KiB the generated code is nineteen times *slower* than the
+interpreter, because it tries every start position where the interpreter's
+admission scan decides a position on two characters at a time and skips almost
+all of them. The tier wins where the subject is short and the flat cost
+dominates, which is exactly where the gap was, and loses badly elsewhere. The
+table above takes the better of the two per case; a host has to make that
+decision without running both, and this document does not yet say how. Until it
+does, the result above is what the tier *can* deliver rather than what a host
+would get.
 
-And one that is not a piece of work but a rule. Over 256 KiB the generated code
-is twenty times *slower* than the interpreter, because it tries every start
-position where the interpreter's admission scan decides a position on two
-characters at a time. The tier must therefore be chosen rather than always used:
-it wins where the subject is short and the flat cost dominates, which is exactly
-where the gap was, and it must not be used elsewhere. The measurement above
-takes the better of the two per case; a host has to make that decision without
-running both, and this document does not yet say how.
+**One target.** Everything here is AArch64. CI runs x86-64, so CI cannot execute
+any of it, and by this project's own rules a code generator CI cannot test is
+not yet evidence.
 
 ## Staging
 
@@ -246,11 +245,15 @@ running both, and this document does not yet say how.
    no code generation — measured by counting which benchmark cases qualify, and
    already worth its cost: the first cut of the rule covered only the cases that
    needed it least, and the count said so before an encoder existed.
-2. An AArch64 encoder for the subset, behind a target gate, with both paths run
-   over the whole differential suite.
-3. The same for x86-64, with the two backends differentially tested against each
-   other as well as against the interpreter.
-4. Measurement against V8 per case, and a decision recorded here either way.
+2. **Done.** An AArch64 encoder and a generator for the subset, with every
+   emitted program run through an emulator and compared with the interpreter,
+   and the harness itself checked by injecting faults into the generator --
+   eighteen so far, eighteen caught.
+3. **Done.** Measurement against V8 per case, through a host harness that maps
+   and calls the code. Recorded above.
+4. A rule for choosing between the two paths, which the measurement shows is
+   required and which nothing implements.
+5. The same encoder for x86-64, so CI can execute any of this.
 
 Each stage is independently useful and independently abandonable. Stage 1 costs
 nothing and tells us how much of the benchmark the tier could even apply to,
