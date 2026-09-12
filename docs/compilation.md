@@ -196,28 +196,49 @@ encoder differs. Until both exist and agree, the tier is compiled out entirely
 rather than shipped disabled: an untested code generator behind a flag is a
 liability with no benefit.
 
-## What it is expected to buy
+## What it buys, measured
 
-From the measurements in [performance](performance.md), taking the entry cost as
-unchanged — it is `find` setting up, not interpreting — and the search itself as
-the part compilation addresses:
+The tier is implemented far enough to execute, and `secret-tests/perex-native`
+does: it maps what the generator emits, calls it, checks every answer against
+the interpreter first, and times both. Process CPU time, best of five rounds,
+the same machine as every other figure here.
 
-| Case | Now | Entry | Search | V8 `exec` | Search at 5x | At 10x |
-|---|---:|---:|---:|---:|---:|---:|
-| `/a/` against `"a"` | 44.8 ns | 15.5 | 29 | 33.7 | 21 ns | 18 ns |
-| Folded literal | 66.0 ns | 15.5 | 50 | 35.8 | 26 ns | 21 ns |
-| Class repeat, short | 306 ns | 15.5 | 290 | 93.1 | 74 ns | 45 ns |
-| Captures, 25 chars | 385 ns | 15.5 | 370 | 89.3 | 89 ns | 52 ns |
+| Case | Interpreter | Generated | V8 `test` | V8 `exec` |
+|---|---:|---:|---:|---:|
+| Captures, 25 characters | 385 ns | **57.5 ns** | 60.1 | 89.3 |
+| Class repeat, short | 306 ns | **50.6 ns** | 68.2 | 93.1 |
+| Folded literal | 66.0 ns | **14.2 ns** | 17.3 | 35.8 |
+| Short literal | 51.9 ns | **12.5 ns** | 38.8 | 43.2 |
+| `/a/` against `"a"` | 44.8 ns | **1.0 ns** | 18.2 | 33.7 |
+| `/z/` against `""` | 15.5 ns | **1.3 ns** | 12.5 | 14.2 |
+| `\w+!` over sixty | 144 ns | 95.6 ns | 36.4 | 49.8 |
+| `/needle/` over 256 KiB | 11.6 µs | 234 µs | 69.8 | 69.9 |
 
-Five times is the conservative end for replacing a dispatch loop with straight
-code; ten is the optimistic end. At either, the three cases furthest behind
-reach parity or better against the entry point that produces captures, which is
-the comparison that matches what `find` produces.
+Taking whichever path wins per case, the position against V8 moves from nineteen
+of twenty-five behind to **five** against the boolean entry point and **four**
+against the capturing one. The estimate this section used to hold was five to
+ten times on the search portion; the measured figure is seven times on the worst
+case and considerably more on the short ones, where the generated code replaces
+a whole phase machine rather than a dispatch loop.
 
-This is an estimate from a decomposition, not a measurement, and it is the thing
-the tier has to prove. If the first backend does not reach the conservative
-column on the cases above, the tier is not worth its safety surface and this
-document should record that instead.
+What remains behind, and why each one is a piece of work rather than a wall:
+
+- The end anchor and the literal lookbehind are not generated yet, so both of
+  those cases still run on the interpreter and are where they always were.
+- A repeated class is generated as a compare and a branch per range per byte,
+  where the interpreter compares a whole word at a time. On a sixty-character
+  run of `\w`, four ranges, that loses: 95.6 ns against the interpreter's 144
+  but V8's 36.4. The generated scan needs the same word-at-a-time shape the
+  interpreter already has.
+
+And one that is not a piece of work but a rule. Over 256 KiB the generated code
+is twenty times *slower* than the interpreter, because it tries every start
+position where the interpreter's admission scan decides a position on two
+characters at a time. The tier must therefore be chosen rather than always used:
+it wins where the subject is short and the flat cost dominates, which is exactly
+where the gap was, and it must not be used elsewhere. The measurement above
+takes the better of the two per case; a host has to make that decision without
+running both, and this document does not yet say how.
 
 ## Staging
 

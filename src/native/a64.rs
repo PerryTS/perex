@@ -60,7 +60,7 @@ pub(crate) struct Patch {
 /// reports instead of wrapping so that a bug cannot silently emit a different
 /// instruction than it meant to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EncodeError {
+pub enum EncodeError {
     /// The caller's buffer could not hold the code.
     Capacity,
     /// An immediate did not fit the field the instruction has for it.

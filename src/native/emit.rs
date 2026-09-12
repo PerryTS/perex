@@ -56,7 +56,7 @@ const MAX_RANGES: usize = 64;
 /// Why a program could not have code generated for it. Distinct from
 /// [`EncodeError`], which is about instructions rather than programs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EmitError {
+pub enum EmitError {
     /// The program is outside the subset this generator handles. The
     /// interpreter runs it, as it runs everything.
     Unsupported,
@@ -117,7 +117,7 @@ struct Repeat {
 
 /// Whether this program is a sequence of atoms and greedy repeats of atoms,
 /// which is what [`emit_search`] generates.
-pub(crate) fn supported(program: Program<'_>) -> bool {
+pub fn supported(program: Program<'_>) -> bool {
     // A sticky search tries only its requested position, which is a different
     // search from the one generated here.
     if program.words()[2] & Y != 0 {
@@ -282,7 +282,7 @@ fn emit_atom(
 /// register array, and returns the position a match began at or `-1`. It writes
 /// only into the registers it was given, reads only within the length, and
 /// calls nothing.
-pub(crate) fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
+pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
     if !supported(program) {
         return Err(EmitError::Unsupported);
     }

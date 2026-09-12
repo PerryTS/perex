@@ -20,7 +20,7 @@ pub mod span;
 mod casefold;
 pub mod compiler;
 pub mod executor;
-mod native;
+pub mod native;
 pub mod program;
 mod properties;
 
