@@ -660,6 +660,27 @@ impl Vm<'_, '_, '_, '_> {
         Ok(())
     }
 
+    /// Characters in a lookbehind body that is nothing but ASCII characters
+    /// followed by its end, so it can be compared against the subject's bytes
+    /// directly. `None` when the body is anything else.
+    fn literal_lookbehind(&self, after: usize) -> Option<usize> {
+        let body = self.state.pc;
+        let end = after.checked_sub(1)?;
+        let length = end.checked_sub(body)?;
+        if length < 1 || length > LEADING_MAX as usize || end >= self.program.instructions() {
+            return None;
+        }
+        if self.program.instruction(end)[0] != ASSERT_END {
+            return None;
+        }
+        (body..end)
+            .all(|pc| {
+                let [op, a, _] = self.program.instruction(pc);
+                op == CHAR && a < 128
+            })
+            .then_some(length)
+    }
+
     fn begin_trial(&mut self) {
         self.state.pc = 0;
         self.state.frames = 0;
@@ -1087,9 +1108,36 @@ impl Vm<'_, '_, '_, '_> {
                 return Ok(Step::Phase);
             }
             ASSERT => {
-                self.push(a as usize, if b & 1 == 0 { 1 } else { 2 })?;
-                self.state.assertion = self.state.frames - 1;
-                self.state.reverse = b & 2 != 0;
+                // A lookbehind whose body is a run of ASCII characters is a
+                // comparison against the bytes just before this position. Doing
+                // it here costs one comparison instead of a frame, a reversed
+                // direction, a character read for each of them and the unwind.
+                if b & 2 != 0
+                    && let Some(length) = self.literal_lookbehind(a as usize)
+                    && let Some(bytes) = self.input.ascii_bytes()
+                {
+                    let at = self.cursor.position();
+                    self.charge(length + 1)?;
+                    let body = self.state.pc;
+                    let held = at >= length
+                        && (0..length).all(|offset| {
+                            u32::from(bytes[at - 1 - offset])
+                                == self.program.instruction(body + offset)[1]
+                        });
+                    // `b & 1` is the negative form, which succeeds when the
+                    // text it describes is not there.
+                    if held == (b & 1 == 0) {
+                        // The assertion consumes nothing, so the position is
+                        // already what `ASSERT_END` would have restored.
+                        self.state.pc = a as usize;
+                    } else {
+                        success = false;
+                    }
+                } else {
+                    self.push(a as usize, if b & 1 == 0 { 1 } else { 2 })?;
+                    self.state.assertion = self.state.frames - 1;
+                    self.state.reverse = b & 2 != 0;
+                }
             }
             ASSERT_END => {
                 if self.state.assertion == UNSET || self.state.assertion >= self.state.frames {
