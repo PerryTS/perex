@@ -53,12 +53,12 @@ The harness, cases and raw results are the host's, under
 
 | Case | Perex | V8 |
 |---|---:|---:|
-| Required text before its prefix | 1.80 µs | 24.0 ms |
-| Required text absent, 4 KiB of `a` | 1.65 µs | 24.0 ms |
-| Class miss over 256 KiB | 20.4 µs | 894 µs |
-| Long literal miss, 256 KiB | 11.2 µs | 124 µs |
-| Long literal, 256 KiB | 11.3 µs | 68.8 µs |
-| Three-way alternation, 256 KiB | 21.2 µs | 41.2 µs |
+| Required text before its prefix | 1.80 µs | 23.1 ms |
+| Required text absent, 4 KiB of `a` | 1.60 µs | 23.1 ms |
+| Class miss over 256 KiB | 18.5 µs | 886 µs |
+| Long literal miss, 256 KiB | 11.1 µs | 123 µs |
+| Long literal, 256 KiB | 11.2 µs | 67.7 µs |
+| Three-way alternation, 256 KiB | 21.2 µs | 40.9 µs |
 
 The first two are the catastrophic-backtracking shapes. Bounded work and the
 admission bound are not a curiosity against a backtracking competitor: they are
@@ -73,22 +73,22 @@ The alternation moved from 4.5x behind to 0.52x ahead, and the long literal from
 
 ### Behind
 
-Between 1.43x and 6.47x, in nineteen of twenty-five cases.
+Between 1.38x and 6.55x, in nineteen of twenty-five cases.
 
 | Case | Perex | V8 | |
 |---|---:|---:|---:|
-| Captures, 25-character subject | 376 ns | 58.2 ns | 6.47x |
-| Class repeat, short subject | 300 ns | 67.3 ns | 4.45x |
-| `\w+` over a 60-character run | 140 ns | 39.3 ns | 3.57x |
-| Folded literal, 29 characters | 64.7 ns | 20.7 ns | 3.13x |
-| End-anchored hit, 256 KiB | 52.2 ns | 16.9 ns | 3.09x |
-| Literal lookbehind, 256 KiB | 111 ns | 60.0 ns | 1.84x |
-| Short literal, 29 characters | 50.5 ns | 34.7 ns | 1.46x |
+| Captures, 25-character subject | 379 ns | 57.9 ns | 6.55x |
+| Class repeat, short subject | 300 ns | 66.0 ns | 4.55x |
+| `\w+` over a 60-character run | 142 ns | 38.8 ns | 3.65x |
+| Folded literal, 29 characters | 65.0 ns | 20.9 ns | 3.11x |
+| End-anchored hit, 256 KiB | 51.7 ns | 16.9 ns | 3.06x |
+| Literal lookbehind, 256 KiB | 111 ns | 39.5 ns | 2.81x |
+| Short literal, 29 characters | 50.3 ns | 34.3 ns | 1.47x |
 
 Most of them are searches short enough that starting one dominates. The literal
-ladder makes that explicit: a one-character literal costs 44.9 ns and a
-sixteen-character one 52.1 ns, so length is worth about half a nanosecond per
-character while the search itself costs forty-five. The two long-subject entries
+ladder makes that explicit: a one-character literal costs 43.6 ns and a
+sixteen-character one 52.8 ns, so length is worth about half a nanosecond per
+character while the search itself costs forty-four. The two long-subject entries
 are the same thing — both find their match almost immediately and then pay the
 same flat cost.
 
@@ -124,13 +124,13 @@ A diagnostic ladder separates fixed cost from marginal cost:
 
 | Case | Perex | V8 | |
 |---|---:|---:|---:|
-| `/z/` against `""` | 16.5 ns | 11.2 ns | 1.47x |
-| `/z/` against `"a"` | 19.9 ns | 13.9 ns | 1.43x |
-| `/a/` against `"a"` | 45.4 ns | 16.8 ns | 2.70x |
+| `/z/` against `""` | 15.3 ns | 11.1 ns | 1.38x |
+| `/z/` against `"a"` | 20.1 ns | 13.7 ns | 1.47x |
+| `/a/` against `"a"` | 43.9 ns | 16.6 ns | 2.64x |
 
-An empty search is 1.47x: that is the cost of a bytecode pausable at every
+An empty search is 1.38x: that is the cost of a bytecode pausable at every
 instruction so the host's collector can run, which is why this engine exists.
-The step from a miss to a hit is 26 ns against V8's 3, and it buys register
+The step from a miss to a hit is 24 ns against V8's 3, and it buys register
 initialization, four instructions, capture validation and copying the result
 out — about 2 to 3 ns for each primitive operation, which is what a bytecode
 interpreter with bounds-checked scratch costs and roughly ten times what
@@ -138,10 +138,12 @@ compiled code costs. V8 emits native code and owes a collector nothing.
 
 There is no remaining hot spot behind that number, and it was checked rather
 than assumed. Counting how often each phase runs gives seven dispatcher rounds
-for `/a/` against `"a"` and forty-seven for the capture case; a round costs
-about two nanoseconds, and removing eight of the forty-seven recovered three
-percent. The cost is distributed across the phase machine in the shape the
-ladder shows, so no further tuning of this design removes it.
+for `/a/` against `"a"` and forty-seven for the capture case. Removing eight of
+those forty-seven recovered three percent, and running three of the seven in one
+round recovered four percent on the shortest hits and nothing elsewhere. Two
+independent measurements therefore agree that the dispatcher is not where the
+remaining gap is: the cost is distributed across what the phases do, in the
+shape the ladder shows, so no further tuning of this design removes it.
 
 The scan is not where the remaining gap is, and it is no longer where any of
 it is. Two claims recorded here earlier were wrong, and the measurements that
