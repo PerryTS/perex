@@ -73,6 +73,7 @@ node tools/check-classes.mjs target/release/examples/engine_probe artifacts/clas
 node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes-q17 --quantum 17 --relocate --grow
 cargo build --locked --release --example property_probe
 node tools/check-properties.mjs target/release/examples/property_probe target/release/examples/engine_probe --allow-reviewed-reference-disagreements
+node tools/check-test262.mjs target/release/examples/engine_probe /path/to/test262 artifacts/test262 --work 64000000
 node tools/reference.mjs --check
 node --test tools/reference.test.mjs
 ```
@@ -96,6 +97,8 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 [Required-text admission](docs/admission.md) uses a condition proved by the compiler and original subject storage. Its correctness and CPU/RSS costs require separate checks.
 
 [Candidate-start scanning](docs/candidate.md) skips impossible ASCII start positions using the same evaluator and original storage. Complete-answer and relocation checks precede performance claims.
+
+[Test262 pattern conformance](docs/conformance.md) compares every pattern harvested from the suite's regular-expression tests against Node, for syntax acceptance and complete match answers. The one remaining gap is Unicode-sets class syntax.
 
 [Leading literal starts](docs/leading.md) reject an impossible start with a byte comparison instead of an initialized trial. The claim is re-derived from the instructions during program validation, so it cannot disagree with them.
 

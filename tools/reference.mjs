@@ -123,6 +123,42 @@ export function freshAnswers(rows) {
   return parseAnswers(child.stdout);
 }
 
+// Compute oracle answers in bounded child processes. A pattern written to probe
+// the grammar can backtrack catastrophically in the oracle itself, which would
+// otherwise hang the whole check with no way to say which case did it. Each
+// chunk runs with a timeout; a chunk that exceeds it is bisected so the exact
+// cases can be reported as `reference-timeout` and excluded from comparison
+// rather than silently dropped or waited on forever.
+export function boundedAnswers(rows, { chunk = 250, timeout = 20_000, onTimeout } = {}) {
+  const answers = new Map();
+  const timedOut = [];
+  const attempt = group => {
+    if (!group.length) return;
+    const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--answers'], {
+      input: JSON.stringify(group),
+      encoding: 'utf8',
+      maxBuffer: 512 * 1024 * 1024,
+      timeout,
+    });
+    const ok = !child.error && child.status === 0 && child.stdout;
+    if (ok) {
+      for (const [id, answer] of parseAnswers(child.stdout)) answers.set(id, answer);
+      return;
+    }
+    if (group.length === 1) {
+      timedOut.push(group[0]);
+      answers.set(group[0].id, { id: group[0].id, outcome: 'reference-timeout' });
+      if (onTimeout) onTimeout(group[0]);
+      return;
+    }
+    const half = Math.ceil(group.length / 2);
+    attempt(group.slice(0, half));
+    attempt(group.slice(half));
+  };
+  for (let i = 0; i < rows.length; i += chunk) attempt(rows.slice(i, i + chunk));
+  return { answers, timedOut };
+}
+
 // Compare, then recompute only the disagreeing cases in a clean process and
 // compare those again. A difference that survives is reported unchanged; the
 // number whose oracle answer was unstable is published alongside it.

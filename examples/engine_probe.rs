@@ -40,7 +40,23 @@ fn bytes(hex: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let options = match args.next().as_deref() {
+    // The execution allowance is a harness setting, not a semantic limit. A
+    // pattern that needs more than the default is a cost result, not a wrong
+    // answer, so a corpus with deliberately expensive patterns can raise it
+    // and still see an explicit outcome rather than an unbounded run.
+    let mut work = 2_000_000;
+    let mut next = args.next();
+    if next.as_deref() == Some("--work") {
+        work = args
+            .next()
+            .ok_or("missing work allowance")?
+            .parse::<usize>()?;
+        if work == 0 {
+            return Err("work allowance must be positive".into());
+        }
+        next = args.next();
+    }
+    let options = match next.as_deref() {
         None => None,
         Some("--quantum") => {
             let quantum = args.next().ok_or("missing quantum")?.parse::<usize>()?;
@@ -62,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 grow,
             })
         }
-        _ => return Err("expected --quantum N [--relocate] [--grow]".into()),
+        _ => return Err("expected [--work N] [--quantum N [--relocate] [--grow]]".into()),
     };
     if args.next().is_some() {
         return Err("extra argument".into());
@@ -125,7 +141,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frames: &mut frames,
             undo: &mut undo,
         };
-        let mut budget = Budget::new(2_000_000);
+        let mut budget = Budget::new(work);
         let start = f[4].parse()?;
         let found = if let Some(options) = options {
             resumable::find(

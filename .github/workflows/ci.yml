@@ -80,6 +80,14 @@ jobs:
           node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets
           node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets-q1 --quantum 1 --relocate --grow
           node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets-q17 --quantum 17 --relocate --grow
+      - name: Test262 pattern corpus
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: tc39/test262
+          ref: 4249661388e5d3f92a85186213da140a6481490f
+          path: third_party/test262-checkout
+      - name: Test262 pattern syntax and matching differential
+        run: node tools/check-test262.mjs target/release/examples/engine_probe third_party/test262-checkout artifacts/test262 --work 64000000
       - name: Unicode and legacy case equivalence differential
         run: node tools/check-casefold.mjs target/release/examples/engine_probe
       - run: cargo +stable build --locked --release --example property_probe
