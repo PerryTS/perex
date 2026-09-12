@@ -56,7 +56,10 @@ requested position. A nonnullable pattern cannot match at the subject's end.
 Each scan step reads at most 4096 available bytes, further bounded by its
 execution quantum and remaining work, so a host that wants finer pauses gets
 them by passing a smaller quantum rather than by this cap. Portable eight-byte arithmetic locates a possible
-character; scalar handling covers the first byte and tail. Only logical positions
+character; scalar handling covers the first byte and tail. A program whose word
+9 carries a leading claim looks for that claim's exact byte pairs instead of
+this descriptor's interval, which is a strictly narrower condition on the same
+positions; [leading](leading.md) describes it. Only logical positions
 through the first candidate are charged, so word-read speculation does not change
 matching work across quanta. Subject positions remain cursor offsets/checkpoints;
 no subject address survives the scoped borrow. The scan adds a phase but no frame,

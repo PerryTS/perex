@@ -211,8 +211,7 @@ Two changes remove most of that. A greedy unbounded repeat that has met its
 minimum changes no counter when it consumes another character, so that run is
 walked inside the scan rather than one character per round trip. And when the
 atom's charge is the same whatever the character is, the run is walked directly
-over original bytes with the same lane arithmetic the start scan uses, moving
-the cursor once at the end.
+over original bytes, eight at a time, moving the cursor once at the end.
 
 The charge has to be identical either way, because a paused search must reach
 the same total as an unpaused one. A repeated class is therefore charged for its
@@ -223,8 +222,16 @@ that charge, so a small quantum and a large one still reach the same total.
 
 An ASCII character costs one unit, `.` one, and a class one plus its range
 count. A folded, sorted or larger class keeps the character-at-a-time path.
-A single range keeps its own predicate, since walking a slice of ranges per word
-costs more than the one comparison that case needs.
+
+Which predicate applies is decided once for the whole run rather than per word,
+and each one has its own loop with its comparison words built before it: a
+bound spread over a word's lanes is the same for the whole run, and the
+multiply that builds it costs more than the comparison it serves. A single
+range keeps its own predicate, since walking a slice of ranges per word costs
+more than the one comparison that case needs, and a class of several ranges
+tests each against a block of thirty-two lanes past the length where a block's
+setup has paid for itself — the same shape, and the same threshold, as the
+start scan in [leading](leading.md).
 
 The stopping character is always left to the ordinary step, which charges and
 decides it exactly as before.
@@ -240,3 +247,11 @@ Measured on a sixty-character run, process CPU time per search:
 
 All four are now at or better than `regress` on this shape, and three of the
 four beat Rust `regex` as well.
+
+Those figures were taken when the byte run landed. Deciding the predicate once
+per run rather than per word moved them again, against V8 on the same machine
+and in the same units: `/a+!/` to 87.8 ns against V8's 38.0, `/[a-z]+!/` to
+95.5 against 38.6, `/\w+!/` to 146 against 40.5, and `/[^0-9]+!/` to 112
+against 39.5. These remain the shapes furthest behind V8 after the flat
+per-search cost in [performance](performance.md), which about forty-six of
+each of those nanoseconds is.
