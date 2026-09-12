@@ -64,15 +64,28 @@ fn leading_descriptor_claims_only_unconditional_ascii_characters() {
     // Interior capture bookkeeping ends the contiguous run; the shorter claim
     // is still correct, because those three characters are consumed first.
     assert_eq!(leading("(abc)d", ""), 3);
+    // A branch of literal runs is claimed as an alternation, whose branches are
+    // read from the instructions rather than stored.
+    for source in ["(?:ab|cd)ef", "ab|cd", "(?:ab|cd|ef)", "(?:abc|de)"] {
+        assert_eq!(leading(source, ""), 1, "/{source}/");
+    }
+    // A branch needs every alternative to be a literal run of its own.
+    for source in [
+        "(?:a|cd)ef",
+        "(?:ab|[c-d]d)",
+        "(?:ab|c+d)",
+        "(?:ab|\u{e9}f)",
+    ] {
+        assert_eq!(leading(source, ""), 0, "/{source}/");
+    }
     for (source, flags) in [
-        ("a", ""),           // One character is already the word 7 claim.
-        ("a+END", ""),       // A repeat can consume before the literal.
-        ("(?:ab|cd)ef", ""), // A branch decides which characters come first.
-        ("^abc", ""),        // An assertion instruction ends the run.
-        ("[ab]cd", ""),      // A class is not a literal character.
-        ("NeEdLe", "i"),     // Folded characters are not a byte claim.
-        ("\u{e9}tude", ""),  // Non-ASCII cannot be compared against bytes.
-        ("a?bc", ""),        // An optional prefix can consume nothing.
+        ("a", ""),          // One character is already the word 7 claim.
+        ("a+END", ""),      // A repeat can consume before the literal.
+        ("^abc", ""),       // An assertion instruction ends the run.
+        ("[ab]cd", ""),     // A class is not a literal character.
+        ("NeEdLe", "i"),    // Folded characters are not a byte claim.
+        ("\u{e9}tude", ""), // Non-ASCII cannot be compared against bytes.
+        ("a?bc", ""),       // An optional prefix can consume nothing.
     ] {
         assert_eq!(leading(source, flags), 0, "/{source}/{flags}");
     }

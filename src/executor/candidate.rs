@@ -33,6 +33,50 @@ impl Vm<'_, '_, '_, '_> {
             Phase::Initialize(0)
         };
     }
+    /// Compare the entry alternation's branches against original bytes at `at`,
+    /// succeeding as soon as one matches. The branches are read from the
+    /// instructions, so this needs no program storage and no match state.
+    fn alternation_matches(&mut self, bytes: &[u8], at: usize) -> Result<bool, ExecError> {
+        let mut pending = [0usize; LEADING_BRANCHES];
+        let mut depth = 0;
+        let mut pc = self.program.leading_pc();
+        loop {
+            self.charge(1)?;
+            let [op, a, b] = self.program.instruction(pc);
+            if op == SPLIT {
+                // The derivation proved the branch count fits.
+                if depth == pending.len() {
+                    return Ok(true);
+                }
+                pending[depth] = b as usize;
+                depth += 1;
+                pc = a as usize;
+                continue;
+            }
+            let mut matched = true;
+            let mut next = pc;
+            while self.program.instruction(next)[0] == CHAR {
+                self.charge(1)?;
+                let want = self.program.instruction(next)[1];
+                match bytes.get(at + (next - pc)) {
+                    Some(&byte) if u32::from(byte) == want => next += 1,
+                    _ => {
+                        matched = false;
+                        break;
+                    }
+                }
+            }
+            if matched {
+                return Ok(true);
+            }
+            if depth == 0 {
+                return Ok(false);
+            }
+            depth -= 1;
+            pc = pending[depth];
+        }
+    }
+
     /// Compare the program's leading literal against original bytes at `at`.
     /// `None` reports that the literal cannot fit before the subject's end.
     /// Every compared position is charged, so this cannot outrun its budget.
@@ -42,6 +86,9 @@ impl Vm<'_, '_, '_, '_> {
         at: usize,
         leading: usize,
     ) -> Result<Option<bool>, ExecError> {
+        if leading == LEADING_ALTERNATION as usize {
+            return self.alternation_matches(bytes, at).map(Some);
+        }
         let Some(window) = bytes.get(at..at + leading) else {
             self.charge(1)?;
             return Ok(None);
@@ -112,7 +159,7 @@ impl Vm<'_, '_, '_, '_> {
             self.charge(inspected)?;
             let Some(index) = found else { break None };
             let at = start + scanned + index;
-            if leading < 2 {
+            if leading == 0 {
                 break Some(at);
             }
             match self.leading_matches(bytes, at, leading)? {

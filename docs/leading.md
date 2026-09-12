@@ -35,6 +35,26 @@ disagree with its own instructions here. The derivation inspects a bounded
 number of entry instructions and charges the work budget. The validator also
 rejects any reserved bit and a forward claim without its condition.
 
+## An alternation of runs
+
+A pattern whose entry is a branch — `(?:needle|thimble|haystack)` — has no
+single leading run, and its word 7 descriptor is worse than a single literal's:
+a union of first characters is widened into one interval, so `{h, n, t}` admits
+every character from `h` to `t`. On ordinary text that stops the scan at a large
+fraction of positions, each of which previously entered a trial.
+
+Word 9's low byte value 1 records that the entry is a branch whose every
+alternative begins with at least two ASCII characters. The branches themselves
+are not stored: they are already in the instructions, so the check walks the
+`SPLIT` structure and compares each alternative's characters against original
+bytes, succeeding as soon as one matches. The claim costs no program storage at
+all, and like the single-run count it is re-derived during validation.
+
+A branch qualifies only if every alternative is a run of at least two ASCII
+characters. A jump, class, repeat, folded or non-ASCII character anywhere in the
+prefix makes it undecidable and disables the claim. At most eight alternatives
+are walked, each needing one stack slot and no match state.
+
 ## Execution, lifetime and work
 
 The scan borrows the original validated bytes and applies only to ASCII storage,

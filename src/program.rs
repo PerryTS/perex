@@ -26,6 +26,11 @@ pub(crate) const MAX_END_UNITS: u32 = 254;
 /// Instructions word 9's derivation may inspect. Interior `SAVE` bookkeeping
 /// consumes nothing, so a bounded number is skipped while collecting the run.
 const LEADING_SCAN: usize = 128;
+/// Word 9 low-byte value meaning the entry is an alternation of literal runs
+/// rather than one run. Its branches are read from the instructions.
+pub(crate) const LEADING_ALTERNATION: u32 = 1;
+/// Alternatives the entry alternation may hold. Each needs one stack slot.
+pub(crate) const LEADING_BRANCHES: usize = 8;
 pub(crate) const NEGATED: u32 = 1 << 31;
 // A class-table record is either (literal low, literal high), or
 // (PROPERTY | shared property id, complement kind). Both words are relocatable.
@@ -148,7 +153,68 @@ pub(crate) fn derive_leading(words: &[u32], instructions: usize) -> u32 {
         pc += 1;
     }
     // One leading character is already the word 7 descriptor's claim.
-    if characters >= 2 { characters } else { 0 }
+    if characters >= 2 {
+        return characters;
+    }
+    if derive_alternation(words, instructions) {
+        return LEADING_ALTERNATION;
+    }
+    0
+}
+
+/// Whether the entry is a branch whose every alternative begins with at least
+/// two ASCII characters. Such a prefix can be compared against original bytes
+/// before a start is published, exactly as a single run can, and needs no
+/// program storage because the branches are already in the instructions.
+///
+/// Only `SPLIT` and character runs are accepted. Anything else — a jump, a
+/// class, a repeat, a folded or non-ASCII character — makes the prefix
+/// undecidable here and disables the claim.
+fn derive_alternation(words: &[u32], instructions: usize) -> bool {
+    let entry = leading_pc(words, instructions);
+    if entry >= instructions || words[HEADER + entry * 3] != SPLIT {
+        return false;
+    }
+    let mut pending = [0usize; LEADING_BRANCHES];
+    let mut depth = 0;
+    let mut pc = entry;
+    let mut branches = 0;
+    let mut inspected = 0;
+    loop {
+        inspected += 1;
+        if inspected > LEADING_SCAN || pc >= instructions {
+            return false;
+        }
+        let at = HEADER + pc * 3;
+        if words[at] == SPLIT {
+            if depth == pending.len() {
+                return false;
+            }
+            pending[depth] = words[at + 2] as usize;
+            depth += 1;
+            pc = words[at + 1] as usize;
+            continue;
+        }
+        let mut run = 0;
+        let mut next = pc;
+        while next < instructions
+            && words[HEADER + next * 3] == CHAR
+            && words[HEADER + next * 3 + 1] < 128
+            && run < LEADING_MAX
+        {
+            run += 1;
+            next += 1;
+        }
+        if run < 2 {
+            return false;
+        }
+        branches += 1;
+        if depth == 0 {
+            return branches >= 2;
+        }
+        depth -= 1;
+        pc = pending[depth];
+    }
 }
 
 /// The first instruction that can consume input. Only entry `SAVE` bookkeeping
