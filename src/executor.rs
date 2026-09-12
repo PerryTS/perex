@@ -370,6 +370,11 @@ struct Vm<'a, 'p, 's, 'w> {
     state: State,
     budget: Budget,
 }
+/// Phases run in the same dispatcher round as the one that set them, when that
+/// one only hands over. Two covers publishing a start: clearing its registers
+/// and entering its trial.
+const CHAINED: usize = 2;
+
 enum Step {
     Next,
     Fail,
@@ -733,6 +738,28 @@ impl Vm<'_, '_, '_, '_> {
             }
         }
     }
+    /// Clear the registers a trial starts from, in bounded steps, and enter the
+    /// trial once they are all clear.
+    fn initialize(&mut self, index: usize, available: usize) -> Result<(), ExecError> {
+        if index == self.program.register_count() {
+            self.begin_trial();
+            return self.skip_verified();
+        }
+        let end = self
+            .program
+            .register_count()
+            .min(index + available.min(256));
+        self.charge(end - index)?;
+        self.scratch.registers[index..end].fill(UNSET);
+        if end == self.program.register_count() {
+            self.begin_trial();
+            self.skip_verified()
+        } else {
+            self.state.phase = Phase::Initialize(end);
+            Ok(())
+        }
+    }
+
     fn run(&mut self, quantum: usize) -> Result<Progress, ExecError> {
         let initial = self.budget.remaining();
         loop {
@@ -808,26 +835,30 @@ impl Vm<'_, '_, '_, '_> {
                         self.sought(after)?;
                     }
                 }
-                Phase::Candidate => self.candidate_step(available)?,
-                Phase::Initialize(index) => {
-                    if index == self.program.register_count() {
-                        self.begin_trial();
-                        self.skip_verified()?;
-                    } else {
-                        let end = self
-                            .program
-                            .register_count()
-                            .min(index + available.min(256));
-                        self.charge(end - index)?;
-                        self.scratch.registers[index..end].fill(UNSET);
-                        if end == self.program.register_count() {
-                            self.begin_trial();
-                            self.skip_verified()?;
-                        } else {
-                            self.state.phase = Phase::Initialize(end);
+                Phase::Candidate => {
+                    self.candidate_step(available)?;
+                    // Publishing a start is followed by clearing its registers
+                    // and entering its trial with nothing in between, and a
+                    // round trip through this dispatcher costs more than either
+                    // of them. Each stays a phase in its own right, so a pause
+                    // between them resumes exactly as before; what changes is
+                    // how often the quantum is re-read and a phase
+                    // re-dispatched, not what any phase does or charges.
+                    let mut chained = 0;
+                    while chained < CHAINED {
+                        let used = initial - self.budget.remaining();
+                        if used >= quantum {
+                            break;
                         }
+                        match self.state.phase {
+                            Phase::Initialize(index) => self.initialize(index, quantum - used)?,
+                            Phase::Trial => self.trial(quantum - used)?,
+                            _ => break,
+                        }
+                        chained += 1;
                     }
                 }
+                Phase::Initialize(index) => self.initialize(index, available)?,
                 Phase::Trial | Phase::Execute { .. } => self.trial(available)?,
                 Phase::Class { .. } => self.class_step(available)?,
                 Phase::AtomScan => self.atom_scan(false, available)?,
