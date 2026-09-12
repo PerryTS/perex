@@ -45,11 +45,14 @@ pub(crate) enum Cond {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Label(usize);
 
-/// A branch that has been emitted but whose target is not known yet.
-#[derive(Clone, Copy, Debug)]
+/// A branch that has been emitted but whose target is not known yet. The
+/// default is a branch that was never emitted, which [`Assembler::bind`]
+/// ignores, so a generator can carry a fixed array of them.
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Patch {
     at: usize,
     conditional: bool,
+    live: bool,
 }
 
 /// Why an encoding could not be produced. Every one of these is a bug in the
@@ -130,6 +133,12 @@ impl<'a> Assembler<'a> {
         self.word(0xd280_0000 | (u32::from(imm) << 5) | u32::from(rd.0));
     }
 
+    /// `MOV Xd, #-(imm+1)`, which is `MOVN` with no shift. `movn(rd, 0)` is
+    /// `MOV Xd, #-1`.
+    pub(crate) fn movn(&mut self, rd: Reg, imm: u16) {
+        self.word(0x9280_0000 | (u32::from(imm) << 5) | u32::from(rd.0));
+    }
+
     /// `MOV Xd, Xn`, which is `ORR Xd, XZR, Xn`.
     pub(crate) fn mov(&mut self, rd: Reg, rn: Reg) {
         self.word(0xaa00_03e0 | (u32::from(rn.0) << 16) | u32::from(rd.0));
@@ -187,6 +196,16 @@ impl<'a> Assembler<'a> {
         self.word(0xf900_0000 | (index << 10) | (u32::from(rn.0) << 5) | u32::from(rt.0));
     }
 
+    /// `LDR Xt, [Xn, #index * 8]`, the scaled unsigned-offset form, so `index`
+    /// counts registers rather than bytes.
+    pub(crate) fn ldr_index(&mut self, rt: Reg, rn: Reg, index: u32) {
+        if index >= 1 << 12 {
+            self.fail(EncodeError::Immediate);
+            return;
+        }
+        self.word(0xf940_0000 | (index << 10) | (u32::from(rn.0) << 5) | u32::from(rt.0));
+    }
+
     // -- Control flow --------------------------------------------------------
 
     /// `RET`, through the link register.
@@ -227,6 +246,7 @@ impl<'a> Assembler<'a> {
         Patch {
             at,
             conditional: true,
+            live: true,
         }
     }
 
@@ -237,12 +257,13 @@ impl<'a> Assembler<'a> {
         Patch {
             at,
             conditional: false,
+            live: true,
         }
     }
 
     /// Point a forward branch at the next instruction to be emitted.
     pub(crate) fn bind(&mut self, patch: Patch) {
-        if self.failed.is_some() {
+        if self.failed.is_some() || !patch.live {
             return;
         }
         let Some(distance) = (self.at as isize).checked_sub(patch.at as isize) else {
