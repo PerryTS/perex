@@ -50,7 +50,7 @@ anything above 2.
 
 ## What is not implemented
 
-These report `CompileError::Unsupported { feature: "Unicode sets" }` at the
+Tracked in [issue #1](https://github.com/PerryTS/perex/issues/1). These report `CompileError::Unsupported { feature: "Unicode sets" }` at the
 offset where they appear. They are never answered as no-match, and never
 reported as syntax errors.
 

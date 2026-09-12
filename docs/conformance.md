@@ -59,7 +59,8 @@ The one gap is **Unicode sets**: 106 distinct patterns, which Perex reports as
 an explicit unsupported feature rather than answering wrongly. They are 41
 properties of strings, 33 string disjunctions `\q{…}`, 16 subtractions `--` and
 16 intersections `&&` — 74 needing string matching and 32 needing set
-operators. The `v` union grammar itself is implemented; see [sets](sets.md).
+operators. The `v` union grammar itself is implemented; see [sets](sets.md)
+and [issue #1](https://github.com/PerryTS/perex/issues/1).
 
 ## Cost, not correctness
 
