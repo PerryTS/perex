@@ -776,18 +776,36 @@ impl Vm<'_, '_, '_, '_> {
                     self.seek(target, AfterSeek::Start, available)?
                 }
                 Phase::Seek { target, after } => {
+                    // Every unit is charged one either way, so a paused seek
+                    // still reaches the same total as an unpaused one; only the
+                    // number of dispatch round trips changes, and a round trip
+                    // costs several times the move it carries. The quantum
+                    // still bounds the batch, and one unit always moves so the
+                    // seek cannot stall.
+                    let position = self.cursor.position();
+                    if position != target {
+                        let forward = position < target;
+                        let steps = position
+                            .abs_diff(target)
+                            .min(available.max(1))
+                            .min(self.budget.remaining())
+                            .max(1);
+                        self.charge(steps)?;
+                        for _ in 0..steps {
+                            let unit = if forward {
+                                self.cursor.next_unit()
+                            } else {
+                                self.cursor.previous_unit()
+                            };
+                            if unit.is_none() {
+                                return Err(ExecError::InvalidProgram);
+                            }
+                        }
+                    }
+                    // Arriving is not itself charged, so finishing here rather
+                    // than on the next round trip changes no total.
                     if self.cursor.position() == target {
                         self.sought(after)?;
-                    } else {
-                        self.charge(1)?;
-                        let unit = if self.cursor.position() < target {
-                            self.cursor.next_unit()
-                        } else {
-                            self.cursor.previous_unit()
-                        };
-                        if unit.is_none() {
-                            return Err(ExecError::InvalidProgram);
-                        }
                     }
                 }
                 Phase::Candidate => self.candidate_step(available)?,
@@ -946,11 +964,21 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 Phase::Rollback { until, after } => {
                     if self.state.undo > until {
-                        self.charge(1)?;
-                        self.state.undo -= 1;
-                        let old = self.scratch.undo[self.state.undo];
-                        self.scratch.registers[old.slot] = old.value;
-                    } else {
+                        // One entry per dispatch round trip costs several times
+                        // the write it undoes. Each entry is charged one either
+                        // way, so the total is unchanged at any quantum.
+                        let count = (self.state.undo - until)
+                            .min(available.max(1))
+                            .min(self.budget.remaining())
+                            .max(1);
+                        self.charge(count)?;
+                        for _ in 0..count {
+                            self.state.undo -= 1;
+                            let old = self.scratch.undo[self.state.undo];
+                            self.scratch.registers[old.slot] = old.value;
+                        }
+                    }
+                    if self.state.undo <= until {
                         if self.state.undo < until {
                             return Err(ExecError::InvalidProgram);
                         }
