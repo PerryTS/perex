@@ -95,8 +95,17 @@ impl Vm<'_, '_, '_, '_> {
         };
         self.charge(leading)?;
         let pc = self.program.leading_pc();
+        // `ascii_bytes` is `Some` only for wholly ASCII storage, so an
+        // ASCII-insensitive comparison is exact for a folded run there.
+        let fold = self.program.leading_fold();
         for (i, &byte) in window.iter().enumerate() {
-            if u32::from(byte) != self.program.instruction(pc + i)[1] {
+            let want = self.program.instruction(pc + i)[1];
+            let same = if fold {
+                byte.eq_ignore_ascii_case(&(want as u8))
+            } else {
+                u32::from(byte) == want
+            };
+            if !same {
                 return Ok(Some(false));
             }
         }
@@ -151,6 +160,8 @@ impl Vm<'_, '_, '_, '_> {
         // by an initialized trial, which costs registers, a frame and the
         // instruction loop. Only positions the descriptor already admits are
         // examined, so this removes work without reaching a new one.
+        // The ASCII path already proves the storage is wholly ASCII, which is
+        // what a folded comparison needs.
         let leading = self.program.leading();
         let mut scanned = 0;
         let found = loop {

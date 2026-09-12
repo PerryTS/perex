@@ -11,10 +11,15 @@ use perex::{
     span::Span,
 };
 
-/// Word 9's low byte is the leading run; its top bit is the separate
-/// forward-admission claim, which these checks are not about.
+/// Word 9's low byte is the leading run's length, with bit 7 marking a folded
+/// run. The other bits carry claims these checks are not about.
 fn leading(source: &str, flags: &str) -> u32 {
-    words(source, flags)[9] & 255
+    words(source, flags)[9] & 127
+}
+
+/// Whether the leading run compares without regard to ASCII case.
+fn folded(source: &str, flags: &str) -> bool {
+    words(source, flags)[9] & 128 != 0
 }
 
 fn words(source: &str, flags: &str) -> Vec<u32> {
@@ -64,6 +69,14 @@ fn leading_descriptor_claims_only_unconditional_ascii_characters() {
     // Interior capture bookkeeping ends the contiguous run; the shorter claim
     // is still correct, because those three characters are consumed first.
     assert_eq!(leading("(abc)d", ""), 3);
+    // A folded run is claimed too: on wholly ASCII storage an
+    // ASCII-insensitive comparison is exact.
+    assert_eq!(leading("NeEdLe", "i"), 6);
+    assert!(folded("NeEdLe", "i"));
+    assert!(!folded("needle", ""));
+    // A run is wholly folded or wholly not; a change of kind ends it.
+    assert_eq!(leading("(?i:ab)cd", ""), 2);
+    assert!(folded("(?i:ab)cd", ""));
     // A branch of literal runs is claimed as an alternation, whose branches are
     // read from the instructions rather than stored.
     for source in ["(?:ab|cd)ef", "ab|cd", "(?:ab|cd|ef)", "(?:abc|de)"] {
@@ -83,7 +96,6 @@ fn leading_descriptor_claims_only_unconditional_ascii_characters() {
         ("a+END", ""),      // A repeat can consume before the literal.
         ("^abc", ""),       // An assertion instruction ends the run.
         ("[ab]cd", ""),     // A class is not a literal character.
-        ("NeEdLe", "i"),    // Folded characters are not a byte claim.
         ("\u{e9}tude", ""), // Non-ASCII cannot be compared against bytes.
         ("a?bc", ""),       // An optional prefix can consume nothing.
     ] {

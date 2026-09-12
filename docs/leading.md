@@ -35,6 +35,21 @@ disagree with its own instructions here. The derivation inspects a bounded
 number of entry instructions and charges the work budget. The validator also
 rejects any reserved bit and a forward claim without its condition.
 
+## Folded runs
+
+A case-insensitive literal has a worse word 7 descriptor than a sensitive one:
+`/NeEdLe/i` admits every character from `N` to `n`, thirty-three of them, so
+ordinary lowercase text stops the scan constantly.
+
+Word 9's low byte sets bit 7 when the run is case-insensitive, and the
+comparison then ignores ASCII case. This is exact rather than approximate: the
+scan runs only on wholly ASCII storage, and the two non-ASCII characters that
+fold into ASCII — U+017F and U+212A — cannot appear there at all, so no folded
+match can be missed and none can be invented.
+
+A run is wholly folded or wholly not. A change of kind ends it like any other
+opcode, so `(?i:ab)cd` claims only `ab`.
+
 ## An alternation of runs
 
 A pattern whose entry is a branch — `(?:needle|thimble|haystack)` — has no

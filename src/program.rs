@@ -29,6 +29,11 @@ const LEADING_SCAN: usize = 128;
 /// Word 9 low-byte value meaning the entry is an alternation of literal runs
 /// rather than one run. Its branches are read from the instructions.
 pub(crate) const LEADING_ALTERNATION: u32 = 1;
+/// Word 9 low-byte flag marking the leading run as case-insensitive. On wholly
+/// ASCII storage an ASCII-insensitive comparison is exact, because the
+/// non-ASCII characters that fold into ASCII — U+017F and U+212A — cannot
+/// appear there at all.
+pub(crate) const LEADING_FOLD: u32 = 128;
 /// Alternatives the entry alternation may hold. Each needs one stack slot.
 pub(crate) const LEADING_BRANCHES: usize = 8;
 /// Word 9 bits holding the leading atom repeat's instruction, one more than the
@@ -145,19 +150,30 @@ pub enum ProgramError {
 /// The word is derived from the instructions rather than trusted, so word 9 is
 /// fully validated instead of merely structurally checked.
 pub(crate) fn derive_leading(words: &[u32], instructions: usize) -> u32 {
-    let mut pc = leading_pc(words, instructions);
+    let start = leading_pc(words, instructions);
+    // A run is wholly case-sensitive or wholly folded; the first instruction
+    // decides which, and a change of kind ends it like any other opcode.
+    let kind = if start < instructions {
+        words[HEADER + start * 3]
+    } else {
+        MATCH
+    };
+    let mut pc = start;
     let mut characters = 0;
     while pc < instructions && characters < LEADING_MAX {
         let at = HEADER + pc * 3;
-        if words[at] != CHAR || words[at + 1] >= 128 {
+        if words[at] != kind || words[at + 1] >= 128 {
             break;
         }
         characters += 1;
         pc += 1;
     }
     // One leading character is already the word 7 descriptor's claim.
-    if characters >= 2 {
+    if characters >= 2 && kind == CHAR {
         return characters;
+    }
+    if characters >= 2 && kind == CHAR_I {
+        return characters | LEADING_FOLD;
     }
     if derive_alternation(words, instructions) {
         return LEADING_ALTERNATION;
@@ -517,7 +533,11 @@ impl<'a> Program<'a> {
     /// Characters at instruction zero that every match consumes first. Zero
     /// disables the claim. See [`derive_leading`].
     pub(crate) fn leading(self) -> usize {
-        (self.words[9] & LEADING_MASK) as usize
+        (self.words[9] & LEADING_MASK & !LEADING_FOLD) as usize
+    }
+    /// Whether [`Program::leading`] compares without regard to ASCII case.
+    pub(crate) fn leading_fold(self) -> bool {
+        self.words[9] & LEADING_FOLD != 0
     }
     /// Whether every successful match consumes the admission condition at or
     /// after its own start position, so an absent later occurrence proves that
