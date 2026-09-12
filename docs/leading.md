@@ -65,6 +65,12 @@ are not stored: they are already in the instructions, so the check walks the
 bytes, succeeding as soon as one matches. The claim costs no program storage at
 all, and like the single-run count it is re-derived during validation.
 
+The scan itself also changes for an alternation. A union of first characters is
+widened into one interval for the word 7 descriptor, so `{h, n, t}` is scanned
+as `h` through `t`; the alternation instead scans the exact set of branch
+starts, with one word-parallel pass per member. Three members cost a fraction of
+a comparison per byte and stop at a third as many positions as the interval.
+
 A branch qualifies only if every alternative is a run of at least two ASCII
 characters. A jump, class, repeat, folded or non-ASCII character anywhere in the
 prefix makes it undecidable and disables the claim. At most eight alternatives

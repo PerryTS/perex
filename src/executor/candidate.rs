@@ -33,6 +33,39 @@ impl Vm<'_, '_, '_, '_> {
             Phase::Initialize(0)
         };
     }
+    /// The first byte of every branch of the entry alternation. The derivation
+    /// proved each branch begins with at least two ASCII characters, so each
+    /// contributes exactly one byte, and there are at most `LEADING_BRANCHES`.
+    fn branch_bytes(&self) -> ([u8; LEADING_BRANCHES], usize) {
+        let mut first = [0; LEADING_BRANCHES];
+        let mut count = 0;
+        let mut pending = [0usize; LEADING_BRANCHES];
+        let mut depth = 0;
+        let mut pc = self.program.leading_pc();
+        loop {
+            let [op, a, b] = self.program.instruction(pc);
+            if op == SPLIT {
+                if depth == pending.len() {
+                    return (first, 0);
+                }
+                pending[depth] = b as usize;
+                depth += 1;
+                pc = a as usize;
+                continue;
+            }
+            if count == first.len() {
+                return (first, 0);
+            }
+            first[count] = self.program.instruction(pc)[1] as u8;
+            count += 1;
+            if depth == 0 {
+                return (first, count);
+            }
+            depth -= 1;
+            pc = pending[depth];
+        }
+    }
+
     /// Compare the entry alternation's branches against original bytes at `at`,
     /// succeeding as soon as one matches. The branches are read from the
     /// instructions, so this needs no program storage and no match state.
@@ -163,10 +196,22 @@ impl Vm<'_, '_, '_, '_> {
         // The ASCII path already proves the storage is wholly ASCII, which is
         // what a folded comparison needs.
         let leading = self.program.leading();
+        // An alternation scans the exact set of branch starts rather than the
+        // widened interval the descriptor holds, which on ordinary text stops
+        // at a small fraction of the positions the interval does.
+        let (set, members) = if leading == LEADING_ALTERNATION as usize {
+            self.branch_bytes()
+        } else {
+            ([0; LEADING_BRANCHES], 0)
+        };
         let mut scanned = 0;
         let found = loop {
-            let (found, inspected) =
-                first_in_range::<false, false>(&bytes[start + scanned..start + count], lo, hi);
+            let window = &bytes[start + scanned..start + count];
+            let (found, inspected) = if members != 0 {
+                first_in_set(window, &set[..members])
+            } else {
+                first_in_range::<false, false>(window, lo, hi)
+            };
             self.charge(inspected)?;
             let Some(index) = found else { break None };
             let at = start + scanned + index;
@@ -254,6 +299,44 @@ impl Vm<'_, '_, '_, '_> {
         }
         Ok(())
     }
+}
+
+/// The first position holding any byte of `set`, and the positions inspected.
+///
+/// A union of first characters is widened into one interval for the word 7
+/// descriptor, so an alternation's range admits far more than its branches do.
+/// Scanning the exact set instead stops only where a branch can begin. The set
+/// is small, so one word-parallel pass per member still costs a fraction of a
+/// comparison per byte.
+pub(super) fn first_in_set(bytes: &[u8], set: &[u8]) -> (Option<usize>, usize) {
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    if set.iter().any(|&b| b == bytes[0]) {
+        return (Some(0), 1);
+    }
+    let mut i = 1;
+    while i + 8 <= bytes.len() {
+        let word = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+        let mut mask = 0;
+        for &b in set {
+            // A lane equal to `b` is the only one whose difference can borrow
+            // into its high bit while that bit stays clear in the operand.
+            let x = word ^ (u64::from(b) * ONES);
+            mask |= x.wrapping_sub(ONES) & !x & HIGH;
+        }
+        if mask != 0 {
+            let at = i + mask.trailing_zeros() as usize / 8;
+            return (Some(at), at + 1);
+        }
+        i += 8;
+    }
+    while i < bytes.len() {
+        if set.iter().any(|&b| b == bytes[i]) {
+            return (Some(i), i + 1);
+        }
+        i += 1;
+    }
+    (None, bytes.len())
 }
 
 pub(super) fn first_in_range<const MIXED: bool, const STOP_NON_ASCII: bool>(
