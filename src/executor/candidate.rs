@@ -36,8 +36,9 @@ impl Vm<'_, '_, '_, '_> {
     /// The first byte of every branch of the entry alternation. The derivation
     /// proved each branch begins with at least two ASCII characters, so each
     /// contributes exactly one byte, and there are at most `LEADING_BRANCHES`.
-    fn branch_bytes(&self) -> ([u8; LEADING_BRANCHES], usize) {
+    fn branch_bytes(&self) -> ([u8; LEADING_BRANCHES], [u32; LEADING_BRANCHES], usize) {
         let mut first = [0; LEADING_BRANCHES];
+        let mut starts = [0; LEADING_BRANCHES];
         let mut count = 0;
         let mut pending = [0usize; LEADING_BRANCHES];
         let mut depth = 0;
@@ -46,7 +47,7 @@ impl Vm<'_, '_, '_, '_> {
             let [op, a, b] = self.program.instruction(pc);
             if op == SPLIT {
                 if depth == pending.len() {
-                    return (first, 0);
+                    return (first, starts, 0);
                 }
                 pending[depth] = b as usize;
                 depth += 1;
@@ -54,16 +55,55 @@ impl Vm<'_, '_, '_, '_> {
                 continue;
             }
             if count == first.len() {
-                return (first, 0);
+                return (first, starts, 0);
             }
             first[count] = self.program.instruction(pc)[1] as u8;
+            starts[count] = pc as u32;
             count += 1;
             if depth == 0 {
-                return (first, count);
+                return (first, starts, count);
             }
             depth -= 1;
             pc = pending[depth];
         }
+    }
+
+    /// Compare only the branches whose first character is the byte the scan
+    /// stopped at. Walking the whole `SPLIT` structure would re-test that byte
+    /// against every branch, which the scan has already decided.
+    fn selected_branches(
+        &mut self,
+        bytes: &[u8],
+        at: usize,
+        set: &[u8],
+        starts: &[u32],
+    ) -> Result<bool, ExecError> {
+        let byte = bytes[at];
+        for (index, &first) in set.iter().enumerate() {
+            if first != byte {
+                continue;
+            }
+            let mut pc = starts[index] as usize;
+            let mut offset = 0;
+            let matched = loop {
+                if self.program.instruction(pc)[0] != CHAR {
+                    break true;
+                }
+                self.charge(1)?;
+                let want = self.program.instruction(pc)[1];
+                match bytes.get(at + offset) {
+                    Some(&b) if u32::from(b) == want => {
+                        pc += 1;
+                        offset += 1;
+                    }
+                    _ => break false,
+                }
+            };
+            if matched {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Compare the entry alternation's branches against original bytes at `at`,
@@ -199,10 +239,10 @@ impl Vm<'_, '_, '_, '_> {
         // An alternation scans the exact set of branch starts rather than the
         // widened interval the descriptor holds, which on ordinary text stops
         // at a small fraction of the positions the interval does.
-        let (set, members) = if leading == LEADING_ALTERNATION as usize {
+        let (set, starts, members) = if leading == LEADING_ALTERNATION as usize {
             self.branch_bytes()
         } else {
-            ([0; LEADING_BRANCHES], 0)
+            ([0; LEADING_BRANCHES], [0; LEADING_BRANCHES], 0)
         };
         let mut scanned = 0;
         let found = loop {
@@ -218,7 +258,13 @@ impl Vm<'_, '_, '_, '_> {
             if leading == 0 {
                 break Some(at);
             }
-            match self.leading_matches(bytes, at, leading)? {
+            let outcome = if members != 0 {
+                self.selected_branches(bytes, at, &set[..members], &starts[..members])
+                    .map(Some)
+            } else {
+                self.leading_matches(bytes, at, leading)
+            };
+            match outcome? {
                 Some(true) => break Some(at),
                 // The literal cannot fit before the subject's end, so it cannot
                 // fit at any later start either.
