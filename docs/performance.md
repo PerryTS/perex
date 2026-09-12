@@ -212,6 +212,15 @@ as one that confirmed it, and because each of these looked obviously right.
   again after the step was enlarged sixteenfold and the first-byte filter
   restored. Reading an instruction per character is not the cost that the
   arithmetic suggested it was.
+- **Beginning the trial after a single verified character.** A run of two or
+  more that the start scan compared is skipped rather than executed. A
+  descriptor admitting exactly one byte decides one character the same way when
+  the instruction that consumes it wants that byte, which is a sound claim and
+  was implemented as one. It recovered 1.5 ns of the two cases it applies to and
+  cost 1.0 to 2.6 ns on five cases that never reach the branch it added,
+  including the two furthest behind. The loss is code layout around the phase,
+  not work: this is the third change in a row whose effect on the hot paths was
+  larger than what it removed.
 - **Checking a match's registers in the round that produced it.** That check
   is its own phase, and ablating it showed it costs 3.3 to 4.1 ns of every
   successful search — seven to eight percent of the shortest ones — almost all
