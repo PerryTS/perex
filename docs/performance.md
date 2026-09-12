@@ -55,10 +55,10 @@ The harness, cases and raw results are the host's, under
 |---|---:|---:|
 | Required text before its prefix | 1.80 µs | 24.0 ms |
 | Required text absent, 4 KiB of `a` | 1.65 µs | 24.0 ms |
-| Class miss over 256 KiB | 20.7 µs | 917 µs |
-| Long literal miss, 256 KiB | 11.4 µs | 128 µs |
-| Long literal, 256 KiB | 11.4 µs | 70.8 µs |
-| Three-way alternation, 256 KiB | 21.8 µs | 42.2 µs |
+| Class miss over 256 KiB | 20.4 µs | 894 µs |
+| Long literal miss, 256 KiB | 11.2 µs | 124 µs |
+| Long literal, 256 KiB | 11.3 µs | 68.8 µs |
+| Three-way alternation, 256 KiB | 21.2 µs | 41.2 µs |
 
 The first two are the catastrophic-backtracking shapes. Bounded work and the
 admission bound are not a curiosity against a backtracking competitor: they are
@@ -73,27 +73,50 @@ The alternation moved from 4.5x behind to 0.52x ahead, and the long literal from
 
 ### Behind
 
-Between 1.38x and 7.13x, in nineteen of twenty-five cases.
+Between 1.43x and 6.47x, in nineteen of twenty-five cases.
 
 | Case | Perex | V8 | |
 |---|---:|---:|---:|
-| Captures, 25-character subject | 430 ns | 60.2 ns | 7.13x |
-| Class repeat, short subject | 290 ns | 67.8 ns | 4.27x |
-| `\w+` over a 60-character run | 142 ns | 40.4 ns | 3.52x |
-| Folded literal, 29 characters | 66.3 ns | 21.4 ns | 3.10x |
-| End-anchored hit, 256 KiB | 54.5 ns | 17.7 ns | 3.08x |
-| Literal lookbehind, 256 KiB | 114 ns | 42.0 ns | 2.73x |
-| Short literal, 29 characters | 52.0 ns | 36.7 ns | 1.42x |
+| Captures, 25-character subject | 376 ns | 58.2 ns | 6.47x |
+| Class repeat, short subject | 300 ns | 67.3 ns | 4.45x |
+| `\w+` over a 60-character run | 140 ns | 39.3 ns | 3.57x |
+| Folded literal, 29 characters | 64.7 ns | 20.7 ns | 3.13x |
+| End-anchored hit, 256 KiB | 52.2 ns | 16.9 ns | 3.09x |
+| Literal lookbehind, 256 KiB | 111 ns | 60.0 ns | 1.84x |
+| Short literal, 29 characters | 50.5 ns | 34.7 ns | 1.46x |
 
 Most of them are searches short enough that starting one dominates. The literal
-ladder makes that explicit: a one-character literal costs 45.3 ns and a
-sixteen-character one 52.5 ns, so length is worth about half a nanosecond per
+ladder makes that explicit: a one-character literal costs 44.9 ns and a
+sixteen-character one 52.1 ns, so length is worth about half a nanosecond per
 character while the search itself costs forty-five. The two long-subject entries
 are the same thing — both find their match almost immediately and then pay the
 same flat cost.
 
-The first two are not that, and are treated separately below: 430 ns and 290 ns
-leave far more above the flat cost than it accounts for.
+The first two are not that: they leave far more above the flat cost than it
+accounts for.
+
+### The two worst cases
+
+What separates them is ablation rather than profiling — removing the captures
+from the pattern, then removing the failed start from the subject, and reading
+the difference. For `(\w+)@(\w+)\.com`, before the changes this found:
+
+| Subject | Perex | Charged work |
+|---|---:|---:|
+| `mail user@example.com now` | 470 ns | 159 |
+| the same, pattern without captures | 400 ns | 134 |
+| `user@example.com`, no failed start | 235 ns | 97 |
+
+Half the case was one failed start, and captures were 16 ns of the whole. The
+70 ns between the first two rows was therefore not capture bookkeeping: it was a
+capture group's closing `SAVE` standing between the repeat and what consumes
+next, which hid the continuation from the filter that decides which endpoints of
+an over-consumed repeat are worth a retry frame. `\w+@` had the filter and
+`(\w+)@` did not. [repetition](repetition.md) records that, and the walk itself,
+which decoded every endpoint through the cursor where a byte comparison would do.
+
+What is left is the flat cost once per start attempt, plus the instructions
+between — the same thing the ladder below measures, paid twice.
 
 ### The floor, and what it is
 
@@ -101,13 +124,13 @@ A diagnostic ladder separates fixed cost from marginal cost:
 
 | Case | Perex | V8 | |
 |---|---:|---:|---:|
-| `/z/` against `""` | 16.1 ns | 11.6 ns | 1.39x |
-| `/z/` against `"a"` | 19.5 ns | 14.1 ns | 1.38x |
-| `/a/` against `"a"` | 46.1 ns | 17.1 ns | 2.70x |
+| `/z/` against `""` | 16.5 ns | 11.2 ns | 1.47x |
+| `/z/` against `"a"` | 19.9 ns | 13.9 ns | 1.43x |
+| `/a/` against `"a"` | 45.4 ns | 16.8 ns | 2.70x |
 
-An empty search is 1.39x: that is the cost of a bytecode pausable at every
+An empty search is 1.47x: that is the cost of a bytecode pausable at every
 instruction so the host's collector can run, which is why this engine exists.
-The step from a miss to a hit is 27 ns against V8's 3, and it buys register
+The step from a miss to a hit is 26 ns against V8's 3, and it buys register
 initialization, four instructions, capture validation and copying the result
 out — about 2 to 3 ns for each primitive operation, which is what a bytecode
 interpreter with bounds-checked scratch costs and roughly ten times what
@@ -154,6 +177,13 @@ as one that confirmed it, and because each of these looked obviously right.
   again after the step was enlarged sixteenfold and the first-byte filter
   restored. Reading an instruction per character is not the cost that the
   arithmetic suggested it was.
+- **Lowering the length at which a repeated class uses block comparisons.**
+  The 256-byte threshold was chosen when the block form ended with a scalar
+  pass over all thirty-two lanes to find the one it stopped at. That pass is now
+  a word-wise search, so the threshold looked worth revisiting; it is not. At 64
+  bytes nothing moved, and at 32 a sixty-character `\w+` went from 146 to 194 ns
+  and a 256 KiB class miss from 21.1 to 24.0 µs. The original choice survives the
+  change that prompted the retest.
 - **A fixed count of range comparisons for a repeated class.** A class of two
   to four ranges is decided by a loop that exits at the range that matches, and
   a run shorter than a word reaches only that loop. Padding the unused slots
