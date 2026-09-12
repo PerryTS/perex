@@ -1,9 +1,9 @@
 //! Versioned, relocatable programs in caller-owned u32 storage.
 use crate::{Budget, properties};
 
-pub(crate) const HEADER: usize = 9;
+pub(crate) const HEADER: usize = 10;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 10;
+pub(crate) const VERSION: u32 = 11;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -13,6 +13,11 @@ pub(crate) const NAMES: u32 = 32;
 pub(crate) const ADMISSION_REVERSE: u32 = 64;
 pub(crate) const ADMISSION: u32 = 128;
 pub(crate) const ADMISSION_MAX: usize = 32;
+/// Most characters word 9 can claim as an unconditional leading literal.
+pub(crate) const LEADING_MAX: u32 = 32;
+/// Instructions word 9's derivation may inspect. Interior `SAVE` bookkeeping
+/// consumes nothing, so a bounded number is skipped while collecting the run.
+const LEADING_SCAN: usize = 128;
 pub(crate) const NEGATED: u32 = 1 << 31;
 // A class-table record is either (literal low, literal high), or
 // (PROPERTY | shared property id, complemented). Both words are relocatable.
@@ -101,6 +106,49 @@ pub enum ProgramError {
     WorkLimit,
 }
 
+/// Characters every successful match must consume first, starting at its own
+/// start position. Execution begins at instruction zero, so a straight-line run
+/// of `SAVE` bookkeeping and ASCII `CHAR` instructions there consumes exactly
+/// those characters on every path. Anything else — a branch, a class, a repeat,
+/// a folded or non-ASCII character — ends the run. ASCII bytes cannot occur
+/// inside a multibyte UTF-8/WTF-8 encoding, so the result is also a byte claim.
+///
+/// This is derived from the instructions rather than trusted, so word 9 is
+/// fully validated instead of merely structurally checked.
+/// Characters every successful match must consume first, starting at its own
+/// start position. Execution begins at instruction zero, so a straight-line run
+/// of entry `SAVE` bookkeeping followed by ASCII `CHAR` instructions consumes
+/// exactly those characters on every path. Anything else — a branch, a class, a
+/// repeat, a folded or non-ASCII character — ends the run. ASCII bytes cannot
+/// occur inside a multibyte UTF-8/WTF-8 encoding, so this is also a byte claim.
+///
+/// The word is derived from the instructions rather than trusted, so word 9 is
+/// fully validated instead of merely structurally checked.
+pub(crate) fn derive_leading(words: &[u32], instructions: usize) -> u32 {
+    let mut pc = leading_pc(words, instructions);
+    let mut characters = 0;
+    while pc < instructions && characters < LEADING_MAX {
+        let at = HEADER + pc * 3;
+        if words[at] != CHAR || words[at + 1] >= 128 {
+            break;
+        }
+        characters += 1;
+        pc += 1;
+    }
+    // One leading character is already the word 7 descriptor's claim.
+    if characters >= 2 { characters } else { 0 }
+}
+
+/// The first instruction that can consume input. Only entry `SAVE` bookkeeping
+/// is skipped, so the characters that follow are a contiguous run.
+pub(crate) fn leading_pc(words: &[u32], instructions: usize) -> usize {
+    let mut pc = 0;
+    while pc < instructions && pc < LEADING_SCAN && words[HEADER + pc * 3] == SAVE {
+        pc += 1;
+    }
+    pc
+}
+
 /// A validated immutable view. All persistent data is in `words`, with no
 /// pointers, reference counts, source borrow, or separate owning allocation.
 /// Release this borrow before moving the storage and validate its new borrow.
@@ -147,6 +195,12 @@ impl<'a> Program<'a> {
             return Err(bad);
         }
         let p = Self { words };
+        budget
+            .charge(LEADING_SCAN / 8)
+            .map_err(|_| ProgramError::WorkLimit)?;
+        if words[9] != derive_leading(words, p.instructions()) {
+            return Err(bad);
+        }
         if let Some((pc, _)) = p.admission()
             && (pc >= p.instructions()
                 || !matches!(
@@ -318,6 +372,15 @@ impl<'a> Program<'a> {
     }
     // The optional hint uses spare flag/header bits and points into existing
     // instructions. It adds no program words or second literal/class buffer.
+    /// Characters at instruction zero that every match consumes first. Zero
+    /// disables the claim. See [`derive_leading`].
+    pub(crate) fn leading(self) -> usize {
+        self.words[9] as usize
+    }
+    /// Instruction holding the first character of [`Program::leading`].
+    pub(crate) fn leading_pc(self) -> usize {
+        leading_pc(self.words, self.instructions())
+    }
     pub(crate) fn admission(self) -> Option<(usize, bool)> {
         (self.words[2] & ADMISSION != 0).then_some((
             (self.words[2] >> 8) as usize,

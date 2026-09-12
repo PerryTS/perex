@@ -96,13 +96,13 @@ fn property_programs_use_bounded_references_and_validate_relocation() {
             &mut Budget::new(10000),
         )
         .unwrap();
-        // Nine header words, four instructions and one two-word property
+        // Ten header words, four instructions and one two-word property
         // reference, regardless of how many Unicode intervals it contains.
-        assert_eq!(p.size_bytes(), 92);
+        assert_eq!(p.size_bytes(), 96);
         let mut moved = p.words().to_vec();
         words.fill(0xdeadbeef);
         let p = Program::from_words(&moved, &mut Budget::new(10000)).unwrap();
-        assert_eq!(p.size_bytes(), 92);
+        assert_eq!(p.size_bytes(), 96);
         let mut registers = [0; 2];
         let mut frames = [Frame::default(); 1];
         let mut undo = [Undo::default(); 1];

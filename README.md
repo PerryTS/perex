@@ -97,6 +97,8 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 
 [Candidate-start scanning](docs/candidate.md) skips impossible ASCII start positions using the same evaluator and original storage. Complete-answer and relocation checks precede performance claims.
 
+[Leading literal starts](docs/leading.md) reject an impossible start with a byte comparison instead of an initialized trial. The claim is re-derived from the instructions during program validation, so it cannot disagree with them.
+
 [Single-atom repetition merging](docs/repetition.md) removes duplicate partitions when match ordering can be preserved, using the same evaluator and caller-owned storage.
 
 Unicode-sets (`v`) admission currently covers patterns without character

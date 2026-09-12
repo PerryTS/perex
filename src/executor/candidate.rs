@@ -32,6 +32,29 @@ impl Vm<'_, '_, '_, '_> {
             Phase::Initialize(0)
         };
     }
+    /// Compare the program's leading literal against original bytes at `at`.
+    /// `None` reports that the literal cannot fit before the subject's end.
+    /// Every compared position is charged, so this cannot outrun its budget.
+    fn leading_matches(
+        &mut self,
+        bytes: &[u8],
+        at: usize,
+        leading: usize,
+    ) -> Result<Option<bool>, ExecError> {
+        let Some(window) = bytes.get(at..at + leading) else {
+            self.charge(1)?;
+            return Ok(None);
+        };
+        self.charge(leading)?;
+        let pc = self.program.leading_pc();
+        for (i, &byte) in window.iter().enumerate() {
+            if u32::from(byte) != self.program.instruction(pc + i)[1] {
+                return Ok(Some(false));
+            }
+        }
+        Ok(Some(true))
+    }
+
     pub(super) fn candidate_step(&mut self, available: usize) -> Result<(), ExecError> {
         let Some(bytes) = self.input.ascii_bytes() else {
             return self.mixed_candidate_step(available);
@@ -60,11 +83,38 @@ impl Vm<'_, '_, '_, '_> {
         // Bound every memory read by the available operation work. Charge logical
         // positions through the first candidate before publishing its mark;
         // speculative word lanes do not change work across different quanta.
-        let (found, inspected) =
-            first_in_range::<false, false>(&bytes[start..start + count], lo, hi);
-        self.charge(inspected)?;
-        if let Some(index) = found {
-            let at = start + index;
+        //
+        // A leading literal lets an impossible start be rejected here instead of
+        // by an initialized trial, which costs registers, a frame and the
+        // instruction loop. Only positions the descriptor already admits are
+        // examined, so this removes work without reaching a new one.
+        let leading = self.program.leading();
+        let mut scanned = 0;
+        let found = loop {
+            let (found, inspected) =
+                first_in_range::<false, false>(&bytes[start + scanned..start + count], lo, hi);
+            self.charge(inspected)?;
+            let Some(index) = found else { break None };
+            let at = start + scanned + index;
+            if leading < 2 {
+                break Some(at);
+            }
+            match self.leading_matches(bytes, at, leading)? {
+                Some(true) => break Some(at),
+                // The literal cannot fit before the subject's end, so it cannot
+                // fit at any later start either.
+                None => {
+                    self.state.phase = Phase::Finished(false);
+                    return Ok(());
+                }
+                Some(false) => {}
+            }
+            scanned += index + 1;
+            if scanned >= count {
+                break None;
+            }
+        };
+        if let Some(at) = found {
             if self.program.words[2] & Y != 0 && at != self.state.requested_start {
                 self.state.phase = Phase::Finished(false);
             } else {

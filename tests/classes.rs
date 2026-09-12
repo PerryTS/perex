@@ -57,13 +57,13 @@ fn members() -> String {
 fn sorted_classes_preserve_original_membership_and_reject_invalid_order() {
     let source = format!("[{}]", members());
     let words = program(&source, "u");
-    assert_eq!(words[1], 10);
-    assert_eq!(words[9 + 3], 27); // Sorted class following capture-zero start.
+    assert_eq!(words[1], 11);
+    assert_eq!(words[10 + 3], 27); // Sorted class following capture-zero start.
     for unit in 0..0x400u16 {
         let expected = (0..128).any(|i| unit == 0x100 + i * 3);
         assert_eq!(answer(&words, &[unit]).is_some(), expected, "{unit:x}");
     }
-    let start = 9 + words[4] as usize * 3;
+    let start = 10 + words[4] as usize * 3;
     let mut changed = words.clone();
     changed.swap(start, start + 2);
     assert_eq!(
@@ -86,7 +86,7 @@ fn class_normalization_merges_duplicates_and_overlaps_without_more_storage() {
     assert_eq!(compact, ordinary);
     let source = format!("[{}\\p{{L}}]", members());
     let mixed = program(&source, "u");
-    assert_eq!(mixed[9 + 3], 3); // Property union uses its existing evaluator.
+    assert_eq!(mixed[10 + 3], 3); // Property union uses its existing evaluator.
 }
 
 #[test]
@@ -104,7 +104,7 @@ fn binary_and_linear_class_membership_preserve_full_capture_results() {
                 let words = program(&source, flags);
                 let mut linear = words.clone();
                 for pc in 0..words[4] as usize {
-                    let at = 9 + pc * 3;
+                    let at = 10 + pc * 3;
                     linear[at] = match linear[at] {
                         27 => 3,
                         28 => 20,

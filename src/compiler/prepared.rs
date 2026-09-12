@@ -155,6 +155,7 @@ impl Prepared<'_> {
             parser.repeats,
             0,
             0,
+            0,
         ]);
         // Preserve the existing atom instruction and its admission-hint address.
         // The entry selects a bounded retry record in the same evaluator; keeping
@@ -178,6 +179,9 @@ impl Prepared<'_> {
         parser.candidate()?;
         output[7] = parser.candidate_descriptor(root);
         output[8] = parser.end_candidate_descriptor(root);
+        // Derived from the emitted instructions with the same function the
+        // validator re-runs, so the stored word cannot disagree with the program.
+        output[9] = crate::program::derive_leading(output, count as usize);
         Program::from_words(output, parser.budget)
             .map(|_| ())
             .map_err(|e| match e {

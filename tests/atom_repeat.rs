@@ -27,13 +27,13 @@ fn words(source: &str, flags: &str) -> Vec<u32> {
 // A development witness using the existing general instructions of this same
 // VM. Production compilation/matching has no alternate-engine route.
 fn general(mut words: Vec<u32>) -> Vec<u32> {
-    let table = 9 + words[4] as usize * 3 + words[5] as usize * 2;
+    let table = 10 + words[4] as usize * 3 + words[5] as usize * 2;
     for i in 0..words[6] as usize {
         let at = table + i * 8;
         if words[at + 7] == 1 {
             let entry = words[at + 3] as usize - 2;
-            assert_eq!(words[9 + entry * 3], 18);
-            words[9 + entry * 3] = 13;
+            assert_eq!(words[10 + entry * 3], 18);
+            words[10 + entry * 3] = 13;
             words[at + 7] = 0;
         }
     }
@@ -213,8 +213,8 @@ fn every_insufficient_work_allowance_preserves_output() {
 #[test]
 fn optimized_record_validation_rejects_shape_and_version_corruption() {
     let w = words("^([a-z]+)$", "");
-    assert_eq!(w[1], 10);
-    let table = 9 + w[4] as usize * 3 + w[5] as usize * 2;
+    assert_eq!(w[1], 11);
+    let table = 10 + w[4] as usize * 3 + w[5] as usize * 2;
     assert_eq!(w[table + 7], 1);
     let entry = w[table + 3] as usize - 2;
     for (index, value) in [
@@ -225,10 +225,10 @@ fn optimized_record_validation_rejects_shape_and_version_corruption() {
         (table + 3, u32::MAX),
         (table + 4, w[table + 4] - 1),
         (table + 5, 0),
-        (9 + entry * 3, 13),
-        (9 + (entry + 1) * 3, 0),
-        (9 + (entry + 3) * 3, 4),
-        (9 + (entry + 4) * 3, 0),
+        (10 + entry * 3, 13),
+        (10 + (entry + 1) * 3, 0),
+        (10 + (entry + 3) * 3, 4),
+        (10 + (entry + 4) * 3, 0),
     ] {
         let mut bad = w.clone();
         bad[index] = value;
@@ -240,7 +240,7 @@ fn optimized_record_validation_rejects_shape_and_version_corruption() {
     }
     for source in ["(?:ab)+", "(a)+", "(?:a|b)+", "(?=a)+", "(a)\\1+"] {
         let w = words(source, "");
-        let table = 9 + w[4] as usize * 3 + w[5] as usize * 2;
+        let table = 10 + w[4] as usize * 3 + w[5] as usize * 2;
         assert!(
             (0..w[6] as usize).all(|i| w[table + i * 8 + 7] == 0),
             "{source}"
