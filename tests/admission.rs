@@ -68,6 +68,7 @@ fn required_search_conditions_reject_long_misses_without_more_program_storage() 
         assert_ne!(enabled[2] & 128, 0, "{pattern}");
         let mut disabled = enabled.clone();
         disabled[2] &= 63;
+        disabled[9] &= !(1 << 31);
         assert_eq!(enabled.len(), disabled.len());
         assert_eq!(
             execute(&enabled, Input::utf8(&subject), 0, 10000).unwrap(),
@@ -87,6 +88,7 @@ fn equally_ranked_literals_prefer_the_required_suffix() {
     let enabled = compile_words("a+z", "");
     let mut disabled = enabled.clone();
     disabled[2] &= 63;
+    disabled[9] &= !(1 << 31);
     assert_eq!(
         execute(&enabled, Input::utf8(&subject), 0, 10000).unwrap(),
         None
@@ -110,6 +112,7 @@ fn alternatives_optional_repeats_and_negative_assertions_cannot_invent_requireme
         let enabled = compile_words(pattern, "");
         let mut disabled = enabled.clone();
         disabled[2] &= 63;
+        disabled[9] &= !(1 << 31);
         let actual = execute(&enabled, Input::utf8(&subject), 0, 1_000_000).unwrap();
         assert!(actual.is_some(), "{pattern}");
         assert_eq!(
@@ -183,6 +186,7 @@ fn generic_suffix_probe_preserves_earlier_matches_and_reverse_requirements() {
         let enabled = compile_words(source, flags);
         let mut disabled = enabled.clone();
         disabled[2] &= 63;
+        disabled[9] &= !(1 << 31);
         for subject in [
             format!("{}ſK😀z", "x".repeat(128)),
             format!("ſK😀z{}", "x".repeat(128)),

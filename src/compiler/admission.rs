@@ -3,6 +3,12 @@
 use super::*;
 use core::cmp::Ordering;
 
+/// Marks a candidate reached through a positive assertion. A lookbehind body
+/// can satisfy its condition before the match start, so such a condition
+/// proves presence somewhere but never a bound on where a match may begin.
+/// Node indices are bounded by caller scratch, so the top bit is free.
+const ASSERTED: u32 = 1 << 31;
+
 impl Prepared<'_> {
     fn compare_admission(
         &mut self,
@@ -10,6 +16,7 @@ impl Prepared<'_> {
         a: u32,
         b: u32,
     ) -> Result<Ordering, CompileError> {
+        let (a, b) = (a & !ASSERTED, b & !ASSERTED);
         let (left, right) = (self.nodes[a as usize - 1], self.nodes[b as usize - 1]);
         let score = left.end.cmp(&right.end);
         if score != Ordering::Equal {
@@ -105,12 +112,16 @@ impl Prepared<'_> {
                 }
                 GROUP | WRAP => self.nodes[n.a as usize].c,
                 REPEAT if n.b > 0 => self.nodes[n.a as usize].c,
-                ASSERT if n.flags & 1 == 0 => self.nodes[n.a as usize].c,
+                ASSERT if n.flags & 1 == 0 => match self.nodes[n.a as usize].c {
+                    0 => 0,
+                    inner => inner | ASSERTED,
+                },
                 SEQ | ALT => {
                     let (a, b) = (self.nodes[n.a as usize].c, self.nodes[n.b as usize].c);
                     if n.kind == ALT {
                         if a != 0 && b != 0 && self.compare_admission(p, a, b)? == Ordering::Equal {
-                            a
+                            // Both paths must bound the start for the claim to hold.
+                            a | (b & ASSERTED)
                         } else {
                             0
                         }
@@ -119,8 +130,10 @@ impl Prepared<'_> {
                     } else if b == 0 {
                         a
                     } else {
-                        let (left, right) =
-                            (self.nodes[a as usize - 1], self.nodes[b as usize - 1]);
+                        let (left, right) = (
+                            self.nodes[(a & !ASSERTED) as usize - 1],
+                            self.nodes[(b & !ASSERTED) as usize - 1],
+                        );
                         // A sequence does not need lexical equality: either
                         // condition is necessary. Prefer the later literal on
                         // a rank tie (a+z should check z). Keep canonical class
@@ -142,7 +155,12 @@ impl Prepared<'_> {
         if id == 0 {
             return Ok(0);
         }
-        let n = self.nodes[id as usize - 1];
+        let n = self.nodes[(id & !ASSERTED) as usize - 1];
+        // The bound resumes a literal byte search, so only a literal condition
+        // carries the claim; a class condition still proves presence only.
+        self.forward = id & ASSERTED == 0
+            && n.start < 1 << 24
+            && matches!(p.instruction(n.start as usize)[0], CHAR | CHAR_I);
         if n.start >= 1 << 24 {
             return Ok(0);
         } // Omit the optimization, not the pattern.

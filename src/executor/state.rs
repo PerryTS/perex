@@ -67,6 +67,14 @@ pub(super) enum AfterSeek {
 #[derive(Clone, Copy)]
 pub(super) enum Phase {
     Admission,
+    /// Rebuild the condition literal before resuming its search mid-match.
+    BoundPrepare {
+        from: usize,
+    },
+    /// Resume the condition search to bound later start positions.
+    BoundScan {
+        offset: usize,
+    },
     AdmitBytes {
         offset: usize,
     },
@@ -165,6 +173,13 @@ pub(super) struct State {
     pub assertion: usize,
     pub reverse: bool,
     pub work: Work,
+    /// Offset of a known admission-condition occurrence. A start at or before
+    /// it still has a later occurrence available; `UNSET` means no bound is
+    /// in use, because admission did not run or does not carry the claim.
+    pub required_at: usize,
+    /// Offset from which the condition has not yet been searched. The search
+    /// only moves forward, so the whole bound costs one pass over the subject.
+    pub required_from: usize,
 }
 impl State {
     pub fn new(start: usize, length: usize) -> Self {
@@ -184,6 +199,8 @@ impl State {
             assertion: UNSET,
             reverse: false,
             work: Work::Idle,
+            required_at: UNSET,
+            required_from: 0,
         }
     }
 }
@@ -196,6 +213,8 @@ mod tests {
         assert!(core::mem::size_of::<Work>() <= 40);
         assert_eq!(core::mem::size_of::<Frame>(), 48);
         assert_eq!(core::mem::size_of::<Phase>(), 48);
-        assert_eq!(core::mem::size_of::<State>(), 168);
+        // Two offsets carry the condition bound. One execution state holds
+        // them; they add no frame, undo entry or per-position storage.
+        assert_eq!(core::mem::size_of::<State>(), 184);
     }
 }

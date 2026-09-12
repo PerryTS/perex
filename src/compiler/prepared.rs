@@ -181,7 +181,12 @@ impl Prepared<'_> {
         output[8] = parser.end_candidate_descriptor(root);
         // Derived from the emitted instructions with the same function the
         // validator re-runs, so the stored word cannot disagree with the program.
-        output[9] = crate::program::derive_leading(output, count as usize);
+        output[9] = crate::program::derive_leading(output, count as usize)
+            | if parser.forward {
+                crate::program::ADMISSION_FORWARD
+            } else {
+                0
+            };
         Program::from_words(output, parser.budget)
             .map(|_| ())
             .map_err(|e| match e {

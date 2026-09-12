@@ -29,3 +29,76 @@ on the original storage. High-byte UTF-8/WTF-8 lanes cannot satisfy an ASCII
 range. Admission still charges the same complete chunk before scanning and
 enters the ordinary evaluator whenever the required range is present. No
 program-format or scratch-layout change is needed.
+
+## Bounding where a match can begin
+
+Presence alone admits the whole search. When the condition's necessity comes
+from instructions the match itself consumes, it also proves *where* a match can
+begin: every successful match starting at `s` consumes the condition at some
+position at or after `s`, so if no occurrence exists at or after `s`, no match
+can begin at `s` — or at any later position, which only removes occurrences.
+
+This turns the pathological arrangement the section above names — required text
+present, but before the prefix that must consume its way to it — from a search
+that retries every start into one that stops at the first start past the last
+occurrence.
+
+### The claim and its format
+
+The compiler already selects the condition by walking the emitted AST. It now
+also tracks whether the selected candidate was reached through a positive
+assertion. A lookbehind body can satisfy the condition before the match start,
+so an assertion-derived condition proves presence only. Lookahead is excluded
+with it rather than analysed separately; that is conservative, not required.
+Alternatives keep the claim only when both paths carry it.
+
+Program word 9's low byte is the leading-literal run. Bit 31 is this separate
+claim. It is a compiler guarantee, like the word 7 and 8 descriptors and unlike
+the leading run, which the validator re-derives. `Program::from_words` checks
+that no reserved bit is set and that the claim never appears without the
+condition it bounds. The claim needs no additional program word.
+
+The claim is restricted to literal conditions, because the bound resumes the
+existing literal byte search. A class condition still admits and rejects as
+before.
+
+### Execution, lifetime and work
+
+Two offsets in the execution state carry the bound: the position of a known
+occurrence, and the position from which the condition has not yet been
+searched. The initial admission search records both when it succeeds.
+
+Before scanning for candidate starts, the evaluator keeps its scan inside the
+known occurrence. When the scan base passes it, the condition search resumes
+from the unsearched position instead of restarting, finds the next occurrence
+and continues, or reports no match when none remains. Because that search only
+moves forward, the entire bound costs one pass over the subject however many
+starts are attempted.
+
+The search reuses the same chunked, charged byte scan as initial admission, so
+it is resumable at every quantum, borrows the original storage, constructs no
+subject copy, and adds no frame, undo entry or match-scratch buffer. The state
+grows by two offsets in one execution state. Exhaustion remains an explicit
+error and leaves capture output untouched.
+
+The bound applies where the candidate-start scan applies: ASCII storage with a
+start descriptor. A nullable root disables that descriptor, so `a*END` admits
+and rejects as before without the bound.
+
+### Checks and measurement
+
+`tests/bound.rs` covers the compiler's claim across repetitions, alternatives,
+classes, lookbehind and lookahead; a condition only before every start; later
+occurrences found after an earlier one is passed; requested and sticky starts;
+work exhaustion at every small allowance; and relocation. `tools/check-bound.mjs`
+compares complete answers against Node over conditions placed before, after,
+around, split across and repeated through the subject, at filler sizes that
+straddle the admission threshold and the scan's chunk boundary, in ordinary and
+one-/seventeen-work-unit advances with relocation and scratch growth.
+
+On one authored case — `/a+END/` against `END` followed by 4,000 `a` — the
+search fell from about 118 ms to about 1.7 µs, because the previous behaviour
+retried every start through the run. Measured beside it, `regress` took about
+24 ms and Rust `regex` about 7 µs on the same case. This removes one
+arrangement; it gives arbitrary backtracking expressions no general
+linear-time guarantee, and patterns without a literal condition are unchanged.

@@ -64,6 +64,9 @@ pub struct Prepared<'s> {
     count: u32,
     base_size: usize,
     size: usize,
+    /// Whether the selected admission condition is consumed at or after the
+    /// match start. Set by `admission`; meaningless before it runs.
+    forward: bool,
 }
 
 const EMPTY: u32 = 32;
@@ -926,5 +929,6 @@ fn prepare_with<'s, T>(
         count,
         base_size,
         size,
+        forward: false,
     })
 }

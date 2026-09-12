@@ -99,6 +99,8 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 
 [Leading literal starts](docs/leading.md) reject an impossible start with a byte comparison instead of an initialized trial. The claim is re-derived from the instructions during program validation, so it cannot disagree with them.
 
+[Required-text admission](docs/admission.md) also bounds where a match can begin when the condition is one the match itself consumes, so text present only before every possible start stops the search instead of retrying it.
+
 [Single-atom repetition merging](docs/repetition.md) removes duplicate partitions when match ordering can be preserved, using the same evaluator and caller-owned storage.
 
 Unicode-sets (`v`) admission currently covers patterns without character

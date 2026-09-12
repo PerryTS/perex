@@ -683,6 +683,8 @@ impl Vm<'_, '_, '_, '_> {
             let available = quantum - used;
             match self.state.phase {
                 Phase::Admission
+                | Phase::BoundPrepare { .. }
+                | Phase::BoundScan { .. }
                 | Phase::AdmitBytes { .. }
                 | Phase::AdmitByteClass { .. }
                 | Phase::AdmitClass

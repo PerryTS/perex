@@ -11,6 +11,12 @@ use perex::{
     span::Span,
 };
 
+/// Word 9's low byte is the leading run; its top bit is the separate
+/// forward-admission claim, which these checks are not about.
+fn leading(source: &str, flags: &str) -> u32 {
+    words(source, flags)[9] & 255
+}
+
 fn words(source: &str, flags: &str) -> Vec<u32> {
     let mut nodes = vec![Node::default(); source.len() * 3 + 32];
     let mut ranges = vec![Range::default(); source.len() * 12 + 32];
@@ -53,11 +59,11 @@ fn run(words: &[u32], input: Input<'_>, start: usize, work: usize) -> Option<Vec
 #[test]
 fn leading_descriptor_claims_only_unconditional_ascii_characters() {
     // A straight-line run of entry bookkeeping and ASCII characters.
-    assert_eq!(words("needle", "")[9], 6);
-    assert_eq!(words("ab", "")[9], 2);
+    assert_eq!(leading("needle", ""), 6);
+    assert_eq!(leading("ab", ""), 2);
     // Interior capture bookkeeping ends the contiguous run; the shorter claim
     // is still correct, because those three characters are consumed first.
-    assert_eq!(words("(abc)d", "")[9], 3);
+    assert_eq!(leading("(abc)d", ""), 3);
     for (source, flags) in [
         ("a", ""),           // One character is already the word 7 claim.
         ("a+END", ""),       // A repeat can consume before the literal.
@@ -68,15 +74,15 @@ fn leading_descriptor_claims_only_unconditional_ascii_characters() {
         ("\u{e9}tude", ""),  // Non-ASCII cannot be compared against bytes.
         ("a?bc", ""),        // An optional prefix can consume nothing.
     ] {
-        assert_eq!(words(source, flags)[9], 0, "/{source}/{flags}");
+        assert_eq!(leading(source, flags), 0, "/{source}/{flags}");
     }
 }
 
 #[test]
 fn a_descriptor_disagreeing_with_its_instructions_is_rejected() {
     let valid = words("needle", "");
-    assert_eq!(valid[9], 6);
-    for claim in [0, 1, 2, 5, 7, 32, u32::MAX] {
+    assert_eq!(valid[9] & 255, 6);
+    for claim in [0, 1, 2, 5, 7, 32, 33, u32::MAX] {
         let mut corrupt = valid.clone();
         corrupt[9] = claim;
         assert_eq!(
@@ -87,7 +93,7 @@ fn a_descriptor_disagreeing_with_its_instructions_is_rejected() {
     }
     // A program whose instructions change must carry the matching claim.
     let mut shortened = words("(abc)d", "");
-    assert_eq!(shortened[9], 3);
+    assert_eq!(shortened[9] & 255, 3);
     shortened[9] = 4;
     assert_eq!(
         Program::from_words(&shortened, &mut Budget::new(1_000_000)).unwrap_err(),
@@ -133,7 +139,7 @@ fn skipped_starts_preserve_complete_answers() {
 fn the_descriptor_does_not_change_sticky_or_captured_answers() {
     // Interior capture bookkeeping ends the run after the first group.
     let sticky = words("(ne)(edle)", "y");
-    assert_eq!(sticky[9], 2);
+    assert_eq!(sticky[9] & 255, 2);
     let subject = "xneedle needle";
     assert!(run(&sticky, Input::utf8(subject), 0, 1_000_000).is_none());
     let captures = run(&sticky, Input::utf8(subject), 1, 1_000_000).unwrap();

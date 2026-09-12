@@ -73,12 +73,27 @@ impl Vm<'_, '_, '_, '_> {
         } else {
             256
         };
-        let count = (bytes.len() - start)
+        let mut count = (bytes.len() - start)
             .min(available.min(limit))
             .min(self.budget.remaining());
         if count == 0 {
             self.charge(1)?;
             return Err(ExecError::InvalidProgram);
+        }
+        // Every successful match consumes the admission condition at or after
+        // its own start, so a start with no later occurrence cannot match, and
+        // neither can any start after it. Keep the scan inside the last known
+        // occurrence; past it, resume the condition search before continuing.
+        // That search only moves forward, so the whole bound costs one pass.
+        if self.program.admission_forward() && self.state.required_at != UNSET {
+            if start > self.state.required_at {
+                self.charge(1)?;
+                self.state.phase = Phase::BoundPrepare {
+                    from: self.state.required_from,
+                };
+                return Ok(());
+            }
+            count = count.min(self.state.required_at + 1 - start);
         }
         // Bound every memory read by the available operation work. Charge logical
         // positions through the first candidate before publishing its mark;

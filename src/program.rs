@@ -3,7 +3,7 @@ use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 10;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 11;
+pub(crate) const VERSION: u32 = 12;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -15,6 +15,11 @@ pub(crate) const ADMISSION: u32 = 128;
 pub(crate) const ADMISSION_MAX: usize = 32;
 /// Most characters word 9 can claim as an unconditional leading literal.
 pub(crate) const LEADING_MAX: u32 = 32;
+/// Word 9's low byte holds the leading run; this bit is a separate claim that
+/// the admission condition is consumed at or after the match start.
+pub(crate) const ADMISSION_FORWARD: u32 = 1 << 31;
+/// Word 9 bits outside the leading run and the forward claim are reserved.
+pub(crate) const LEADING_MASK: u32 = 255;
 /// Instructions word 9's derivation may inspect. Interior `SAVE` bookkeeping
 /// consumes nothing, so a bounded number is skipped while collecting the run.
 const LEADING_SCAN: usize = 128;
@@ -198,7 +203,10 @@ impl<'a> Program<'a> {
         budget
             .charge(LEADING_SCAN / 8)
             .map_err(|_| ProgramError::WorkLimit)?;
-        if words[9] != derive_leading(words, p.instructions()) {
+        if words[9] & !(LEADING_MASK | ADMISSION_FORWARD) != 0
+            || words[9] & LEADING_MASK != derive_leading(words, p.instructions())
+            || (words[9] & ADMISSION_FORWARD != 0 && words[2] & ADMISSION == 0)
+        {
             return Err(bad);
         }
         if let Some((pc, _)) = p.admission()
@@ -375,7 +383,13 @@ impl<'a> Program<'a> {
     /// Characters at instruction zero that every match consumes first. Zero
     /// disables the claim. See [`derive_leading`].
     pub(crate) fn leading(self) -> usize {
-        self.words[9] as usize
+        (self.words[9] & LEADING_MASK) as usize
+    }
+    /// Whether every successful match consumes the admission condition at or
+    /// after its own start position, so an absent later occurrence proves that
+    /// no match can begin at or after that position.
+    pub(crate) fn admission_forward(self) -> bool {
+        self.words[9] & ADMISSION_FORWARD != 0
     }
     /// Instruction holding the first character of [`Program::leading`].
     pub(crate) fn leading_pc(self) -> usize {

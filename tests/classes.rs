@@ -57,7 +57,7 @@ fn members() -> String {
 fn sorted_classes_preserve_original_membership_and_reject_invalid_order() {
     let source = format!("[{}]", members());
     let words = program(&source, "u");
-    assert_eq!(words[1], 11);
+    assert_eq!(words[1], 12);
     assert_eq!(words[10 + 3], 27); // Sorted class following capture-zero start.
     for unit in 0..0x400u16 {
         let expected = (0..128).any(|i| unit == 0x100 + i * 3);
