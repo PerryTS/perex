@@ -53,8 +53,9 @@ always goes through ordinary matching. Native UTF-16 retains its existing path.
 No representation is copied or converted. Sticky matching checks only its
 requested position. A nonnullable pattern cannot match at the subject's end.
 
-Each scan step reads at most 256 available bytes, further bounded by its execution
-quantum and remaining work. Portable eight-byte arithmetic locates a possible
+Each scan step reads at most 4096 available bytes, further bounded by its
+execution quantum and remaining work, so a host that wants finer pauses gets
+them by passing a smaller quantum rather than by this cap. Portable eight-byte arithmetic locates a possible
 character; scalar handling covers the first byte and tail. Only logical positions
 through the first candidate are charged, so word-read speculation does not change
 matching work across quanta. Subject positions remain cursor offsets/checkpoints;

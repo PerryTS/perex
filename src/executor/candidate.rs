@@ -201,7 +201,7 @@ impl Vm<'_, '_, '_, '_> {
         let limit = if self.program.words[2] & Y != 0 {
             1
         } else {
-            256
+            4096
         };
         let mut count = (bytes.len() - start)
             .min(available.min(limit))
