@@ -761,8 +761,8 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 Phase::Trial | Phase::Execute { .. } => self.trial(available)?,
                 Phase::Class { .. } => self.class_step(available)?,
-                Phase::AtomScan => self.atom_scan(false)?,
-                Phase::AtomExtend => self.atom_scan(true)?,
+                Phase::AtomScan => self.atom_scan(false, available)?,
+                Phase::AtomExtend => self.atom_scan(true, available)?,
                 Phase::AtomResult { matched, extend } => self.atom_result(matched, extend)?,
                 Phase::AtomCommit => self.atom_commit()?,
                 Phase::AtomRetreat => self.atom_retreat(available)?,

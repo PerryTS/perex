@@ -24,7 +24,82 @@ impl Vm<'_, '_, '_, '_> {
         }
         Ok(self.program.repeat(id as usize))
     }
-    pub(super) fn atom_scan(&mut self, extend: bool) -> Result<(), ExecError> {
+    /// Whether this atom can be decided without the resumable class phase.
+    fn inline_atom(&self, op: u32, b: u32) -> bool {
+        matches!(op, CHAR | ANY | ANY_S) || (op == CLASS && (b & !NEGATED) <= ATOM_CLASS_RANGES)
+    }
+
+    /// Membership for an atom `inline_atom` accepted.
+    fn atom_holds(&mut self, op: u32, a: u32, b: u32, c: u32) -> Result<bool, ExecError> {
+        Ok(match op {
+            CHAR => equal(self.program, c, a, false),
+            ANY | ANY_S => op == ANY_S || !line_terminator(c),
+            _ => {
+                let mut found = false;
+                for index in a..a + (b & !NEGATED) {
+                    self.charge(1)?;
+                    let [lo, hi] = self.program.range(index as usize);
+                    found = if lo & PROPERTY != 0 {
+                        if hi == 2 {
+                            !properties::contains(lo & !PROPERTY, c)
+                        } else {
+                            properties::contains(lo & !PROPERTY, c) != (hi != 0)
+                        }
+                    } else {
+                        c >= lo && c <= hi
+                    };
+                    if found {
+                        break;
+                    }
+                }
+                found != (b & NEGATED != 0)
+            }
+        })
+    }
+
+    /// The charge one character of this atom always costs, when that is the
+    /// same whatever the character is. `None` when it is data-dependent, which
+    /// a byte scan could not reproduce and so must not replace.
+    fn fixed_atom_charge(&self, op: u32, a: u32, b: u32) -> Option<(usize, u8, u8)> {
+        match op {
+            // One unit for the character; `equal` charges nothing.
+            CHAR if a < 128 => Some((1, a as u8, a as u8)),
+            // One unit for the character and one for the single range examined,
+            // which is the same whether or not it matches.
+            CLASS if b == 1 => {
+                let [lo, hi] = self.program.range(a as usize);
+                (lo & PROPERTY == 0 && hi < 128).then_some((2, lo as u8, hi as u8))
+            }
+            _ => None,
+        }
+    }
+
+    /// Walk a run of a fixed-charge atom directly over original bytes, which
+    /// costs a fraction of decoding each character through the cursor. Returns
+    /// how many characters the run holds from `start`.
+    fn byte_run(bytes: &[u8], start: usize, lo: u8, hi: u8, limit: usize) -> usize {
+        const HIGH: u64 = 0x8080_8080_8080_8080;
+        const ONES: u64 = 0x0101_0101_0101_0101;
+        let end = bytes.len().min(start + limit);
+        let mut i = start;
+        let (lower, upper) = (u64::from(lo) * ONES, u64::from(hi) * ONES);
+        while i + 8 <= end {
+            let word = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
+            // High bit set for each lane inside the range, as in the start scan.
+            let inside =
+                ((word | HIGH).wrapping_sub(lower)) & ((upper | HIGH).wrapping_sub(word)) & HIGH;
+            if inside != HIGH {
+                return i - start + (!inside & HIGH).trailing_zeros() as usize / 8;
+            }
+            i += 8;
+        }
+        while i < end && bytes[i] >= lo && bytes[i] <= hi {
+            i += 1;
+        }
+        i - start
+    }
+
+    pub(super) fn atom_scan(&mut self, extend: bool, available: usize) -> Result<(), ExecError> {
         let mut atom = self.atom_state()?;
         let r = self.atom_record()?;
         let infinite = r[2] & 1 != 0;
@@ -35,10 +110,88 @@ impl Vm<'_, '_, '_, '_> {
         if extend && (atom.needed != 0 || (!infinite && atom.remaining == 0)) {
             return Err(ExecError::InvalidProgram);
         }
+        let [op, a, b] = self.program.instruction(self.state.pc + 3);
+        // Once a greedy unbounded repeat has met its minimum, consuming another
+        // character changes no counter: it only advances the cursor. Walking
+        // that run here instead of one character per phase round trip avoids
+        // re-reading the repeat record and rewriting the work state twice each
+        // time. Every decision still belongs to the code below, which re-reads
+        // the character the run stopped at.
+        if !extend && r[2] & 2 == 0 && infinite && atom.needed == 0 && self.inline_atom(op, b) {
+            // The most one character can charge: its own unit plus a range
+            // walk. Keeping that much quantum and budget in hand means no
+            // charge inside the loop can fail, so the cursor never stops
+            // between a character's read and its decision.
+            // A fixed-charge atom over ASCII storage is walked as bytes. The
+            // charge is identical to deciding each character separately, so a
+            // pause still reaches the same total, and the cursor moves once.
+            if let Some((per, lo, hi)) = self.fixed_atom_charge(op, a, b)
+                && let Some(bytes) = self.input.ascii_bytes()
+                && !self.state.reverse
+            {
+                let start = self.cursor.position();
+                let limit = (available / per).min(self.budget.remaining() / per);
+                let run = Self::byte_run(bytes, start, lo, hi, limit);
+                if run != 0 {
+                    self.charge(run * per)?;
+                    atom.before = self
+                        .input
+                        .cursor_at(start + run - 1)
+                        .ok_or(ExecError::InvalidProgram)?
+                        .mark();
+                    self.cursor = self
+                        .input
+                        .cursor_at(start + run)
+                        .ok_or(ExecError::InvalidProgram)?;
+                    self.state.work = Work::Atom(atom);
+                }
+                // The stopping character is left to the ordinary step below,
+                // which charges and decides it exactly as it always has.
+                if run != 0 && run == limit {
+                    return Ok(());
+                }
+            }
+            let cost = 1 + if op == CLASS { b & !NEGATED } else { 0 } as usize;
+            let mut used = 0;
+            let mut ended = false;
+            while used + cost <= available && self.budget.remaining() > cost {
+                let before = self.cursor.mark();
+                // Charged in the same order as the ordinary step: the character
+                // first, then whatever deciding it costs. A pause must not
+                // change the total, so the stopping character pays here too.
+                self.charge(1)?;
+                let Some(c) = self.read() else {
+                    self.restore(before);
+                    ended = true;
+                    break;
+                };
+                if !self.atom_holds(op, a, b, c)? {
+                    self.restore(before);
+                    ended = true;
+                    break;
+                }
+                atom.before = before;
+                used += cost;
+            }
+            self.state.work = Work::Atom(atom);
+            if ended {
+                // The run stops here. This is the same conclusion the ordinary
+                // step reaches, taken without charging the stopping character
+                // twice, and the run's end is recorded for the next start.
+                if self.program.run_skip() == Some(self.state.pc) {
+                    self.state.run_end = self.cursor.position();
+                }
+                self.state.phase = Phase::AtomCommit;
+                return Ok(());
+            }
+            if used != 0 {
+                // The quantum ran out mid-run; resume this same phase.
+                return Ok(());
+            }
+        }
         self.charge(1)?;
         atom.before = self.cursor.mark();
         self.state.work = Work::Atom(atom);
-        let [op, a, b] = self.program.instruction(self.state.pc + 3);
         let matched = if let Some(c) = self.read() {
             match op {
                 CHAR | CHAR_I => equal(self.program, c, a, op == CHAR_I),

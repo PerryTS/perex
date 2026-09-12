@@ -199,3 +199,37 @@ The repeated class now costs about what a repeated character does — 0.75 µs
 against 0.72 µs — where before it cost two thirds again as much. On the authored
 short cases, `/[a-z]+[0-9]+/` fell from 626 ns to 431 ns and
 `/(\w+)@(\w+)\.com/` from 749 ns to 559 ns.
+
+## Walking a run over bytes
+
+Deciding a repeated atom one character at a time costs a cursor decode, a
+budget charge and a membership test for each, and before this it also cost two
+phase round trips, each re-reading the repeat record and rewriting the work
+state.
+
+Two changes remove most of that. A greedy unbounded repeat that has met its
+minimum changes no counter when it consumes another character, so that run is
+walked inside the scan rather than one character per round trip. And when the
+atom's charge is the same whatever the character is, the run is walked directly
+over original bytes with the same lane arithmetic the start scan uses, moving
+the cursor once at the end.
+
+The charge has to be identical either way, because a paused search must reach
+the same total as an unpaused one. It is fixed for an ASCII character, which
+costs one unit, and for a single-range ASCII class, which costs two: one for the
+character and one for the range examined, whether or not it matches. A class of
+several ranges charges according to which range matched, which a byte scan
+cannot reproduce, so those keep the character-at-a-time path.
+
+The stopping character is always left to the ordinary step, which charges and
+decides it exactly as before.
+
+Measured on a sixty-character run, process CPU time per search:
+
+| Pattern | Phase per character | Run loop | Byte run |
+|---|---:|---:|---:|
+| `/a+!/` | 716 ns | 277 ns | 82 ns |
+| `/[a-z]+!/` | 1204 ns | 364 ns | 89 ns |
+
+Both are now faster than `regress` and Rust `regex` on this shape, and within
+about 2.3x of V8. A multi-range class keeps the run loop's figure.
