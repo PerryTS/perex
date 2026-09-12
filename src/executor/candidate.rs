@@ -360,32 +360,40 @@ impl Vm<'_, '_, '_, '_> {
 /// is small, so one word-parallel pass per member still costs a fraction of a
 /// comparison per byte.
 pub(super) fn first_in_set(bytes: &[u8], set: &[u8]) -> (Option<usize>, usize) {
-    const HIGH: u64 = 0x8080_8080_8080_8080;
-    const ONES: u64 = 0x0101_0101_0101_0101;
-    if set.iter().any(|&b| b == bytes[0]) {
-        return (Some(0), 1);
+    // A block at a time, with a fixed trip count and no exit inside the block,
+    // so the comparisons widen into whatever vector width the target has. The
+    // same source stays correct, and as fast as the lane arithmetic below, on a
+    // target with none. A member's test is independent of every other, so the
+    // cost grows far more slowly with the set than one pass per member does.
+    const LANES: usize = 32;
+    const BLOCK_MIN: usize = 256;
+    let mut base = 0;
+    while bytes.len() >= BLOCK_MIN && base + LANES <= bytes.len() {
+        let block: [u8; LANES] = bytes[base..base + LANES].try_into().unwrap();
+        let mut hit = [0u8; LANES];
+        for &member in set {
+            for lane in 0..LANES {
+                hit[lane] |= u8::from(block[lane] == member);
+            }
+        }
+        let mut any = 0;
+        for &lane in &hit {
+            any |= lane;
+        }
+        if any != 0 {
+            for (lane, &found) in hit.iter().enumerate() {
+                if found != 0 {
+                    return (Some(base + lane), base + lane + 1);
+                }
+            }
+        }
+        base += LANES;
     }
-    let mut i = 1;
-    while i + 8 <= bytes.len() {
-        let word = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
-        let mut mask = 0;
-        for &b in set {
-            // A lane equal to `b` is the only one whose difference can borrow
-            // into its high bit while that bit stays clear in the operand.
-            let x = word ^ (u64::from(b) * ONES);
-            mask |= x.wrapping_sub(ONES) & !x & HIGH;
+    while base < bytes.len() {
+        if set.contains(&bytes[base]) {
+            return (Some(base), base + 1);
         }
-        if mask != 0 {
-            let at = i + mask.trailing_zeros() as usize / 8;
-            return (Some(at), at + 1);
-        }
-        i += 8;
-    }
-    while i < bytes.len() {
-        if set.iter().any(|&b| b == bytes[i]) {
-            return (Some(i), i + 1);
-        }
-        i += 1;
+        base += 1;
     }
     (None, bytes.len())
 }

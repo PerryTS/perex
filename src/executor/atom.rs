@@ -36,6 +36,9 @@ impl AtomBytes {
     }
 }
 
+/// Bytes a span must hold before block comparisons pay for their setup.
+const BLOCK_MIN: usize = 256;
+
 /// Ranges a repeated class may hold and still be tested in one step. The step
 /// stays bounded work, like the sorted-class search, while covering the small
 /// classes ordinary patterns repeat.
@@ -149,6 +152,43 @@ impl Vm<'_, '_, '_, '_> {
         let end = bytes.len().min(start + limit);
         if let AtomBytes::Every = accepts {
             return end - start;
+        }
+        // A class of several ranges tests each one against every lane of a
+        // block, which widens into vector comparisons where the target has
+        // them. A single range keeps the lane arithmetic below, which is faster
+        // for one comparison than a block is.
+        // Only worth it past a few blocks: below that the block's own setup
+        // costs more than the lane arithmetic it replaces.
+        if let AtomBytes::Ranges(ranges, count, negated) = accepts
+            && end.saturating_sub(start) >= BLOCK_MIN
+        {
+            const LANES: usize = 32;
+            let mut base = start;
+            while base + LANES <= end {
+                let block: [u8; LANES] = bytes[base..base + LANES].try_into().unwrap();
+                let mut inside = [0u8; LANES];
+                for &(lo, hi) in &ranges[..count as usize] {
+                    for lane in 0..LANES {
+                        inside[lane] |= u8::from(block[lane] >= lo && block[lane] <= hi);
+                    }
+                }
+                let mut stop = 0;
+                for &lane in &inside {
+                    stop |= lane ^ u8::from(!negated);
+                }
+                if stop != 0 {
+                    for (lane, &accepted) in inside.iter().enumerate() {
+                        if (accepted != 0) == negated {
+                            return base + lane - start;
+                        }
+                    }
+                }
+                base += LANES;
+            }
+            while base < end && accepts.holds(bytes[base]) {
+                base += 1;
+            }
+            return base - start;
         }
         let mut i = start;
         while i + 8 <= end {
