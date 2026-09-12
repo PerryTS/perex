@@ -34,3 +34,81 @@ Modes are `validate`, `forward`, `backward` and `seek`. Output includes a checks
 cargo build --locked --release --example input_cost
 /usr/bin/time -v target/release/examples/input_cost astral forward 2048
 ```
+
+## Measured against V8, 2026-09-12
+
+V8 is the engine Perry replaces, so it is the comparison that decides adoption.
+Earlier comparisons in this project used `regress` and Rust `regex`; the latter
+is a linear-time automaton with SIMD prefilters and answers a different
+question. Both drivers measure process CPU time, because this host's load
+average reached 103 during these runs, where wall clock measures how often the
+scheduler ran a process rather than how much work it did. The figure for each
+case is the minimum of three passes.
+
+The harness, cases and raw results are the host's, under
+`secret-tests/perex-bench`.
+
+### Ahead
+
+| Case | Perex | V8 |
+|---|---:|---:|
+| Required text absent, 4 KiB of `a` | 1.65 µs | 23.5 ms |
+| Required text before its prefix | 1.60 µs | 23.4 ms |
+| Class miss over 256 KiB | 27.3 µs | 901 µs |
+| Long literal miss | 77.3 µs | 125 µs |
+
+The first two are the catastrophic-backtracking shapes. Bounded work and the
+admission bound are not a curiosity against a backtracking competitor: they are
+the largest single advantage Perex has.
+
+### Behind
+
+Between 1.1x and 7.2x, led by a three-way literal alternation over 256 KiB
+(7.2x), a capture-heavy short match (6.7x) and a short class repeat (5.0x).
+
+### The floor, and what it is
+
+A diagnostic ladder separates fixed cost from marginal cost:
+
+| Case | Perex | V8 |
+|---|---:|---:|
+| `/z/` against `""` | 16.6 ns | 11.2 ns |
+| `/z/` against `"a"` | 23.6 ns | 13.8 ns |
+| `/a/` against `"a"` | 46.6 ns | 16.9 ns |
+
+An empty search is 1.48x. That is the cost of a bytecode pausable at every
+instruction so the host's collector can run, which is why this engine exists;
+V8 emits native code and owes a collector nothing. No further tuning of this
+design removes it.
+
+The scan is not where the remaining gap is. A single-pattern scan runs at
+0.104 ns/byte against V8's 0.158 ns/byte for a three-pattern one — Perex
+out-scans V8 per pattern. The gap is scanning several literals in one pass.
+
+### Attempts that did not work
+
+Recorded because a measurement that refuted a plausible idea is worth as much
+as one that confirmed it, and because each of these looked obviously right.
+
+- **Inline class test in the `CLASS` instruction arm.** No change: a repeated
+  class is dispatched from the atom scan and never reaches that arm. Moving the
+  test to the scan afterwards gave 1.6x.
+- **Completing a pure literal without the trial loop.** Within noise; the
+  remaining instructions cost about 1 ns each, not the 6.5 ns they cost before
+  the leading-run skip landed.
+- **A skip table over the leading literals.** 1.08x. Its dependent load chain
+  is latency-bound where the existing lane arithmetic is not.
+- **Caching the leading characters per scan step.** 1.5x *worse*, and worse
+  again after the step was enlarged sixteenfold and the first-byte filter
+  restored. Reading an instruction per character is not the cost that the
+  arithmetic suggested it was.
+
+### What closing the rest would take
+
+Both remaining routes require removing `#![forbid(unsafe_code)]`:
+`core::arch` intrinsics are unsafe, `core::simd` is nightly while CI pins
+stable, and executing compiled code is unsafe. Auto-vectorisation does not
+substitute, for the scan-rate reason above.
+
+That is a safety decision about an engine a runtime points at untrusted input,
+not a performance one, and it is not made here. It is tracked as [issue #2](https://github.com/PerryTS/perex/issues/2).
