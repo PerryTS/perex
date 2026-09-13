@@ -10,7 +10,7 @@ use perex::{
         SearchError, Undo,
     },
     program::Program,
-    span::Span,
+    span::{BoundSpan, ReadProgress, Span},
 };
 use std::{cell::RefCell, convert::Infallible};
 
@@ -19,6 +19,9 @@ pub struct Options {
     pub quantum: usize,
     pub relocate: bool,
     pub grow: bool,
+    /// Start each search from a position elsewhere in the subject, which must
+    /// never change an answer.
+    pub near: bool,
 }
 struct Owner {
     storage: RefCell<(Vec<u32>, Vec<u8>)>,
@@ -139,7 +142,36 @@ pub fn find(
     } else {
         Buffers::Borrowed(scratch)
     };
-    let mut search = Search::new(&resources, start, buffers, *budget).map_err(error)?;
+    let near = options.near.then(|| {
+        // A position that differs from the start and varies with it, so a
+        // corpus reaches hints before, at and after its starts, including
+        // between surrogate halves. Reading to it is harness work, charged to
+        // an allowance of its own, and relocation still happens between reads.
+        let length = bound_subject.with_view(|input| input.len_utf16()).unwrap();
+        let at = start.wrapping_mul(7).wrapping_add(length / 3) % (length + 1);
+        let mut reader = BoundSpan::new(&bound_subject, Span::new(0, at).unwrap())
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let mut work = Budget::new(usize::MAX);
+        while reader
+            .try_fold(options.quantum, &mut work, |_| Ok::<_, Infallible>(()))
+            .unwrap_or_else(|e| panic!("{e:?}"))
+            == ReadProgress::Pending
+        {
+            if options.relocate {
+                owner.relocate();
+            }
+        }
+        let position = reader.position();
+        if options.relocate {
+            owner.relocate();
+        }
+        position
+    });
+    let mut search = match near {
+        Some(near) => Search::new_near(&resources, start, near, buffers, *budget),
+        None => Search::new(&resources, start, buffers, *budget),
+    }
+    .map_err(error)?;
     let result = loop {
         match search.advance(options.quantum).map_err(error) {
             Ok(Progress::Pending) => {

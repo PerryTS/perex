@@ -92,6 +92,11 @@ storage allocation without retaining the original pattern view or resetting work
 
 The [input API](docs/input.md) reads the original string, including individual surrogate halves inside four-byte UTF-8 characters. Capture spans borrow those units without constructing substrings. `span::BoundSpan` traverses captures in bounded steps across owner relocation, including initial seeking, so a host can allocate exact output strings without a subject conversion buffer. Its consumer callback runs inside the input borrow; allocation and collection belong between steps. Validation, seeking and relocation costs are documented explicitly. The [performance requirements](docs/performance.md) preserve per-case CPU and RSS results alongside complete host measurements.
 
+[Starting from a position](docs/resumption.md#starting-from-a-position) lets a
+search or span reader begin where the previous one on the same subject ended, so
+a global loop over a non-ASCII byte string does linear seek work rather than
+seeking from an end every time.
+
 `BoundSpan::retarget` selects another span of the same immutable binding and reuses
 the current offset when it shortens the seek. Adjacent reads need no prefix
 rescan or subject index. Seeking still consumes the caller's cumulative work

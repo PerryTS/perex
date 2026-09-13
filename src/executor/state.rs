@@ -188,6 +188,11 @@ pub(super) struct State {
     /// start before it inside the run is proved to fail with it, so the next
     /// start is taken from here instead of the following character.
     pub run_end: usize,
+    /// A position in this subject to seek to the start from, when it is nearer
+    /// than either end, or `Mark::NONE`. Taken by the first seek to a start.
+    pub near: Mark,
+    /// Whether the search has reached its first start, so `start` is one.
+    pub started: bool,
 }
 impl State {
     pub fn new(start: usize, length: usize) -> Self {
@@ -211,6 +216,8 @@ impl State {
             required_from: 0,
             verified: 0,
             run_end: UNSET,
+            near: Mark::NONE,
+            started: false,
         }
     }
 }
@@ -226,6 +233,9 @@ mod tests {
         // Offsets for the condition bound, the leading run's end and the
         // characters the start scan confirmed. One execution state holds them;
         // they add no frame, undo entry or per-position storage.
-        assert_eq!(core::mem::size_of::<State>(), 200);
+        // The position a search was asked to start near, and whether it has
+        // reached a start, add sixteen bytes to that one state: a mark with
+        // an impossible unit count stands for none, and the flag fits padding.
+        assert_eq!(core::mem::size_of::<State>(), 216);
     }
 }

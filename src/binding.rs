@@ -110,7 +110,7 @@ pub struct BindingError<S, E> {
 /// that attaches its metadata to an unrelated slice or replaces the owner.
 pub struct BoundSubject<S: ImmutableSubject> {
     storage: S,
-    layout: (u8, usize, usize),
+    pub(crate) layout: (u8, usize, usize),
 }
 impl<S: ImmutableSubject> BoundSubject<S> {
     pub fn new(storage: S) -> Result<Self, BindingError<S, SubjectError<S::Error>>> {

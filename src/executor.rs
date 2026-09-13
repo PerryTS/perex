@@ -1,7 +1,7 @@
 //! One ordered evaluator with caller-owned scratch and resumable offset state.
 use crate::{
     Budget, casefold,
-    input::{Cursor, Input, Mark},
+    input::{Cursor, Input, Mark, Position},
     program::*,
     properties,
     span::Span,
@@ -167,6 +167,56 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
             state: State::new(start_utf16, shape.input.2),
             budget,
         })
+    }
+
+    /// [`Search::new`], seeking to its start from a position this subject
+    /// already produced.
+    ///
+    /// On non-ASCII byte storage, reaching `start_utf16` costs a seek from the
+    /// subject's nearer end. From `near` it costs the distance between the two
+    /// positions, and the nearer of the three is taken. A global loop that
+    /// starts each search near the previous one's [`Search::position`]
+    /// therefore does linear seek work rather than quadratic. Everything after
+    /// reaching the start, and the answer, is what [`Search::new`] does.
+    ///
+    /// A position from a subject of another layout is refused here, and one
+    /// that is not a valid position in this subject when the search first
+    /// seeks to its start, both as [`ExecError::ChangedResources`].
+    pub fn new_near(
+        resources: &'r R,
+        start_utf16: usize,
+        near: Position,
+        buffers: B,
+        budget: Budget,
+    ) -> Result<Self, SearchError<R::Error>> {
+        let mut search = Self::new(resources, start_utf16, buffers, budget)?;
+        if near.layout != search.shape.input {
+            return Err(SearchError::Execution(ExecError::ChangedResources));
+        }
+        search.state.near = near.mark;
+        Ok(search)
+    }
+
+    /// A position in this search's subject that a later search or span reader
+    /// can start from: the match's end once it has matched; otherwise the start
+    /// of the last attempt it made, which for a sticky search is its requested
+    /// start; and before it has reached a start, the position it was given to
+    /// start near, or the subject's beginning.
+    ///
+    /// A loop that moves on by a unit after a failed attempt, as `split` does,
+    /// therefore seeks one unit from here rather than from wherever the failed
+    /// attempt's scanning left the cursor.
+    pub fn position(&self) -> Position {
+        let mark = match self.state.phase {
+            Phase::Finished(true) => self.state.current,
+            _ if self.state.started => self.state.start,
+            _ if !self.state.near.is_none() => self.state.near,
+            _ => self.state.current,
+        };
+        Position {
+            mark,
+            layout: self.shape.input,
+        }
     }
 
     pub fn remaining_work(&self) -> usize {
@@ -434,6 +484,23 @@ impl Vm<'_, '_, '_, '_> {
     }
     fn seek(&mut self, target: usize, after: AfterSeek, available: usize) -> Result<(), ExecError> {
         let work = self.input.seek_work(target);
+        if let AfterSeek::Start = after
+            && !self.state.near.is_none()
+        {
+            let near = core::mem::replace(&mut self.state.near, Mark::NONE);
+            let cursor = self
+                .input
+                .resume_cursor(near)
+                .ok_or(ExecError::ChangedResources)?;
+            // One for the seek, and one for each unit walked from there, which
+            // is what a walk from an end is charged too.
+            if cursor.position().abs_diff(target) + 1 < work {
+                self.charge(1)?;
+                self.cursor = cursor;
+                self.state.phase = Phase::Seek { target, after };
+                return Ok(());
+            }
+        }
         if work == 1 || work <= available {
             self.charge(work)?;
             self.cursor = self
@@ -462,6 +529,7 @@ impl Vm<'_, '_, '_, '_> {
                     self.cursor.normalize_unicode_start();
                 }
                 self.state.start = self.cursor.mark();
+                self.state.started = true;
                 self.start_candidate();
             }
             AfterSeek::Backref {

@@ -36,6 +36,7 @@ All public positions count UTF-16 units. `cursor_at` accepts the end position, r
 | Seek in other byte input | O(minimum UTF-16 distance from either end) | None |
 | Copy cursor checkpoint during a borrow | O(1) | Fixed-size cursor state only |
 | Read capture units | Initial seek plus O(capture units) | None |
+| Read capture units from a `Position` in the same subject | O(distance to the capture) plus O(capture units) | None |
 | Reborrow after relocation | Current validation/counting plus initial seek | None |
 
 A cursor contains a scoped subject borrow and integer positions, including an internal half-pair flag. Copying a cursor copies metadata, never the string. Cursors can be independently used for nested/reentrant operations. Across relocation the caller must release every view/cursor/span iterator, retain integer positions and a host root, and acquire a new borrow. The current safe API revalidates and re-seeks after relocation; it does not pretend that this potentially linear setup cost is solved. A future efficient host boundary must preserve validation and lifetime invariants while avoiding repeated scans. It must not copy the subject to do so.

@@ -20,6 +20,63 @@ The quantum is a work target, not a strict instruction count or wall-clock deadl
 
 A successful search validates all capture ranges before exposing any. `capture(index)` reads one integer span without a subject borrow; `copy_captures` copies spans to sufficient caller storage. Pending, no-match, cancellation and errors leave caller output untouched. Span copying is a separate operation and holds no subject/program view. Completion, cancellation, exhausted work, invalid program state and changed resource layout are terminal: another `advance` reports the same result and cannot restart the operation. A resource-acquisition failure leaves execution state untouched and may be retried.
 
+## Starting from a position
+
+On ASCII and UTF-16 storage a search reaches its start in constant work. On
+other byte storage it seeks from the subject's nearer end, which costs up to half
+the subject. That is fine for one search and quadratic for a loop of them: a
+global `replace`, `matchAll` or `exec` loop starts a search at every match, and
+`split` starts a sticky one at every position. Perry hit this as a work-limit
+`RangeError` on a 32,000-unit `split` and a 60,000-unit `replace` (Perry issues
+#10164 and #10165), where a seek from an end summed to about n²/4 units against a
+100,000,000-unit allowance.
+
+`input::Position` is a UTF-16 position together with where it lies in one
+subject's storage: a byte offset with the half-pair flag, a UTF-16 offset, and
+the subject's layout. It is offsets only, so it survives relocation like every
+other piece of resumable state.
+
+- `Search::position()` is the match's end once a search has matched; otherwise
+  the start of the last attempt it made — for a sticky search, its requested
+  start — and before it has reached a start, the position it was given, or the
+  subject's beginning.
+- `Search::new_near(resources, start, near, buffers, budget)` is `Search::new`,
+  except the seek to `start` begins at `near` when that is nearer than both
+  ends. It costs the distance plus one, charged per unit and paused like any
+  other seek. The nearer of the three is always taken, so a hint is never more
+  expensive than none.
+- `BoundSpan::new_near` and `BoundSpan::position` do the same for reading a
+  capture's units, so materializing a match's captures seeks back by the match's
+  length from the search's position instead of from an end.
+
+A position from a subject of another layout is refused, as
+`ExecError::ChangedResources` from `new_near` and `ReadError::ChangedPosition`
+from a reader. So is one that is not a valid position in the subject it is used
+on — inside a scalar, or a half-pair flag where no astral character is — when it
+is used. Two different strings with identical layouts cannot be told apart, so a
+position used on the wrong one can give wrong answers, never unsafety: the same
+contract a `Resources` owner already carries. A host should keep a position only
+for as long as it keeps the binding it came from.
+
+What it buys, in work units, from `tests/position.rs`:
+
+| Loop | Subject | From the ends | From positions |
+|---|---|---:|---:|
+| Global search for `a` over `ééé a ` | 2,000 repeats | 6,060,001 | 60,001 |
+| | 4,000 repeats | 24,120,001 | 120,001 |
+| Sticky `[,;]` at every position over `ééé,aé;` | 1,000 repeats | 12,307,000 | 62,000 |
+| | 2,000 repeats | 49,114,000 | 124,000 |
+
+Doubling the subject doubles the work from positions and quadruples it from the
+ends.
+
+Two costs remain per search and are not changed by this. A program with a
+required-text condition, on a subject of 64 units or more, runs admission from
+the subject's beginning to that text's first occurrence; that is cheap where the
+text occurs early and costs the distance where it first occurs late. And binding
+a byte subject validates the whole string, which is the host's to do once per
+operation rather than once per search.
+
 ## Scratch ownership and growth
 
 `Search` exclusively owns a `ScratchOwner`. Existing borrowed `Scratch` implements that trait, and an embedder can instead supply an owner of allocated buffers. Acquiring a scratch view must not allocate, collect, call host code or change live entries. The core allocates nothing and never grows storage implicitly.
@@ -38,6 +95,8 @@ The scratch-reuse witness consumes completed, pending, cancelled, work-limited a
 
 The development `scratch_cost` driver compares fixed buffers, fresh zero-frame/undo buffers, reuse, and reuse with a 64 KiB payload retention cap. Growth uses powers of two up to the same fixed caps (16,384 frames and 131,072 undo entries), with allocation and cleanup outside resource views. `verify` checks every iteration's complete captures and work against synchronous `find`. Timing modes report explicitly owned scratch payload, all buffer allocations/frees, replacement overlap, transferred live metadata and retained payload; these counters exclude allocator metadata, engine state on the stack, program/capture storage and process RSS. Compilation scratch, program capacity and capture capacity are reported separately. External process measurements are still required, and no convenience allocation policy is installed in the core or Perry.
 
-The complete-answer `engine_probe` additionally accepts `--quantum N [--relocate] [--grow]`. Growth starts with no frame/undo storage and keeps the ordinary probe's maximum capacities and work allowance. Relocation is a development collector simulation and copies its own backing allocations to test movement; production Perex never copies the subject for traversal. These modes are for differential correctness, not a performance baseline. The ordinary probe keeps its existing protocol.
+`tests/position.rs` covers starting from positions. Every pattern in its set — ASCII, two-byte, astral and lone-surrogate WTF-8 and UTF-16 subjects; the `u` flag; lookbehind, backreference, word boundary, end anchor, sticky, lone-surrogate and empty patterns — runs from every start including past the end, with a hint at every position of the subject including between surrogate halves, with storage relocated, poisoned and freed at every pause. Each run must give `find`'s answer and complete captures, charge no more work, and after a match stand at the match's end: 19,404 runs, 5,906 of which started from the hint. The loop witnesses above assert the linear and quadratic growth. Refusal is checked for a position from a subject of another layout and for one that lands inside a scalar of a subject with the same layout. A span reader from a position must read exactly the units a plain reader reads, charge no more, and charge exactly the distance plus the span when the position is two units before it. `a_sticky_loop_from_positions_does_linear_work` also asserts that a failed sticky attempt's position is its start. Six faults injected into the implementation — no layout check, a hint taken when farther, starting at the hint without walking to the start, a reader that forgets to seek, a match's position reported as its start, and a failed attempt's position reported as wherever its scanning stopped — are each caught.
+
+The complete-answer `engine_probe` additionally accepts `--quantum N [--relocate] [--grow] [--near]`. `--near` reads a span reader to a position that varies with the start, relocating between reads, and starts the search from it; CI runs the engine differential and the candidate and class harnesses that way, and their output must be identical to the same runs without it. Locally, on Node 26.5.1, that held for all 12,593 engine cases, 137,513 candidate cases and 124,416 class cases. Growth starts with no frame/undo storage and keeps the ordinary probe's maximum capacities and work allowance. Relocation is a development collector simulation and copies its own backing allocations to test movement; production Perex never copies the subject for traversal. These modes are for differential correctness, not a performance baseline. The ordinary probe keeps its existing protocol.
 
 Perry root tracing, exception cleanup, reentrant operations, collecting coercions/callbacks, cache ownership and allocation accounting need actual host tests. The one-time validation and resumption costs, pause latency, live/peak/retained storage and engine/application CPU/RSS remain separate performance gates. Compiler suspension is also not implemented by this matcher API.

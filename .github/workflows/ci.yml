@@ -45,6 +45,15 @@ jobs:
             chmod +x "$probe"
             node tools/check-engine.mjs "$probe" --allow-listed-unsupported --allow-reviewed-reference-disagreements --output "artifacts/resumed-$quantum"
           done
+      - name: Searches started from positions elsewhere in the subject
+        shell: bash
+        run: |
+          probe="$RUNNER_TEMP/perex-near"
+          printf '#!/bin/sh\nexec "%s" --quantum 17 --relocate --grow --near "$@"\n' "$PWD/target/release/examples/engine_probe" > "$probe"
+          chmod +x "$probe"
+          node tools/check-engine.mjs "$probe" --allow-listed-unsupported --allow-reviewed-reference-disagreements --output artifacts/near
+          node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate-near --quantum 1 --relocate --grow --near
+          node tools/check-classes.mjs target/release/examples/engine_probe artifacts/classes-near --quantum 1 --relocate --grow --near
       - name: Named captures, Unicode identifiers and duplicate alternatives
         run: node tools/check-names.mjs target/release/examples/engine_probe
       - name: Legacy numeric escapes, control prefixes and quantified lookahead

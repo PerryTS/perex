@@ -3,7 +3,7 @@ use super::Span;
 use crate::{
     Budget,
     binding::{BoundSubject, ImmutableSubject, SubjectError},
-    input::Mark,
+    input::{Mark, Position},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,6 +127,57 @@ impl<'a, S: ImmutableSubject> BoundSpan<'a, S> {
             complete: span.is_empty(),
             failed: false,
         })
+    }
+
+    /// [`BoundSpan::new`], seeking to the span from a position this subject
+    /// already produced when that is nearer than the reader's own starting
+    /// point. Seeking is still charged per unit and bounded by `try_fold`.
+    ///
+    /// A position from a subject of another layout, or one that is not a
+    /// valid position in this subject, is refused as
+    /// [`ReadError::ChangedPosition`].
+    pub fn new_near(
+        subject: &'a BoundSubject<S>,
+        span: Span,
+        near: Position,
+    ) -> Result<Self, ReadError<S::Error, core::convert::Infallible>> {
+        let mut reader = Self::new(subject, span)?;
+        if near.layout != subject.layout {
+            return Err(ReadError::ChangedPosition);
+        }
+        let (mark, position) = subject
+            .with_view(|input| {
+                let near = input
+                    .resume_cursor(near.mark)
+                    .ok_or(ReadError::ChangedPosition)?;
+                let own = input
+                    .resume_cursor(reader.mark)
+                    .ok_or(ReadError::ChangedPosition)?;
+                let target = span.start();
+                Ok(
+                    if !span.is_empty()
+                        && near.position().abs_diff(target) < own.position().abs_diff(target)
+                    {
+                        (near.mark(), near.position())
+                    } else {
+                        (own.mark(), own.position())
+                    },
+                )
+            })
+            .map_err(ReadError::Subject)??;
+        reader.mark = mark;
+        reader.seeking = !span.is_empty() && position != span.start();
+        Ok(reader)
+    }
+
+    /// Where this reader stands: the end of what it has delivered, or where
+    /// its seek has reached. A later reader or search over the same subject
+    /// can start from it.
+    pub fn position(&self) -> Position {
+        Position {
+            mark: self.mark,
+            layout: self.subject.layout,
+        }
     }
 
     /// Visit at most `quantum` UTF-16 units, counting both initial seeking and

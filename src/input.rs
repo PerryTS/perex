@@ -280,7 +280,7 @@ pub struct Cursor<'a> {
 
 // Execution-local checkpoints contain no subject pointer. Only the evaluator
 // may restore them, and only on the same immutable input borrow that made them.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Mark {
     // A valid u8/u16 slice occupies at most isize::MAX bytes. Its endpoint
     // therefore leaves this bit free, without imposing a new input size limit.
@@ -288,6 +288,52 @@ pub(crate) struct Mark {
     units: usize,
 }
 const HALF: usize = 1usize << (usize::BITS - 1);
+
+impl Mark {
+    /// No mark. No subject has `usize::MAX` UTF-16 units, since a slice holds at
+    /// most `isize::MAX` elements, so this is never a position in one, and
+    /// storing it costs no more than a mark.
+    pub(crate) const NONE: Mark = Mark {
+        offset: 0,
+        units: usize::MAX,
+    };
+
+    pub(crate) fn is_none(self) -> bool {
+        self == Mark::NONE
+    }
+}
+
+/// A UTF-16 position together with where it lies in one subject's storage.
+///
+/// Offsets only, like all resumable state: it holds no pointer, so it stays
+/// meaningful after the host relocates that storage. Starting from one costs
+/// the distance to the new position, where starting anywhere else in a
+/// non-ASCII byte string costs a seek from its nearer end. A search or reader
+/// that starts near the previous one's position therefore does linear seek
+/// work over a whole global loop instead of quadratic.
+///
+/// Obtain one from [`crate::executor::Search::position`] or
+/// [`crate::span::BoundSpan::position`], and pass it back to their
+/// `new_near` constructors.
+///
+/// It is only meaningful for the subject it came from. A position from a
+/// subject of another kind or length is refused, and one that is not a valid
+/// position in the subject it is given to is refused when it is used. Two
+/// different strings with identical layouts cannot be told apart: a position
+/// from one used on the other can produce wrong answers, never unsafety, which
+/// is the contract [`crate::executor::Resources`] owners already carry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Position {
+    pub(crate) mark: Mark,
+    pub(crate) layout: (u8, usize, usize),
+}
+
+impl Position {
+    /// The position, in UTF-16 units.
+    pub fn utf16(self) -> usize {
+        self.mark.units
+    }
+}
 
 fn pack_offset(offset: usize, half: bool) -> usize {
     debug_assert_eq!(offset & HALF, 0);
