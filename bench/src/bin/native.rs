@@ -10,9 +10,18 @@
 use perex::compiler::{compile, Node, Range};
 use perex::executor::{find, Frame, Scratch, Undo};
 use perex::input::Input;
-use perex::native::emit::{emit_search, supported};
+use perex::native::emit::{emit_search, supported, EXHAUSTED, NO_MATCH};
+use perex::native::verify::Facts;
 use perex::span::Span;
 use perex::Budget;
+
+/// Backward branches one call to generated code may take before it gives the
+/// search back to the interpreter. Each executes at most the program's length
+/// in instructions, so this is what bounds a call however the pattern and the
+/// subject combine.
+const ALLOWANCE: usize = 1 << 20;
+
+type Entry = extern "C" fn(*const u8, usize, usize, *mut usize, usize) -> isize;
 
 /// A page of memory that was written and is now executable.
 struct Executable {
@@ -52,7 +61,7 @@ impl Executable {
     }
 
     /// The entry point, as something safe to call.
-    fn entry(&self) -> extern "C" fn(*const u8, usize, usize, *mut usize) -> isize {
+    fn entry(&self) -> Entry {
         unsafe { core::mem::transmute(self.page) }
     }
 }
@@ -168,7 +177,8 @@ fn main() {
             continue;
         }
         let mut code = vec![0u8; 65536];
-        let length = emit_search(program, &mut code).expect("code is generated");
+        let mut facts = vec![Facts::default(); code.len() / 4];
+        let length = emit_search(program, &mut code, &mut facts).expect("code is generated");
         let executable = Executable::new(&code[..length]);
         let entry = executable.entry();
 
@@ -181,7 +191,17 @@ fn main() {
         let mut agree = true;
         for start in 0..=case.subject.len().min(64) {
             let mut native = vec![usize::MAX; count.max(2)];
-            let answer = entry(bytes.as_ptr(), bytes.len(), start, native.as_mut_ptr());
+            let answer = entry(bytes.as_ptr(), bytes.len(), start, native.as_mut_ptr(), usize::MAX);
+            // A budget too small to finish must say so rather than answer.
+            for budget in [0, 1, 16] {
+                let mut scratch = vec![usize::MAX; count.max(2)];
+                let limited = entry(bytes.as_ptr(), bytes.len(), start, scratch.as_mut_ptr(), budget);
+                if limited != EXHAUSTED && limited != answer {
+                    agree = false;
+                    eprintln!("{}: start {start}: budget {budget} answered {limited}, not {answer}",
+                              case.id);
+                }
+            }
             let mut registers = vec![0usize; count];
             let mut frames = vec![Frame::default(); 4096];
             let mut undo = vec![Undo::default(); 16384];
@@ -190,7 +210,7 @@ fn main() {
             let found = find(program, subject, start,
                              Scratch { registers: &mut registers, frames: &mut frames, undo: &mut undo },
                              &mut captures, &mut budget).expect("search runs");
-            if (answer >= 0) != found {
+            if (answer >= 0) != found || (!found && answer != NO_MATCH) {
                 agree = false;
                 eprintln!("{}: start {start}: native {answer}, interpreted {found}", case.id);
                 break;
@@ -218,11 +238,24 @@ fn main() {
                  Scratch { registers: &mut registers, frames: &mut frames, undo: &mut undo },
                  &mut captures, &mut budget).map(isize::from).unwrap_or(-1)
         });
+        // What a host would run: the generated code within its allowance, and
+        // the interpreter when that runs out.
         let mut native = vec![usize::MAX; count.max(2)];
+        let mut exhausted = 0usize;
         let compiled = time(case.iters, || {
-            entry(bytes.as_ptr(), bytes.len(), 0, native.as_mut_ptr())
+            match entry(bytes.as_ptr(), bytes.len(), 0, native.as_mut_ptr(), ALLOWANCE) {
+                EXHAUSTED => {
+                    exhausted += 1;
+                    let mut budget = Budget::new(1_000_000_000);
+                    find(program, subject, 0,
+                         Scratch { registers: &mut registers, frames: &mut frames, undo: &mut undo },
+                         &mut captures, &mut budget).map(isize::from).unwrap_or(-1)
+                }
+                answer => answer,
+            }
         });
-        println!("{:<24}{:>12.1}{:>12.1}{:>9.2}x   {}", case.id, interpreted, compiled,
-                 compiled / interpreted, if agree { "agree" } else { "DIFFER" });
+        println!("{:<24}{:>12.1}{:>12.1}{:>9.2}x   {}{}", case.id, interpreted, compiled,
+                 compiled / interpreted, if agree { "agree" } else { "DIFFER" },
+                 if exhausted > 0 { ", allowance ran out" } else { "" });
     }
 }

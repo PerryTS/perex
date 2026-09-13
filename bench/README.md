@@ -49,7 +49,10 @@ calls anything: those are the host's, which is what keeps
 the buffer, makes it executable, calls it, and times it against the interpreter.
 
 Every answer is checked against the interpreter at every start position before
-anything is timed. See `docs/compilation.md`.
+anything is timed, with an unlimited budget and with budgets small enough to run
+out. The timed path is the one a host would take: the generated code within an
+allowance of 2^20 backward branches, and the interpreter when that runs out. See
+`docs/compilation.md`.
 
 ```sh
 cargo run --release --bin perex-native

@@ -15,18 +15,25 @@
 //! that registers it does not write have already been cleared.
 #![allow(dead_code)]
 
-use super::a64::{Assembler, Cond, EncodeError, Label, Patch, Reg, X0, X1, X2, X3};
+use super::a64::{Assembler, Cond, EncodeError, Label, Patch, Reg, X0, X1, X2, X3, X4, X16};
+use super::verify::{Facts, VerifyError, verify};
 use crate::program::{
     ANY, ANY_S, ASSERT, ASSERT_END, ATOM_REPEAT, CHAR, CHAR_I, CLASS, END, MATCH, NEGATED,
     PROPERTY, Program, SAVE, START, Y, consuming,
 };
 
-/// Where the arguments arrive. The first four follow the C calling convention
+/// Where the arguments arrive. The first five follow the C calling convention
 /// this targets; the rest are scratch it may use freely.
 const SUBJECT: Reg = X0;
 const LENGTH: Reg = X1;
 const START_REG: Reg = X2;
 const REGISTERS: Reg = X3;
+/// Backward branches the code may still take. Written only by the decrement
+/// that guards each of them, which is what [`verify`] checks.
+const BUDGET: Reg = X4;
+/// The last start with room for everything a match must consume, fixed for
+/// the whole search.
+const LAST: Reg = X16;
 /// The position inside the current attempt.
 const AT: Reg = Reg(6);
 /// The byte just loaded from the subject.
@@ -76,6 +83,9 @@ pub enum EmitError {
     TooLarge,
     /// The instructions could not be encoded.
     Encode(EncodeError),
+    /// The code was generated but could not be shown safe to execute, and has
+    /// been cleared. Every one of these is a generator bug.
+    Unverified(VerifyError),
 }
 
 impl From<EncodeError> for EmitError {
@@ -414,13 +424,55 @@ fn emit_atom(
     Ok(())
 }
 
+/// What the generated code returns when there is no match.
+pub const NO_MATCH: isize = -1;
+/// What the generated code returns when its budget ran out before the search
+/// was decided. The interpreter runs the same search from the start.
+pub const EXHAUSTED: isize = -2;
+
+/// Take a backward branch to `to`, spending one unit of budget, or leave
+/// through `out` when none is left.
+///
+/// Every loop in the generated code closes through here. Forward branches
+/// cannot repeat anything, so this is the whole of what bounds how long the
+/// code runs, and [`verify`] refuses a backward branch in any other form. The
+/// budget is only decremented when it is not already zero, so it never wraps.
+fn back(asm: &mut Assembler<'_>, to: Label, out: &mut Patches) -> Result<(), EmitError> {
+    out.push(asm.cbz_forward(BUDGET))?;
+    asm.sub_imm(BUDGET, BUDGET, 1);
+    asm.b_back(to);
+    Ok(())
+}
+
 /// Emit a whole search for `program` into `code`, returning its byte length.
 ///
-/// The generated code takes the subject, its length, the start position and the
-/// register array, and returns the position a match began at or `-1`. It writes
-/// only into the registers it was given, reads only within the length, and
+/// The generated code is called as
+/// `extern "C" fn(subject: *const u8, length: usize, start: usize,
+/// registers: *mut usize, budget: usize) -> isize`, and returns the position a
+/// match began at, [`NO_MATCH`], or [`EXHAUSTED`] once it has taken `budget`
+/// backward branches without deciding. It writes only into the first
+/// `program.register_count()` registers, reads only within the length, and
 /// calls nothing.
-pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
+///
+/// Before returning, the code is checked by [`verify`], which needs one
+/// [`Facts`] for every four bytes emitted. Code that fails is cleared and
+/// reported rather than returned.
+pub fn emit_search(
+    program: Program<'_>,
+    code: &mut [u8],
+    facts: &mut [Facts],
+) -> Result<usize, EmitError> {
+    let length = generate(program, code)?;
+    if let Err(error) = verify(&code[..length], program.register_count(), facts) {
+        // Zero is permanently undefined on this architecture, so a host that
+        // maps the buffer regardless faults instead of running unchecked code.
+        code[..length].fill(0);
+        return Err(EmitError::Unverified(error));
+    }
+    Ok(length)
+}
+
+fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
     if !supported(program) {
         return Err(EmitError::Unsupported);
     }
@@ -435,6 +487,9 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
     let mut tables = Tables::new();
     // Failures with no repeat left to retreat give up on this start.
     let mut next_start = Patches::new();
+    // Starts with no match left to find, and loops with no budget left.
+    let mut no_match = Patches::new();
+    let mut out_of_budget = Patches::new();
     let mut repeats: [Option<Repeat>; MAX_REPEATS] = [None, None, None];
     let mut depth = 0usize;
 
@@ -447,7 +502,7 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
         if bound >= 1 << 12 {
             return Err(EmitError::TooLarge);
         }
-        asm.cmp_imm32(LENGTH, bound as u32);
+        asm.cmp_imm(LENGTH, bound as u32);
         let whole = asm.b_cond_forward(Cond::Lo);
         asm.sub_imm(TMP, LENGTH, bound as u32);
         asm.cmp(START_REG, TMP);
@@ -457,12 +512,17 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
         asm.bind(whole);
     }
 
-    let outer = asm.here();
     // No room for what every match must consume means no room at any later
-    // start either, so the same test ends the search.
-    asm.add_imm(AT, START_REG, least as u32);
-    asm.cmp(AT, LENGTH);
-    let exhausted = asm.b_cond_forward(Cond::Hi);
+    // start either, so passing the last start with room ends the search. That
+    // is also what makes a start past the end no match, as it is to the
+    // interpreter, rather than an address to read from.
+    asm.cmp_imm(LENGTH, least as u32);
+    no_match.push(asm.b_cond_forward(Cond::Lo))?;
+    asm.sub_imm(LAST, LENGTH, least as u32);
+
+    let outer = asm.here();
+    asm.cmp(START_REG, LAST);
+    no_match.push(asm.b_cond_forward(Cond::Hi))?;
     asm.mov(AT, START_REG);
 
     let mut pc = 0;
@@ -480,7 +540,7 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
             }
             // `^` without `m`: only the subject's own beginning.
             START => {
-                asm.cmp_imm32(AT, 0);
+                asm.cmp_imm(AT, 0);
                 let elsewhere = asm.b_cond_forward(Cond::Ne);
                 give_up(&mut next_start, &mut repeats, depth, elsewhere)?;
                 pc += 1;
@@ -498,7 +558,7 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
                 let negative = b & 1 != 0;
                 let mut absent = Patches::new();
                 // Too near the beginning for the text to be there at all.
-                asm.cmp_imm32(AT, length as u32);
+                asm.cmp_imm(AT, length as u32);
                 absent.push(asm.b_cond_forward(Cond::Lo))?;
                 asm.sub_imm(TMP, AT, length as u32);
                 asm.add_reg(TMP2, SUBJECT, TMP);
@@ -576,7 +636,7 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
                     &mut asm, program, body_op, body_a, body_b, scan_table, &mut stop,
                 )?;
                 asm.add_imm(AT, AT, 1);
-                asm.b_back(scan);
+                back(&mut asm, scan, &mut out_of_budget)?;
                 stop.bind(&mut asm);
 
                 // Short of the minimum is failure, and retreating cannot help.
@@ -633,7 +693,7 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
         asm.cmp(end, floor);
         let spent = asm.b_cond_forward(Cond::Ls);
         asm.sub_imm(end, end, 1);
-        asm.b_back(repeat.retry);
+        back(&mut asm, repeat.retry, &mut out_of_budget)?;
         match depth {
             0 => next_start.push(spent)?,
             _ => repeats[depth - 1]
@@ -646,10 +706,13 @@ pub fn emit_search(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitE
 
     next_start.bind(&mut asm);
     asm.add_imm(START_REG, START_REG, 1);
-    asm.b_back(outer);
+    back(&mut asm, outer, &mut out_of_budget)?;
 
-    asm.bind(exhausted);
+    no_match.bind(&mut asm);
     asm.movn(X0, 0);
+    asm.ret();
+    out_of_budget.bind(&mut asm);
+    asm.movn(X0, 1);
     asm.ret();
     tables.place(&mut asm);
     asm.finish().map_err(EmitError::from)
@@ -670,14 +733,26 @@ mod tests {
     ///
     /// It decodes rather than trusting the encoder's own idea of what it wrote:
     /// an emulator built from the same constants as the emitter would agree
-    /// with it whatever either of them did.
-    /// A table lives in the code buffer, so a base address says which of the
-    /// two regions a load reads. Real hardware needs no such tag; this is the
+    /// with it whatever either of them did. It shares no code with the
+    /// verifier's decoder either, because the mutation test below runs what the
+    /// verifier accepted here.
+    ///
+    /// Everything the verifier promises cannot happen is a [`Fault`] rather than
+    /// a panic, so that mutated code can be run: a load outside the subject and
+    /// the code, a store outside the registers, a write to a register the
+    /// calling convention preserves, and running past the budget's bound.
+    ///
+    /// The three regions sit at distinct base addresses, so an address says
+    /// which one it is in. Real hardware needs no such tag; this is the
     /// emulator standing in for one address space.
+    const SUBJECT_BASE: u64 = 1 << 36;
     const CODE_BASE: u64 = 1 << 40;
+    const REGISTERS_BASE: u64 = 1 << 44;
+
+    type Fault = &'static str;
 
     struct Machine<'a> {
-        x: [u64; 32],
+        x: [u64; 31],
         z: bool,
         c: bool,
         subject: &'a [u8],
@@ -686,125 +761,188 @@ mod tests {
     }
 
     impl Machine<'_> {
-        fn read(&self, index: u32) -> u64 {
-            if index == 31 {
-                0
-            } else {
-                self.x[index as usize]
+        fn read(&self, index: u32) -> Result<u64, Fault> {
+            match index {
+                31 => Err("register 31 as an operand"),
+                _ => Ok(self.x[index as usize]),
             }
         }
-        fn write(&mut self, index: u32, value: u64) {
-            if index != 31 {
-                self.x[index as usize] = value;
+        fn write(&mut self, index: u32, value: u64) -> Result<(), Fault> {
+            if index >= 18 {
+                return Err("wrote a register the calling convention preserves");
             }
+            self.x[index as usize] = value;
+            Ok(())
         }
         fn flags(&mut self, a: u64, b: u64) {
             self.z = a == b;
             self.c = a >= b;
         }
         /// Read one byte from whichever region the address names.
-        fn load(&self, at: u64) -> u8 {
-            if at >= CODE_BASE {
-                *self
-                    .code
-                    .get((at - CODE_BASE) as usize)
-                    .expect("load inside the code")
-            } else {
-                *self
-                    .subject
-                    .get(at as usize)
-                    .expect("load inside the subject")
-            }
+        fn load(&self, at: u64) -> Result<u8, Fault> {
+            let inside = |base: u64, region: &[u8]| {
+                let offset = usize::try_from(at.checked_sub(base)?).ok()?;
+                region.get(offset).copied()
+            };
+            inside(SUBJECT_BASE, self.subject)
+                .or_else(|| inside(CODE_BASE, self.code))
+                .ok_or("load outside the subject and the code")
         }
-        fn holds(&self, cond: u32) -> bool {
-            match cond {
+        fn store(&mut self, at: u64, value: u64) -> Result<(), Fault> {
+            let offset = at
+                .checked_sub(REGISTERS_BASE)
+                .filter(|offset| offset % 8 == 0)
+                .ok_or("store outside the registers")?;
+            let slot = usize::try_from(offset / 8).map_err(|_| "store outside the registers")?;
+            *self
+                .registers
+                .get_mut(slot)
+                .ok_or("store outside the registers")? = value;
+            Ok(())
+        }
+        fn holds(&self, cond: u32) -> Result<bool, Fault> {
+            Ok(match cond {
                 0 => self.z,
                 1 => !self.z,
                 2 => self.c,
                 3 => !self.c,
                 8 => self.c && !self.z,
                 9 => !self.c || self.z,
-                other => panic!("condition {other} is not one the emitter uses"),
-            }
+                _ => return Err("a condition the emulator does not model"),
+            })
         }
 
-        /// Run until `RET`, returning X0. Bounded so a generator bug is a
-        /// failing test rather than a hang.
-        fn run(&mut self, code: &[u8]) -> i64 {
+        /// Run until `RET`, returning X0 and the instructions executed, or a
+        /// fault after `limit` of them.
+        fn run(&mut self, limit: usize) -> Result<(i64, usize), Fault> {
             let mut pc = 0usize;
-            for _ in 0..1_000_000 {
-                let bytes = &code[pc..pc + 4];
+            for step in 1..=limit {
+                let bytes = self.code.get(pc..pc + 4).ok_or("ran outside the code")?;
                 let w = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                let here = pc as i64;
                 pc += 4;
                 let (rd, rn, rm) = (w & 31, (w >> 5) & 31, (w >> 16) & 31);
-                let imm12 = (w >> 10) & 0xfff;
-                if w & 0xffff_fc1f == 0xd65f_0000 {
-                    return self.x[0] as i64;
-                } else if w & 0xff80_0000 == 0xd280_0000 {
-                    self.write(rd, u64::from((w >> 5) & 0xffff));
-                } else if w & 0xff80_0000 == 0x9280_0000 {
-                    self.write(rd, !u64::from((w >> 5) & 0xffff));
+                let imm12 = u64::from((w >> 10) & 0xfff);
+                let jump = |words: i64| {
+                    usize::try_from(here + words * 4).map_err(|_| "branched outside the code")
+                };
+                if w == 0xd65f_03c0 {
+                    return Ok((self.x[0] as i64, step));
+                } else if w & 0xffe0_0000 == 0xd280_0000 {
+                    self.write(rd, u64::from((w >> 5) & 0xffff))?;
+                } else if w & 0xffe0_0000 == 0x9280_0000 {
+                    self.write(rd, !u64::from((w >> 5) & 0xffff))?;
                 } else if w & 0xffe0_ffe0 == 0xaa00_03e0 {
-                    let value = self.read(rm);
-                    self.write(rd, value);
-                } else if w & 0xff80_001f == 0x7100_001f {
-                    let value = self.read(rn) as u32;
-                    self.flags(u64::from(value), u64::from(imm12));
-                } else if w & 0xff80_0000 == 0x9100_0000 {
-                    let value = self.read(rn).wrapping_add(u64::from(imm12));
-                    self.write(rd, value);
-                } else if w & 0xff80_0000 == 0xd100_0000 {
-                    let value = self.read(rn).wrapping_sub(u64::from(imm12));
-                    self.write(rd, value);
+                    let value = self.read(rm)?;
+                    self.write(rd, value)?;
+                } else if w & 0xffc0_001f == 0x7100_001f {
+                    let value = self.read(rn)? as u32;
+                    self.flags(u64::from(value), imm12);
+                } else if w & 0xffc0_001f == 0xf100_001f {
+                    let value = self.read(rn)?;
+                    self.flags(value, imm12);
+                } else if w & 0xffc0_0000 == 0x9100_0000 {
+                    let value = self.read(rn)?.wrapping_add(imm12);
+                    self.write(rd, value)?;
+                } else if w & 0xffc0_0000 == 0xd100_0000 {
+                    let value = self.read(rn)?.wrapping_sub(imm12);
+                    self.write(rd, value)?;
                 } else if w & 0xffe0_fc1f == 0xeb00_001f {
-                    let (a, b) = (self.read(rn), self.read(rm));
+                    let (a, b) = (self.read(rn)?, self.read(rm)?);
                     self.flags(a, b);
                 } else if w & 0xffe0_fc00 == 0x3860_6800 {
-                    let at = self.read(rn).wrapping_add(self.read(rm));
-                    self.write(rd, u64::from(self.load(at)));
+                    let at = self.read(rn)?.wrapping_add(self.read(rm)?);
+                    let byte = self.load(at)?;
+                    self.write(rd, u64::from(byte))?;
                 } else if w & 0xffc0_0000 == 0x3940_0000 {
-                    let at = self.read(rn).wrapping_add(u64::from(imm12));
-                    self.write(rd, u64::from(self.load(at)));
-                } else if w & 0xff80_0000 == 0x5100_0000 {
-                    let value = (self.read(rn) as u32).wrapping_sub(imm12);
-                    self.write(rd, u64::from(value));
-                } else if w & 0x8b20_0000 == 0x8b00_0000 && w & 0x7fe0_fc00 == 0x0b00_0000 {
-                    let value = self.read(rn).wrapping_add(self.read(rm));
-                    self.write(rd, value);
+                    let at = self.read(rn)?.wrapping_add(imm12);
+                    let byte = self.load(at)?;
+                    self.write(rd, u64::from(byte))?;
+                } else if w & 0xffc0_0000 == 0x5100_0000 {
+                    let value = (self.read(rn)? as u32).wrapping_sub(imm12 as u32);
+                    self.write(rd, u64::from(value))?;
+                } else if w & 0xffe0_fc00 == 0x8b00_0000 {
+                    let value = self.read(rn)?.wrapping_add(self.read(rm)?);
+                    self.write(rd, value)?;
                 } else if w & 0x9f00_0000 == 0x1000_0000 {
                     let immlo = (w >> 29) & 3;
                     let immhi = (w >> 5) & 0x7_ffff;
                     let offset = (((immhi << 2) | immlo) as i32) << 11 >> 11;
-                    let at = (pc as i64 - 4 + i64::from(offset)) as u64;
-                    self.write(rd, CODE_BASE + at);
+                    let at = (here + i64::from(offset)) as u64;
+                    self.write(rd, CODE_BASE.wrapping_add(at))?;
                 } else if w & 0xffc0_0000 == 0xf900_0000 {
-                    let slot = (self.read(rn) as usize) / 8 + imm12 as usize;
-                    let value = self.read(rd);
-                    *self
-                        .registers
-                        .get_mut(slot)
-                        .expect("store inside registers") = value;
+                    let at = self.read(rn)?.wrapping_add(imm12 * 8);
+                    let value = self.read(rd)?;
+                    self.store(at, value)?;
                 } else if w & 0xff00_0010 == 0x5400_0000 {
-                    let offset = ((w >> 5) & 0x7_ffff) as i32;
-                    let offset = (offset << 13) >> 13;
-                    if self.holds(w & 15) {
-                        pc = (pc as i64 - 4 + i64::from(offset) * 4) as usize;
+                    let offset = ((((w >> 5) & 0x7_ffff) as i32) << 13) >> 13;
+                    if self.holds(w & 15)? {
+                        pc = jump(i64::from(offset))?;
                     }
                 } else if w & 0xfc00_0000 == 0x1400_0000 {
-                    let offset = (w & 0x3ff_ffff) as i32;
-                    let offset = (offset << 6) >> 6;
-                    pc = (pc as i64 - 4 + i64::from(offset) * 4) as usize;
+                    let offset = (((w & 0x3ff_ffff) as i32) << 6) >> 6;
+                    pc = jump(i64::from(offset))?;
+                } else if w & 0xff00_0000 == 0xb400_0000 {
+                    let offset = ((((w >> 5) & 0x7_ffff) as i32) << 13) >> 13;
+                    if self.read(rd)? == 0 {
+                        pc = jump(i64::from(offset))?;
+                    }
                 } else {
-                    panic!("emitted an instruction the emulator does not decode: {w:08x}");
+                    return Err("an instruction the emulator does not decode");
                 }
             }
-            panic!("generated code did not return");
+            Err("ran past its bound")
         }
     }
 
-    /// What the generated code says about one subject: where a match began, and
-    /// the registers it wrote.
-    fn emulate(pattern: &str, flags: &str, subject: &str) -> Option<(i64, [u64; 16])> {
+    /// One execution of generated code.
+    struct Run {
+        answer: i64,
+        registers: [u64; 16],
+        steps: usize,
+    }
+
+    /// Execute `code` against one subject, with the instruction bound the
+    /// verifier proves for this budget as the emulator's own limit.
+    fn execute(
+        code: &[u8],
+        register_count: usize,
+        subject: &str,
+        start: u64,
+        budget: u64,
+    ) -> Result<Run, Fault> {
+        let instructions = (code.len() / 4) as u64;
+        let bound = budget.saturating_add(1).saturating_mul(instructions);
+        let limit = bound.min(2_000_000) as usize;
+        let mut registers = [u64::MAX; 16];
+        let mut machine = Machine {
+            x: [0; 31],
+            z: false,
+            c: false,
+            subject: subject.as_bytes(),
+            code,
+            registers: &mut registers[..register_count],
+        };
+        machine.x[0] = SUBJECT_BASE;
+        machine.x[1] = subject.len() as u64;
+        machine.x[2] = start;
+        machine.x[3] = REGISTERS_BASE;
+        machine.x[4] = budget;
+        let (answer, steps) = machine.run(limit)?;
+        Ok(Run {
+            answer,
+            registers,
+            steps,
+        })
+    }
+
+    /// Compile `pattern` and generate code for it into `code`, returning the
+    /// code's length and the program's register count.
+    fn generate_for(
+        pattern: &str,
+        flags: &str,
+        code: &mut [u8],
+    ) -> Result<(usize, usize), EmitError> {
         let source = Input::utf8(pattern);
         let mut nodes = [Node::default(); 256];
         let mut ranges = [Range::default(); 512];
@@ -819,25 +957,18 @@ mod tests {
             &mut budget,
         )
         .expect("pattern compiles");
-        let mut code = [0u8; 4096];
-        let length = emit_search(program, &mut code).ok()?;
-        let mut registers = [u64::MAX; 16];
-        let emitted = &code[..length];
-        let mut machine = Machine {
-            x: [0; 32],
-            z: false,
-            c: false,
-            subject: subject.as_bytes(),
-            code: emitted,
-            registers: &mut registers,
-        };
-        machine.x[1] = subject.len() as u64;
-        let answer = machine.run(emitted);
-        Some((answer, registers))
+        let mut facts = [Facts::default(); 1024];
+        let length = emit_search(program, code, &mut facts)?;
+        Ok((length, program.register_count()))
     }
 
     /// The same search through the interpreter, which is what a pattern means.
-    fn interpret(pattern: &str, flags: &str, subject: &str) -> (bool, [Option<Span>; 8]) {
+    fn interpret(
+        pattern: &str,
+        flags: &str,
+        subject: &str,
+        start: usize,
+    ) -> (bool, [Option<Span>; 8]) {
         let source = Input::utf8(pattern);
         let mut nodes = [Node::default(); 256];
         let mut ranges = [Range::default(); 512];
@@ -856,11 +987,11 @@ mod tests {
         let mut frames = [Frame::default(); 256];
         let mut undo = [Undo::default(); 1024];
         let mut captures = [None; 8];
-        let mut budget = Budget::new(10_000_000);
+        let mut budget = Budget::new(100_000_000);
         let found = find(
             program,
             Input::utf8(subject),
-            0,
+            start,
             Scratch {
                 registers: &mut registers[..program.register_count()],
                 frames: &mut frames,
@@ -873,189 +1004,384 @@ mod tests {
         (found, captures)
     }
 
+    /// Which search an assertion is about.
+    #[derive(Clone, Copy)]
+    struct Case<'a> {
+        pattern: &'a str,
+        flags: &'a str,
+        subject: &'a str,
+        start: u64,
+        budget: u64,
+    }
+
+    impl core::fmt::Display for Case<'_> {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(
+                f,
+                "/{}/{} against {:?} from {}, budget {}",
+                self.pattern, self.flags, self.subject, self.start, self.budget
+            )
+        }
+    }
+
+    const PATTERNS: &[(&str, &str)] = &[
+        ("a", ""),
+        ("abc", ""),
+        ("needle", ""),
+        ("NeEdLe", "i"),
+        ("aA", "i"),
+        ("(a)", ""),
+        ("(a)(b)", ""),
+        ("(ab)c", ""),
+        ("x", ""),
+        ("", ""),
+        ("[a-z]", ""),
+        ("[a-z][0-9]", ""),
+        ("[^a-z]", ""),
+        ("[^0-9]x", ""),
+        ("[abc]", ""),
+        ("[a-z0-9_]", ""),
+        (".", ""),
+        ("a.c", ""),
+        (".", "s"),
+        ("a.", "s"),
+        ("([a-z])(.)", ""),
+        ("x[^\n]y", ""),
+        ("a+", ""),
+        ("a*", ""),
+        ("a?", ""),
+        ("a{2}", ""),
+        ("a{2,3}", ""),
+        ("[a-z]+", ""),
+        ("[a-z]+[0-9]+", ""),
+        ("[a-z]+x", ""),
+        ("a+b", ""),
+        ("a*b", ""),
+        (".+z", ""),
+        ("[0-9]*[a-z]", ""),
+        ("(a+)(b+)", ""),
+        ("([a-z]+)@([a-z]+)", ""),
+        ("x[a-z]*y", ""),
+        ("[^0-9]+9", ""),
+        ("a+a", ""),
+        ("a{1,2}b", ""),
+        ("^a", ""),
+        ("a$", ""),
+        ("^abc$", ""),
+        ("^a+$", ""),
+        ("[a-z]+$", ""),
+        ("^[a-z]+[0-9]$", ""),
+        ("needle$", ""),
+        ("^(a)(b)$", ""),
+        ("a$", ""),
+        // Repeated multi-range classes, which are the only shape that
+        // reaches the membership table.
+        (r"\w+", ""),
+        (r"\w+!", ""),
+        (r"\d+", ""),
+        ("[a-z0-9_]+x", ""),
+        ("[^a-z0-9]+", ""),
+        (r"(\w+)@(\w+)", ""),
+        ("[a-cx-z]+q", ""),
+        ("(?<=abc)d", ""),
+        ("(?<!abc)d", ""),
+        ("(?<=0123456789)abc", ""),
+        ("(?<=a)b", ""),
+        ("(?<!a)b", ""),
+        ("x(?<=x)y", ""),
+        ("(?<=ab)c$", ""),
+        // End-anchored and unrepeated, so the start skip applies. A class or
+        // `.` counts two units towards its bound, since either could match an
+        // astral character, so on ASCII storage a subject can match while
+        // being shorter than the bound.
+        ("[a-z]$", ""),
+        (".$", ""),
+        ("x[0-9]$", ""),
+        // Three open repeats of overlapping classes, which the compiler cannot
+        // merge, over a run none of them can finish: every division of the run
+        // among them is tried.
+        ("[ab]*[ac]*a*x", ""),
+    ];
+
+    const SUBJECTS: &[&str] = &[
+        "",
+        "a",
+        "b",
+        "abc",
+        "aabc",
+        "xxabcxx",
+        "needle",
+        "haystack with a needle inside",
+        "NEEDLE",
+        "nEeDlE",
+        "ab",
+        "ba",
+        "aaaa",
+        "cba",
+        "a1",
+        "1a",
+        "a\nb",
+        "a\rb",
+        "_z9",
+        "A",
+        "  ",
+        "xy",
+        "x\ny",
+        "abcdef",
+        "aaa",
+        "aaab",
+        "b",
+        "ab123",
+        "abc123xyz",
+        "xaaay",
+        "xy",
+        "user@example",
+        "9",
+        "a9",
+        "zzz9",
+        "aab",
+        "aaaaab",
+        "0a",
+        "0123a",
+        "az",
+        "aaz",
+        "  z",
+        // Bytes immediately outside the ranges above, which an off-by-one
+        // on a bound would accept or reject wrongly.
+        "{",
+        "a{",
+        "`a",
+        "z{",
+        "09:",
+        "/0",
+        "AZ[",
+        "@A",
+        "_",
+        "^_`",
+        "a_9Z",
+        "  \t ",
+        "w+x",
+        "abc@def",
+        "xyzq",
+        "abcq",
+        "abcd",
+        "xabcd",
+        "d",
+        "bd",
+        "0123456789abc",
+        "x0123456789abc",
+        "ab",
+        "xb",
+        "xy",
+        "xxy",
+        "abc",
+    ];
+
+    /// Thirty `a`s, which `[ab]*[ac]*a*x` divides every possible way.
+    const RUN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     #[test]
     fn generated_code_agrees_with_the_interpreter() {
-        let patterns = [
-            ("a", ""),
-            ("abc", ""),
-            ("needle", ""),
-            ("NeEdLe", "i"),
-            ("aA", "i"),
-            ("(a)", ""),
-            ("(a)(b)", ""),
-            ("(ab)c", ""),
-            ("x", ""),
-            ("", ""),
-            ("[a-z]", ""),
-            ("[a-z][0-9]", ""),
-            ("[^a-z]", ""),
-            ("[^0-9]x", ""),
-            ("[abc]", ""),
-            ("[a-z0-9_]", ""),
-            (".", ""),
-            ("a.c", ""),
-            (".", "s"),
-            ("a.", "s"),
-            ("([a-z])(.)", ""),
-            ("x[^\n]y", ""),
-            ("a+", ""),
-            ("a*", ""),
-            ("a?", ""),
-            ("a{2}", ""),
-            ("a{2,3}", ""),
-            ("[a-z]+", ""),
-            ("[a-z]+[0-9]+", ""),
-            ("[a-z]+x", ""),
-            ("a+b", ""),
-            ("a*b", ""),
-            (".+z", ""),
-            ("[0-9]*[a-z]", ""),
-            ("(a+)(b+)", ""),
-            ("([a-z]+)@([a-z]+)", ""),
-            ("x[a-z]*y", ""),
-            ("[^0-9]+9", ""),
-            ("a+a", ""),
-            ("a{1,2}b", ""),
-            ("^a", ""),
-            ("a$", ""),
-            ("^abc$", ""),
-            ("^a+$", ""),
-            ("[a-z]+$", ""),
-            ("^[a-z]+[0-9]$", ""),
-            ("needle$", ""),
-            ("^(a)(b)$", ""),
-            ("a$", ""),
-            // Repeated multi-range classes, which are the only shape that
-            // reaches the membership table.
-            (r"\w+", ""),
-            (r"\w+!", ""),
-            (r"\d+", ""),
-            ("[a-z0-9_]+x", ""),
-            ("[^a-z0-9]+", ""),
-            (r"(\w+)@(\w+)", ""),
-            ("[a-cx-z]+q", ""),
-            ("(?<=abc)d", ""),
-            ("(?<!abc)d", ""),
-            ("(?<=0123456789)abc", ""),
-            ("(?<=a)b", ""),
-            ("(?<!a)b", ""),
-            ("x(?<=x)y", ""),
-            ("(?<=ab)c$", ""),
-        ];
-        let subjects = [
-            "",
-            "a",
-            "b",
-            "abc",
-            "aabc",
-            "xxabcxx",
-            "needle",
-            "haystack with a needle inside",
-            "NEEDLE",
-            "nEeDlE",
-            "ab",
-            "ba",
-            "aaaa",
-            "cba",
-            "a1",
-            "1a",
-            "a\nb",
-            "a\rb",
-            "_z9",
-            "A",
-            "  ",
-            "xy",
-            "x\ny",
-            "abcdef",
-            "aaa",
-            "aaab",
-            "b",
-            "ab123",
-            "abc123xyz",
-            "xaaay",
-            "xy",
-            "user@example",
-            "9",
-            "a9",
-            "zzz9",
-            "aab",
-            "aaaaab",
-            "0a",
-            "0123a",
-            "az",
-            "aaz",
-            "  z",
-            // Bytes immediately outside the ranges above, which an off-by-one
-            // on a bound would accept or reject wrongly.
-            "{",
-            "a{",
-            "`a",
-            "z{",
-            "09:",
-            "/0",
-            "AZ[",
-            "@A",
-            "_",
-            "^_`",
-            "a_9Z",
-            "  \t ",
-            "w+x",
-            "abc@def",
-            "xyzq",
-            "abcq",
-            "abcd",
-            "xabcd",
-            "d",
-            "bd",
-            "0123456789abc",
-            "x0123456789abc",
-            "ab",
-            "xb",
-            "xy",
-            "xxy",
-            "abc",
-        ];
-        for (pattern, flags) in patterns {
-            for subject in subjects {
-                let Some((answer, registers)) = emulate(pattern, flags, subject) else {
-                    panic!("/{pattern}/{flags} should have code generated for it");
-                };
-                let (found, captures) = interpret(pattern, flags, subject);
-                assert_eq!(
-                    answer >= 0,
-                    found,
-                    "/{pattern}/{flags} against {subject:?}: compiled said {answer}, \
-                     interpreted said {found}"
-                );
-                if !found {
-                    continue;
-                }
-                let span = captures[0].expect("a match has a span");
-                assert_eq!(
-                    answer as usize,
-                    span.start(),
-                    "/{pattern}/{flags} against {subject:?}: start"
-                );
-                for (index, capture) in captures.iter().enumerate() {
-                    let Some(span) = capture else { continue };
+        let mut code = [0u8; 4096];
+        for &(pattern, flags) in PATTERNS {
+            let (length, count) = generate_for(pattern, flags, &mut code).unwrap_or_else(|error| {
+                panic!("/{pattern}/{flags} should have code generated for it: {error:?}")
+            });
+            let emitted = &code[..length];
+            for &subject in SUBJECTS {
+                // Every start, and starts past the end, which are no match
+                // rather than addresses to read from.
+                for start in (0..=subject.len() + 1).chain([usize::MAX]) {
+                    let context = || Case {
+                        pattern,
+                        flags,
+                        subject,
+                        start: start as u64,
+                        budget: u64::MAX,
+                    };
+                    let run = execute(emitted, count, subject, start as u64, u64::MAX)
+                        .unwrap_or_else(|fault| panic!("{}: {fault}", context()));
+                    let (found, captures) = interpret(pattern, flags, subject, start);
                     assert_eq!(
-                        registers[index * 2] as usize,
-                        span.start(),
-                        "/{pattern}/{flags} against {subject:?}: capture {index} start"
+                        run.answer >= 0,
+                        found,
+                        "{}: compiled said {}, interpreted said {found}",
+                        context(),
+                        run.answer
                     );
-                    assert_eq!(
-                        registers[index * 2 + 1] as usize,
-                        span.end(),
-                        "/{pattern}/{flags} against {subject:?}: capture {index} end"
-                    );
+                    if !found {
+                        assert_eq!(run.answer, NO_MATCH as i64, "{}", context());
+                        continue;
+                    }
+                    let span = captures[0].expect("a match has a span");
+                    assert_eq!(run.answer as usize, span.start(), "{}: start", context());
+                    for (index, capture) in captures.iter().enumerate() {
+                        let Some(span) = capture else { continue };
+                        assert_eq!(
+                            run.registers[index * 2] as usize,
+                            span.start(),
+                            "{}: capture {index} start",
+                            context()
+                        );
+                        assert_eq!(
+                            run.registers[index * 2 + 1] as usize,
+                            span.end(),
+                            "{}: capture {index} end",
+                            context()
+                        );
+                    }
                 }
             }
         }
     }
 
+    /// A budget ends a search early or not at all. A run that runs out says
+    /// so, a run that decides agrees with an unlimited one, and no run executes
+    /// more than the verifier's bound, which [`execute`] enforces.
+    #[test]
+    fn a_budget_never_changes_an_answer() {
+        let mut code = [0u8; 4096];
+        let mut exhausted = 0;
+        for &(pattern, flags) in PATTERNS {
+            let (length, count) = generate_for(pattern, flags, &mut code).expect("generated");
+            let emitted = &code[..length];
+            for &subject in SUBJECTS {
+                let full = execute(emitted, count, subject, 0, u64::MAX).expect("runs");
+                let mut decided = false;
+                for budget in 0..12 {
+                    let context = || Case {
+                        pattern,
+                        flags,
+                        subject,
+                        start: 0,
+                        budget,
+                    };
+                    let run = execute(emitted, count, subject, 0, budget)
+                        .unwrap_or_else(|fault| panic!("{}: {fault}", context()));
+                    if run.answer == EXHAUSTED as i64 {
+                        assert!(!decided, "{}: a smaller budget decided this", context());
+                        exhausted += 1;
+                        continue;
+                    }
+                    decided = true;
+                    assert_eq!(run.answer, full.answer, "{}", context());
+                    if run.answer >= 0 {
+                        assert_eq!(
+                            run.registers[..count],
+                            full.registers[..count],
+                            "{}",
+                            context()
+                        );
+                    }
+                }
+            }
+        }
+        assert!(exhausted > 0, "no budget was small enough to stop anything");
+    }
+
+    #[test]
+    fn a_budget_stops_what_backtracking_would_not() {
+        let mut code = [0u8; 4096];
+        let (length, count) = generate_for("[ab]*[ac]*a*x", "", &mut code).expect("generated");
+        let emitted = &code[..length];
+        let (found, _) = interpret("[ab]*[ac]*a*x", "", RUN, 0);
+        let full = execute(emitted, count, RUN, 0, u64::MAX).expect("runs to completion");
+        assert!(!found);
+        assert_eq!(full.answer, NO_MATCH as i64);
+        // What that took, against what a small allowance is allowed to take.
+        let stopped = execute(emitted, count, RUN, 0, 1000).expect("stops within its bound");
+        assert_eq!(stopped.answer, EXHAUSTED as i64);
+        assert!(stopped.steps <= 1001 * length / 4);
+        assert!(
+            full.steps > 20 * stopped.steps,
+            "{} steps to finish, {} to stop",
+            full.steps,
+            stopped.steps
+        );
+    }
+
+    /// The verifier's promises, checked against execution rather than argued.
+    /// Bits are flipped in generated code, and every mutant the verifier
+    /// accepts is run: whatever it now computes, it must load, store, return
+    /// and finish within what was proved.
+    #[test]
+    fn code_the_verifier_accepts_keeps_its_promises() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut random = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let subjects = ["", "a", "abc", "aaaa", "user@example", "0123456789abc"];
+        let mut code = [0u8; 4096];
+        let mut facts = [Facts::default(); 1024];
+        let (mut accepted, mut refused, mut different) = (0usize, 0usize, 0usize);
+        for &(pattern, flags) in PATTERNS {
+            let (length, count) = generate_for(pattern, flags, &mut code).expect("generated");
+            for _ in 0..MUTANTS {
+                let mut mutant = code;
+                for _ in 0..1 + random() % 2 {
+                    let bit = random() as usize % (length * 8);
+                    mutant[bit / 8] ^= 1 << (bit % 8);
+                }
+                let mutant = &mutant[..length];
+                if verify(mutant, count, &mut facts).is_err() {
+                    refused += 1;
+                    continue;
+                }
+                accepted += 1;
+                let mut differs = false;
+                for subject in subjects {
+                    for start in [0, 1, subject.len() as u64, u64::MAX] {
+                        for budget in [0, 5, 200] {
+                            let context = || Case {
+                                pattern,
+                                flags,
+                                subject,
+                                start,
+                                budget,
+                            };
+                            let run = execute(mutant, count, subject, start, budget)
+                                .unwrap_or_else(|fault| panic!("{}: {fault}", context()));
+                            let original = execute(&code[..length], count, subject, start, budget)
+                                .expect("the original runs");
+                            differs |= run.answer != original.answer;
+                            assert!(
+                                run.answer == NO_MATCH as i64
+                                    || run.answer == EXHAUSTED as i64
+                                    || (0..=subject.len() as i64).contains(&run.answer),
+                                "mutated, {}: returned {}",
+                                context(),
+                                run.answer
+                            );
+                            for &value in &run.registers[..count] {
+                                assert!(
+                                    value == u64::MAX || value <= subject.len() as u64,
+                                    "{}: stored {value}",
+                                    context()
+                                );
+                            }
+                        }
+                    }
+                }
+                different += usize::from(differs);
+            }
+        }
+        // A test that only ever ran refused or unchanged code would prove
+        // nothing, so it has to have run mutants that behave differently.
+        assert!(
+            refused > 0 && accepted > 0 && different > 0,
+            "{accepted} accepted, {refused} refused, {different} different"
+        );
+    }
+
+    const MUTANTS: usize = 100;
+
     #[test]
     fn refuses_what_it_cannot_generate() {
         let mut code = [0u8; 4096];
+        let mut facts = [Facts::default(); 1024];
         for (pattern, flags) in [
             ("a+?", ""),
             ("a|b", ""),
@@ -1086,7 +1412,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                emit_search(program, &mut code),
+                emit_search(program, &mut code, &mut facts),
                 Err(EmitError::Unsupported),
                 "/{pattern}/{flags}"
             );

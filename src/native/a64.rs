@@ -22,6 +22,7 @@ pub(crate) const X2: Reg = Reg(2);
 pub(crate) const X3: Reg = Reg(3);
 pub(crate) const X4: Reg = Reg(4);
 pub(crate) const X5: Reg = Reg(5);
+pub(crate) const X16: Reg = Reg(16);
 pub(crate) const ZR: Reg = Reg(31);
 /// The link register, which `RET` returns through.
 pub(crate) const LR: Reg = Reg(30);
@@ -184,6 +185,16 @@ impl<'a> Assembler<'a> {
         self.word(0x7100_001f | (imm << 10) | (u32::from(rn.0) << 5));
     }
 
+    /// `CMP Xn, #imm12`, the 64-bit form, for positions and lengths. Comparing
+    /// only the low half of one would be wrong past four gigabytes.
+    pub(crate) fn cmp_imm(&mut self, rn: Reg, imm: u32) {
+        if imm >= 1 << 12 {
+            self.fail(EncodeError::Immediate);
+            return;
+        }
+        self.word(0xf100_001f | (imm << 10) | (u32::from(rn.0) << 5));
+    }
+
     /// `CMP Xn, Xm`, which is `SUBS XZR, Xn, Xm`.
     pub(crate) fn cmp(&mut self, rn: Reg, rm: Reg) {
         self.word(0xeb00_001f | (u32::from(rm.0) << 16) | (u32::from(rn.0) << 5));
@@ -308,6 +319,18 @@ impl<'a> Assembler<'a> {
         }
     }
 
+    /// `CBZ Xt` to somewhere not emitted yet. Its offset field is where a
+    /// conditional branch keeps one, so it binds the same way.
+    pub(crate) fn cbz_forward(&mut self, rt: Reg) -> Patch {
+        let at = self.at;
+        self.word(0xb400_0000 | u32::from(rt.0));
+        Patch {
+            at,
+            kind: Kind::CondBranch,
+            live: true,
+        }
+    }
+
     /// `B` to somewhere not emitted yet.
     pub(crate) fn b_forward(&mut self) -> Patch {
         let at = self.at;
@@ -407,6 +430,13 @@ mod tests {
         assert_eq!(assemble(|a| a.movn(X0, 0)), [0x9280_0000]);
         assert_eq!(assemble(|a| a.movn(Reg(6), 1)), [0x9280_0026]);
         assert_eq!(assemble(|a| a.ldr_index(Reg(9), X3, 3)), [0xf940_0c69]);
+        assert_eq!(assemble(|a| a.cmp_imm(Reg(6), 0)), [0xf100_00df]);
+        assert_eq!(assemble(|a| a.cmp_imm(X1, 6)), [0xf100_183f]);
+        assert_eq!(assemble(|a| a.movn(X0, 1)), [0x9280_0020]);
+        assert_eq!(assemble(|a| a.cmp(X2, Reg(16))), [0xeb10_005f]);
+        assert_eq!(assemble(|a| a.sub_imm(Reg(16), X1, 3)), [0xd100_0c30]);
+        assert_eq!(assemble(|a| a.sub_imm(X4, X4, 1)), [0xd100_0484]);
+        assert_eq!(assemble(|a| a.add_reg(Reg(13), X0, Reg(8))), [0x8b08_000d]);
     }
 
     #[test]
@@ -420,6 +450,14 @@ mod tests {
                 a.bind(patch);
             }),
             [0x5400_0040, 0xd65f_03c0]
+        );
+        assert_eq!(
+            assemble(|a| {
+                let patch = a.cbz_forward(X4);
+                a.ret();
+                a.bind(patch);
+            }),
+            [0xb400_0044, 0xd65f_03c0]
         );
         assert_eq!(
             assemble(|a| {
