@@ -85,12 +85,40 @@ The bound applies where the candidate-start scan applies: ASCII storage with a
 start descriptor. A nullable root disables that descriptor, so `a*END` admits
 and rejects as before without the bound.
 
+### Searches that begin later in the subject
+
+The initial admission search used to start at the subject's first byte whatever
+the requested start. With the claim, that is wasted and worse: an occurrence
+before the start serves no start the search will try, and once found, the bound
+stepped from it to the start one occurrence at a time, a charged round trip
+each. A global loop starts one search per match at a later position each time,
+so it paid for every earlier occurrence again and was quadratic. Perry measured
+`/([a-z]+)([0-9]+) /g` at 6.7 s over `"ab12 ".repeat(20000)` against 1-2 ms in
+Node, while the same pattern without the trailing space was flat.
+
+On ASCII storage, where the requested start is also a byte offset, a program
+carrying the claim now begins the initial search there. The claim is what makes
+that exact rather than a heuristic, so a program without it — a condition inside
+a lookbehind, say — still searches from the beginning. On `"ab12 ".repeat(20000)`,
+`/[a-z]+[0-9]+ /` from start 50,000 charged 2,590,286 work units and now charges
+286; from 350,000 of `"ab12 ".repeat(80000)`, 18,130,286 and now 286, the same as
+from the start.
+
+Non-ASCII byte storage and UTF-16 are unchanged: their requested start counts
+UTF-16 units, not bytes, and the bound does not apply to them.
+
 ### Checks and measurement
 
 `tests/bound.rs` covers the compiler's claim across repetitions, alternatives,
 classes, lookbehind and lookahead; a condition only before every start; later
 occurrences found after an earlier one is passed; requested and sticky starts;
-work exhaustion at every small allowance; and relocation. `tools/check-bound.mjs`
+work exhaustion at every small allowance; and relocation. For searches that
+begin later, it compares every start against the same program with the claim
+cleared for literal, folded, alternation and sticky conditions, and requires a
+start near the end of a 20,000-unit subject to succeed within 2,000 work units
+whether the condition recurs every five units or occurs only at the end.
+Reverting the initial search to the first byte fails that test, and dropping
+the claim check fails the lookbehind admission test. `tools/check-bound.mjs`
 compares complete answers against Node over conditions placed before, after,
 around, split across and repeated through the subject, at filler sizes that
 straddle the admission threshold and the scan's chunk boundary, in ordinary and

@@ -140,6 +140,78 @@ fn requested_starts_and_sticky_matching_keep_their_answers() {
     );
 }
 
+/// A search from a late start pays for the subject from that start on, not for
+/// the condition's occurrences before it. A global loop starts one search per
+/// match, and each used to find the first occurrence from the subject's
+/// beginning and then step through every later one to reach its start, which
+/// made the loop quadratic.
+#[test]
+fn a_late_start_does_not_pay_for_earlier_occurrences() {
+    let source = "[a-z]+[0-9]+ ";
+    assert!(forward(source, ""));
+    let bound = words(source, "");
+    let mut unbounded = bound.clone();
+    unbounded[9] &= !FORWARD;
+    // The condition recurs every five units in one subject, and occurs only
+    // once, at the end, in the other.
+    let recurring = "ab12 ".repeat(4_000);
+    let once = format!("{} ", "ab12".repeat(5_000));
+    // Every start, over a subject past the admission threshold, for several
+    // conditions: literal, folded, after an alternation, and at the subject's
+    // edges.
+    let short = "ab12 cdEND aaEND xyz12 END".repeat(5);
+    for (source, flags) in [
+        ("[a-z]+[0-9]+ ", ""),
+        ("a+END", ""),
+        ("(?:ab|cd)[0-9]* ", ""),
+        ("[a-z]+end", "i"),
+        ("x[a-z]*12 ", "y"),
+    ] {
+        let checked = words(source, flags);
+        assert!(forward(source, flags), "/{source}/{flags}");
+        let mut plain = checked.clone();
+        plain[9] &= !FORWARD;
+        for start in 0..=short.len() + 1 {
+            assert_eq!(
+                run(&checked, &short, start, 10_000_000).unwrap(),
+                run(&plain, &short, start, 10_000_000).unwrap(),
+                "/{source}/{flags} from {start}"
+            );
+        }
+    }
+    for subject in [recurring.as_str(), once.as_str()] {
+        let length = subject.len();
+        for start in [
+            0,
+            1,
+            4,
+            5,
+            6,
+            9_999,
+            10_000,
+            length - 10,
+            length - 5,
+            length - 1,
+            length,
+        ] {
+            let expected = run(&unbounded, subject, start, 100_000_000).unwrap();
+            assert_eq!(
+                run(&bound, subject, start, 100_000_000).unwrap(),
+                expected,
+                "{start}"
+            );
+        }
+        // Near the end, what is left is a few records, whatever came before.
+        // From the beginning, the first scan alone would charge the subject.
+        for start in [length - 10, length - 5] {
+            assert!(
+                run(&bound, subject, start, 2_000).is_ok(),
+                "{start} of {length}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_lookbehind_condition_before_the_start_still_matches() {
     // The claim is absent here, so the condition's position must not bound the

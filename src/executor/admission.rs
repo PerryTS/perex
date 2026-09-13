@@ -151,7 +151,20 @@ impl Vm<'_, '_, '_, '_> {
                     self.input.original_bytes()
                 };
                 if ascii && bytes.is_some() {
-                    self.state.phase = Phase::AdmitBytes { offset: 0 };
+                    // A condition every match consumes at or after its own
+                    // start can only be met at or after the requested start,
+                    // so on ASCII storage, where that start is also a byte
+                    // offset, the scan begins there. Occurrences before it
+                    // cannot serve any start this search will try, and a later
+                    // search in a global loop would otherwise pay for all of
+                    // them again.
+                    let offset =
+                        if self.program.admission_forward() && self.input.ascii_bytes().is_some() {
+                            self.state.requested_start
+                        } else {
+                            0
+                        };
+                    self.state.phase = Phase::AdmitBytes { offset };
                 } else {
                     self.cursor = self.input.cursor_at(self.input.len_utf16()).unwrap();
                     self.state.phase = Phase::AdmitSuffix(len);
