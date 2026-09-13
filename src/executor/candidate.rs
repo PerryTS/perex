@@ -418,8 +418,8 @@ pub(super) fn first_in_pairs(
         // Find the marked lane through the word it lands in. A scalar pass over
         // every lane runs on every block once the pairs are dense enough to hit
         // one, and then costs more than the comparisons it follows.
-        for (word, marks) in hit.chunks_exact(8).enumerate() {
-            let marks = u64::from_le_bytes(marks.try_into().unwrap());
+        for (word, marks) in hit.as_chunks::<8>().0.iter().enumerate() {
+            let marks = u64::from_le_bytes(*marks);
             if marks != 0 {
                 let lane = word * 8 + marks.trailing_zeros() as usize / 8;
                 return (Some(base + lane), base + lane + 1);

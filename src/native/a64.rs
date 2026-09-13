@@ -401,8 +401,8 @@ mod tests {
         let length = assembler.finish().expect("encodes");
         assert_eq!(length, N * 4, "emitted a different number of instructions");
         let mut words = [0u32; N];
-        for (word, bytes) in words.iter_mut().zip(code[..length].chunks_exact(4)) {
-            *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        for (word, bytes) in words.iter_mut().zip(code[..length].as_chunks::<4>().0) {
+            *word = u32::from_le_bytes(*bytes);
         }
         words
     }

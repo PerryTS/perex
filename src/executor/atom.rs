@@ -251,8 +251,8 @@ impl Vm<'_, '_, '_, '_> {
                 // Find the lane the run stops at through the word it lands
                 // in rather than by a scalar pass over every lane, which on a
                 // short run costs more than the comparisons it follows.
-                for (word, lanes) in inside.chunks_exact(8).enumerate() {
-                    let lanes = u64::from_le_bytes(lanes.try_into().unwrap());
+                for (word, lanes) in inside.as_chunks::<8>().0.iter().enumerate() {
+                    let lanes = u64::from_le_bytes(*lanes);
                     let stop = if negated { lanes } else { !lanes & ONES };
                     if stop != 0 {
                         let lane = word * 8 + stop.trailing_zeros() as usize / 8;
