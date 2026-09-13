@@ -117,6 +117,12 @@ impl Vm<'_, '_, '_, '_> {
     pub(super) fn admit_step(&mut self, available: usize) -> Result<(), ExecError> {
         match self.state.phase {
             Phase::Admission => {
+                // Admission still runs for these: when the condition is absent
+                // it rejects in one scan a single attempt whose backtracking
+                // could otherwise cost far more than the scan.
+                self.state.anchored =
+                    derive_start_anchored(self.program.words, self.program.instructions());
+                self.state.one_start = self.program.words[2] & Y != 0 || self.state.anchored;
                 if !self.end_candidate()? {
                     self.state.phase = Phase::Finished(false);
                     return Ok(());

@@ -236,6 +236,51 @@ fn derive_alternation(words: &[u32], instructions: usize) -> bool {
     }
 }
 
+/// Whether every successful match asserts `^` without the `m` flag before it
+/// consumes anything, so it can only begin at the subject's start.
+///
+/// From instruction zero, capture bookkeeping is skipped and a `SPLIT` is
+/// followed into both branches; every path must reach `START`. Anything else
+/// first — a character, a class, a repeat, an assertion, a jump, `^` with `m`
+/// — could consume or match elsewhere, and disables the claim. A search for
+/// such a program tries only its first start, as a sticky one does: every later
+/// start fails at the same `^`.
+///
+/// Derived from the instructions each search, like [`derive_leading`], rather
+/// than stored, so no program word can claim it falsely.
+pub(crate) fn derive_start_anchored(words: &[u32], instructions: usize) -> bool {
+    let mut pending = [0usize; LEADING_BRANCHES];
+    let mut depth = 0;
+    let mut pc = 0;
+    let mut inspected = 0;
+    loop {
+        inspected += 1;
+        if inspected > LEADING_SCAN || pc >= instructions {
+            return false;
+        }
+        let at = HEADER + pc * 3;
+        match words[at] {
+            SAVE => pc += 1,
+            SPLIT => {
+                if depth == pending.len() {
+                    return false;
+                }
+                pending[depth] = words[at + 2] as usize;
+                depth += 1;
+                pc = words[at + 1] as usize;
+            }
+            START => {
+                if depth == 0 {
+                    return true;
+                }
+                depth -= 1;
+                pc = pending[depth];
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// The first instruction that can consume input. Only entry `SAVE` bookkeeping
 /// is skipped, so the characters that follow are a contiguous run.
 pub(crate) fn leading_pc(words: &[u32], instructions: usize) -> usize {

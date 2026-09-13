@@ -850,16 +850,26 @@ impl Vm<'_, '_, '_, '_> {
                 | Phase::AdmitScan
                 | Phase::AdmitProbe { .. } => self.admit_step(available)?,
                 Phase::Start => {
+                    let mut target = self.state.requested_start;
+                    // A start-anchored match begins at zero, and a requested
+                    // start is moved back by at most the one unit that splits a
+                    // surrogate pair. From two on nothing can match, so the
+                    // search ends without seeking there.
+                    if self.state.anchored && target >= 2 {
+                        self.charge(1)?;
+                        self.state.phase = Phase::Finished(false);
+                        continue;
+                    }
                     // An end-anchored match of bounded length cannot begin more
                     // than that many units from the subject's end, so the whole
                     // prefix before that is skipped instead of scanned.
-                    let mut target = self.state.requested_start;
                     if let Some(bound) = self.program.end_bound() {
                         let earliest = self.input.len_utf16().saturating_sub(bound);
                         if target < earliest {
-                            if self.program.words[2] & Y != 0 {
-                                // A sticky search only tries its own position,
-                                // which this proves cannot match.
+                            if self.state.one_start {
+                                // A sticky or start-anchored search only tries
+                                // its own position, which this proves cannot
+                                // match.
                                 self.charge(1)?;
                                 self.state.phase = Phase::Finished(false);
                                 continue;
@@ -1093,7 +1103,9 @@ impl Vm<'_, '_, '_, '_> {
                     }
                 }
                 Phase::NextStart => {
-                    if self.program.words[2] & Y != 0 {
+                    // A sticky search tries only its own position, and every
+                    // later start of a start-anchored program fails at its `^`.
+                    if self.state.one_start {
                         self.state.phase = Phase::Finished(false);
                     } else {
                         self.charge(1)?;

@@ -172,3 +172,66 @@ match can be, including zero-width endings, astral characters whose unit count
 exceeds their character count, nullable and multiline endings, repetitions that
 disable the claim, and sticky starts on both sides of the bound: 34,395 cases
 with no differences, unchanged under one-unit resumption with relocation.
+
+## Start-anchored starts
+
+The same argument applies at the other end, and needs no bound. If every
+successful path asserts `^` without the `m` flag before it consumes anything, a
+match can only begin where that assertion holds: at the subject's start. Every
+later start fails at the same `^`, so trying them is work that can only fail.
+A search did try them. After `/^[a-z]/` failed at position zero of a
+90,005-unit subject it tried every other position, charging 240,021 work units
+where one attempt charges a handful. Perry's `test` and `exec` calls pay a
+search per call, so a failing anchored pattern paid it on every call (Perry
+issue #10166).
+
+The claim is derived from the instructions rather than stored, like the leading
+run, so no program word can assert it falsely. From instruction zero, capture
+bookkeeping is skipped and a `SPLIT` is followed into both branches; every path
+must reach `START`. Anything first that could consume or match elsewhere — a
+character, a class, a repeat, an assertion, a jump, or `^` under `m` — disables
+it, so `^a|b`, `(?:^)?a`, `(?:^a)+`, `(?<=^)a` and `(?m)^a` are searched as
+before. The walk inspects at most 128 instructions and eight pending branches,
+once per search, on entering admission.
+
+A start-anchored search then behaves as a sticky one does for choosing starts:
+the candidate scan examines only its first position, and no later start is
+tried. A requested start of two or more cannot match at all — the `u` flag moves
+a start back by at most the one unit that splits a surrogate pair — so such a
+search ends before seeking, which on non-ASCII storage would otherwise cost up to
+half the subject. Admission still runs: when the required text is absent it
+rejects in one scan an attempt whose backtracking could cost far more.
+
+### Measurement
+
+Work units, which are deterministic; wall-clock figures were taken at a load
+average above 100 and are not reported:
+
+| Case | Before | After |
+|---|---:|---:|
+| `/^[a-z]+_[0-9]+$/` against `"!bad_123456"` | 40 | 3 |
+| `/^[a-z]/` against `"!bad_123456"` | 27 | 2 |
+| `/^[a-z]/`, 90,005-unit subject | 240,021 | 2 |
+| `/^abc/`, 90,005-unit subject | 90,011 | 2 |
+| `/^[a-z]+_[0-9]+$/` against `"record_123457"`, a match | 46 | 46 |
+
+### Checks
+
+`tests/start_anchor.rs` compares each pattern against the same pattern written
+as `(?:P|(?!))`, which the derivation does not treat as anchored, from every
+start including past the end, over ASCII, non-ASCII, astral, lone-surrogate and
+UTF-16 subjects on both sides of the admission threshold. The patterns cover
+folding, captures, alternations of anchored branches, empty and end-anchored
+matches, the `u`, `s` and `y` flags, a lookahead after `^`, and the non-anchored
+forms above. A second test requires every failing anchored search to stay under
+500 work units from starts at zero, one, the middle and the end of a
+90,005-unit ASCII subject, a 120,005-unit non-ASCII subject in both WTF-8 and
+UTF-16, and a 10,000-unit subject with no candidate position, while the unanchorable form of the same pattern charges more than
+50,000. Six injected faults are each caught: `^` under `m` counted as anchoring,
+one `SPLIT` branch unchecked, later starts still tried, the candidate scan
+running past the first start, the no-seek rule starting at one instead of two,
+and that rule removed. The engine differential (plain, one- and seventeen-unit
+resumption with relocation, and from positions), and the admission, bound,
+candidate, end-candidate, classes, atom-filter, lookbehind, run-skip, names,
+legacy, repetition, modifiers, casefold, sets and Unicode-sets harnesses report
+no differences.

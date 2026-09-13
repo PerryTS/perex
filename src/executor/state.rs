@@ -193,6 +193,11 @@ pub(super) struct State {
     pub near: Mark,
     /// Whether the search has reached its first start, so `start` is one.
     pub started: bool,
+    /// Whether only the first start can match: the search is sticky, or the
+    /// program is anchored at the subject's start. Set on entering admission.
+    pub one_start: bool,
+    /// Whether the program is anchored at the subject's start.
+    pub anchored: bool,
 }
 impl State {
     pub fn new(start: usize, length: usize) -> Self {
@@ -218,6 +223,8 @@ impl State {
             run_end: UNSET,
             near: Mark::NONE,
             started: false,
+            one_start: false,
+            anchored: false,
         }
     }
 }

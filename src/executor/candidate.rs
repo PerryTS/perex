@@ -223,11 +223,7 @@ impl Vm<'_, '_, '_, '_> {
         }
         let lo = (descriptor >> 8) as u8;
         let hi = (descriptor >> 16) as u8;
-        let limit = if self.program.words[2] & Y != 0 {
-            1
-        } else {
-            4096
-        };
+        let limit = if self.state.one_start { 1 } else { 4096 };
         let mut count = (bytes.len() - start)
             .min(available.min(limit))
             .min(self.budget.remaining());
@@ -303,7 +299,7 @@ impl Vm<'_, '_, '_, '_> {
             }
         };
         if let Some(at) = found {
-            if self.program.words[2] & Y != 0 && at != self.state.requested_start {
+            if self.state.one_start && at != self.state.requested_start {
                 self.state.phase = Phase::Finished(false);
             } else {
                 self.cursor = self.input.cursor_at(at).ok_or(ExecError::InvalidProgram)?;
@@ -315,7 +311,7 @@ impl Vm<'_, '_, '_, '_> {
                 self.state.verified = if leading >= 2 { leading } else { 0 };
                 self.state.phase = Phase::Initialize(0);
             }
-        } else if self.program.words[2] & Y != 0 || start + count == bytes.len() {
+        } else if self.state.one_start || start + count == bytes.len() {
             self.state.phase = Phase::Finished(false);
         } else {
             self.cursor = self
@@ -349,7 +345,7 @@ impl Vm<'_, '_, '_, '_> {
         } else {
             ((descriptor >> 8) as u8, (descriptor >> 16) as u8)
         };
-        let sticky = self.program.words[2] & Y != 0;
+        let sticky = self.state.one_start;
         let count = bytes
             .len()
             .min(available.min(if sticky { 1 } else { 256 }))
