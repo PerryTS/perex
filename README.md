@@ -97,6 +97,11 @@ search or span reader begin where the previous one on the same subject ended, so
 a global loop over a non-ASCII byte string does linear seek work rather than
 seeking from an end every time.
 
+[Binding what the host already validated](docs/binding.md#binding-what-the-host-already-validated)
+takes a subject's known length and a program's validation witness in constant
+work, so a host that searches once per call does not revalidate the whole
+string and program every time.
+
 `BoundSpan::retarget` selects another span of the same immutable binding and reuses
 the current offset when it shortens the seek. Adjacent reads need no prefix
 rescan or subject index. Seeking still consumes the caller's cumulative work

@@ -155,9 +155,63 @@ impl<S: ImmutableSubject> BoundSubject<S> {
             .map_err(SubjectError::Resource)?
     }
 
+    /// Bind storage the host has already validated and counted, in constant
+    /// work.
+    ///
+    /// [`BoundSubject::new`] decodes every scalar of a byte subject to check it
+    /// and to count its UTF-16 units. A host that already knows both, because
+    /// its strings are valid when they are made and carry their length, can
+    /// skip that pass. That is what lets a search per call, such as a
+    /// JavaScript `exec` loop, cost its matching work rather than the whole
+    /// string every time, without the host keeping a cache.
+    ///
+    /// Only what is constant work is checked: UTF-16 storage must have exactly
+    /// `utf16_len` units, and byte storage a length that many units could
+    /// occupy, at least one byte and at most three for each. Whether the bytes
+    /// are generalized UTF-8 holding exactly `utf16_len` units is the host's
+    /// to guarantee, as immutability already is. Storage that breaks that can
+    /// produce wrong answers or a panic, never unsafety. A failed check returns
+    /// the storage with [`SubjectError::ChangedLayout`].
+    pub fn new_counted(
+        storage: S,
+        utf16_len: usize,
+    ) -> Result<Self, BindingError<S, SubjectError<S::Error>>> {
+        let result = storage
+            .with_subject(|subject| match subject {
+                Subject::Wtf8(bytes) => {
+                    let possible =
+                        utf16_len <= bytes.len() && bytes.len() <= utf16_len.saturating_mul(3);
+                    // Valid generalized UTF-8 has as many bytes as units exactly
+                    // when every unit is ASCII, which is how `Input::wtf8`
+                    // chooses the same representation.
+                    let kind = u8::from(utf16_len != bytes.len());
+                    possible.then_some((kind, bytes.len(), utf16_len))
+                }
+                Subject::Utf16(units) => {
+                    (units.len() == utf16_len).then(|| Input::utf16(units).shape())
+                }
+            })
+            .map_err(SubjectError::Resource)
+            .and_then(|layout| layout.ok_or(SubjectError::ChangedLayout));
+        match result {
+            Ok(layout) => Ok(Self { storage, layout }),
+            Err(error) => Err(BindingError { storage, error }),
+        }
+    }
+
     pub fn into_storage(self) -> S {
         self.storage
     }
+}
+
+/// What validating a program established, as plain data: its length and
+/// header. Obtained only from a [`BoundProgram`] that validated it, and small
+/// enough for a host to keep beside the program it describes, so later
+/// bindings of that same program need not validate it again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProgramWitness {
+    header: [u32; crate::program::HEADER],
+    words: usize,
 }
 
 /// A program validated once against an immutable owner, with no interior view.
@@ -189,6 +243,52 @@ impl<P: ImmutableProgram> BoundProgram<P> {
                 words,
             }),
             Err(error) => Err(BindingError { storage, error }),
+        }
+    }
+
+    /// Bind a program that an earlier binding validated, in constant work and
+    /// without a budget.
+    ///
+    /// The program must be the one `witness` came from, unchanged: the same
+    /// immutable words, wherever they have since been moved. Its length and
+    /// header are checked, exactly as every view already checks them, and a
+    /// mismatch returns the storage with [`BoundProgramError::ChangedLayout`].
+    /// The rest of the words are the host's to keep identical, as for every
+    /// binding; different words behind an equal header can produce wrong
+    /// answers or a panic, never unsafety.
+    pub fn new_witnessed(
+        storage: P,
+        witness: ProgramWitness,
+    ) -> Result<Self, BindingError<P, BoundProgramError<P::Error>>> {
+        let result = storage
+            .with_words(|words| {
+                words.len() == witness.words
+                    && words.get(..witness.header.len()) == Some(&witness.header)
+            })
+            .map_err(BoundProgramError::Resource)
+            .and_then(|same| {
+                if same {
+                    Ok(())
+                } else {
+                    Err(BoundProgramError::ChangedLayout)
+                }
+            });
+        match result {
+            Ok(()) => Ok(Self {
+                storage,
+                header: witness.header,
+                words: witness.words,
+            }),
+            Err(error) => Err(BindingError { storage, error }),
+        }
+    }
+
+    /// What this binding's validation established, for binding the same
+    /// program again with [`BoundProgram::new_witnessed`].
+    pub fn witness(&self) -> ProgramWitness {
+        ProgramWitness {
+            header: self.header,
+            words: self.words,
         }
     }
 
