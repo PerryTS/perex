@@ -24,4 +24,4 @@ Legacy lookahead can be quantified. The existing counted-repeat and assertion in
 
 Three Rust tests pin numeric atom boundaries, capture-count distinctions, control prefixes and quantified assertions. Existing name, core, case-folding, input and resource/lifetime tests remain required. A mutant that consumes a third octal digit after 4–7 fails the atom-boundary witness.
 
-Program format and matching storage are unchanged. This is additional correctness coverage, not CPU/RSS evidence or complete ECMAScript conformance. Unicode sets/string properties under `v`, broader Test262/fuzzing, efficient moving-GC resumption and the host adapter remain outstanding.
+Program format and matching storage are unchanged. This is additional correctness coverage, not CPU/RSS evidence or complete ECMAScript conformance. Unicode-sets operators and string properties under `v`, and structured fuzzing, remain outstanding.

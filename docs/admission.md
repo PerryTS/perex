@@ -8,7 +8,7 @@ Literal candidates reference at most 32 consecutive `CHAR` instructions, stoppin
 
 ## Representation and bounds
 
-Experimental program format 5 keeps the seven-word header and existing instruction/table widths. Flag bit 7 enables the check, bit 6 records backward literal order, and the upper 24 bits reference an existing instruction. No program words, second compiled literal, or new owning allocation are added. A candidate beyond the encodable index range omits the optimization; it does not reject the pattern.
+Program format 5 introduced this check and kept the seven-word header and existing instruction/table widths. Flag bit 7 enables the check, bit 6 records backward literal order, and the upper 24 bits reference an existing instruction. No program words, second compiled literal, or new owning allocation are added. A candidate beyond the encodable index range omits the optimization; it does not reject the pattern.
 
 Inference runs after emission and reuses parser-node fields that are no longer needed. The compiler establishes necessity. `Program::from_words` checks the hint's index/opcode bounds, along with the ordinary format, but does not prove arbitrary hand-authored hints are semantically redundant. The format remains unstable and native-endian.
 

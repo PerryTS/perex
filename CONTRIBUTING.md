@@ -1,6 +1,6 @@
 # Contributing
 
-Perex currently has an experimental compiler/matcher, borrowed input cursors, capture spans, an embedding design, and executable engine/input/reference tests. Work toward the milestones in `docs/roadmap.md`; do not substitute stub matching results for missing implementation.
+Perex has a compiler/matcher, borrowed input cursors, capture spans, resumable execution, an embedding design, and executable engine/input/reference tests. Work toward the milestones in `docs/roadmap.md`; do not substitute stub matching results for missing implementation.
 
 ## Correctness
 
@@ -8,7 +8,7 @@ Perex currently has an experimental compiler/matcher, borrowed input cursors, ca
 
 `node tools/reference.mjs --check` executes the fixtures under Node and compares all answers against the committed JSONL. `--emit` writes answers to stdout. `--compare FILE` checks candidate answers against the reference, rejects duplicate/missing/extra IDs and exits nonzero on any disagreement. The comparator tests deliberately alter a capture and corrupt coverage to show those failures are detected.
 
-To intentionally update fixtures, use the pinned Node version and run `node tools/reference.mjs --write`. Review fixture changes, expected answers and the generated receipt together. Never regenerate expected output just to hide a disagreement. Node is a differential reference; resolve semantic disputes using the selected ECMAScript specification and independent implementations. Expanding to Test262 and structured fuzzing remains required.
+To intentionally update fixtures, use the pinned Node version and run `node tools/reference.mjs --write`. Review fixture changes, expected answers and the generated receipt together. Never regenerate expected output just to hide a disagreement. Node is a differential reference; resolve semantic disputes using the selected ECMAScript specification and independent implementations. Test262 pattern conformance is measured in `docs/conformance.md`; structured fuzzing remains required.
 
 ## Ownership and safety
 

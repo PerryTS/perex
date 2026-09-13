@@ -1,8 +1,8 @@
 # Architecture
 
-Perex is one independent ECMAScript regex compiler and matcher. The initial implementation will use one compact bytecode representation and evaluator. Native/AOT compilation is future work after the portable core passes semantic, memory and CPU gates.
+Perex is one independent ECMAScript regex compiler and matcher, built on one compact bytecode representation and evaluator. An optional native [compilation tier](compilation.md) emits code for a subset of programs; the bytecode evaluator remains the definition of every answer.
 
-The experimental core consumes exact pattern text and flags, compiles supported syntax into immutable relocatable storage, and executes against a lossless subject view with explicit starting position and caller-controlled scratch. It returns match/capture spans or explicit errors. The implemented APIs and remaining semantics/storage limits are described in `engine.md` and `input.md`; the API and binary format are unstable.
+The core consumes exact pattern text and flags, compiles supported syntax into immutable relocatable storage, and executes against a lossless subject view with explicit starting position and caller-controlled scratch. It returns match/capture spans or explicit errors. The implemented APIs and remaining semantics/storage limits are described in `engine.md` and `input.md`. The program format is versioned and native-endian: a program from another format version is rejected, and it is not a cross-endian serialization format.
 
 ## Engine and host
 

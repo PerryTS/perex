@@ -1,6 +1,6 @@
 # Host memory contract
 
-This document specifies implementation requirements. Borrowed input/spans and an experimental relocatable program/compiler/evaluator are implemented. See `input.md` and `engine.md` for current limits; efficient moving-safepoint resumption and the host adapter remain outstanding.
+This document specifies implementation requirements. Borrowed input/spans, the relocatable program, the compiler, the evaluator and resumable execution implement them, and Perry's runtime adapter meets the host side under a moving collector. See `input.md` and `engine.md` for current limits.
 
 ## Programs
 

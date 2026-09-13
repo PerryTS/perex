@@ -1,6 +1,6 @@
-# Experimental compiler and evaluator
+# Compiler and evaluator
 
-Perex now has one compiler and ordered bytecode evaluator. It is an implementation in progress, not a production replacement or a complete ECMAScript engine. There are no matching-library dependencies or fallback routes. All core modules remain `no_std` and forbid unsafe code.
+Perex has one compiler and ordered bytecode evaluator, and it is Perry's production regex engine. It is not a complete ECMAScript regular-expression implementation: the `v` flag's set operators, string members and properties of strings report an explicit unsupported outcome. There are no matching-library dependencies or fallback routes. All core modules remain `no_std` and forbid unsafe code.
 
 Compilation supports a one-call API and an explicit [prepared plan](compilation-plan.md).
 Both use the same parser and emitter; preparation permits exact output allocation
@@ -32,7 +32,7 @@ The output is one immutable relocatable buffer: an nine-word header, three words
 
 One `Budget` covers all start positions, assertions, table scans, backreference comparisons, initial seeks and rollback. Syntax, unsupported features, work exhaustion and each insufficient scratch/storage category are distinct. Capture output is untouched on no-match/error and committed only after a complete match and bounds checks; never consume output without `Ok(true)`. Scratch contents after a call are opaque reusable workspace, with no retained engine borrow or hidden cache.
 
-The synchronous `find` API uses the same evaluator as the experimental [resumable `Search`](resumption.md). An operation can retain partial work and release every input/program view between advances, then restore offsets against fresh validated views from a rooted immutable owner. Explicit replacement transfers live scratch to host-allocated buffers after frame/undo exhaustion, preserving the operation's remaining work. Experimental [bindings](binding.md) avoid repeated program/input validation during view reacquisition. The actual host must enforce their identity, immutability and non-collecting-getter requirements. Initial validation remains synchronous, and initial/backreference seeks in byte storage can be linear. These costs and the actual host borrow/root boundary need implementation and measurement before adoption, without copying subjects or hiding an unbounded GC pause.
+The synchronous `find` API uses the same evaluator as the [resumable `Search`](resumption.md). An operation can retain partial work and release every input/program view between advances, then restore offsets against fresh validated views from a rooted immutable owner. Explicit replacement transfers live scratch to host-allocated buffers after frame/undo exhaustion, preserving the operation's remaining work. [Bindings](binding.md) avoid repeated program/input validation during view reacquisition. The host must enforce their identity, immutability and non-collecting-getter requirements; Perry's runtime adapter does, and its moving-collector witnesses exercise that boundary. Initial validation remains synchronous, and initial/backreference seeks in byte storage can be linear.
 
 ## Verification and gaps
 
@@ -54,4 +54,4 @@ node tools/check-engine.mjs target/release/examples/engine_probe \
 
 `tools/check-legacy.mjs` adds 112,748 exact Node answers for 1,047 numeric spellings, forward/named capture counts, atom/quantifier boundaries, all 256 control-prefix suffix bytes and quantified assertions. Three Rust tests pin the corresponding interactions.
 
-Complete Unicode/grammar support, Test262, broader differential generation, efficient host resumption, per-owner allocation accounting, Perry's GC/operation adapter and the full per-case CPU/RSS comparisons remain required. Experimental suspension and scratch growth still need host verification and performance evidence. This change establishes actual matching and its test boundary, not the performance goal.
+Test262 pattern conformance is measured in [conformance](conformance.md). Still open: the `v` set operators, string members and properties of strings; structured differential fuzzing; per-owner allocation accounting; and whole-application CPU/RSS comparisons in the host. Engine-level CPU figures are in [performance](performance.md).

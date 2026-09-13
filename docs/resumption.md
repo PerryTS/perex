@@ -1,8 +1,8 @@
-# Experimental resumable execution
+# Resumable execution
 
 `Search` retains one operation's offset state, exclusive caller-owned scratch, work budget and a reference to the host's rooted `Resources` owner. It holds no subject or program view between `advance` calls. The synchronous `find` function runs this same evaluator to completion; there is no second matcher or fallback route.
 
-This implementation is under validation. Pause/resume, explicit scratch replacement and constant-work owner-bound reborrowing are implemented experimentally. Perry's owner/GC adapter and performance requirements remain outstanding; this is not moving-GC adoption evidence.
+Pause/resume, explicit scratch replacement and constant-work owner-bound reborrowing are implemented. Perry's runtime runs its searches through `Search::advance`, pausing for its moving collector; those owner/GC witnesses live in Perry.
 
 ## Borrow and identity boundary
 
@@ -10,7 +10,7 @@ A `Resources` implementation supplies validated `Program` and `Input` views insi
 
 The implementation retains header/layout metadata and checks fresh views against it. At the advance boundary, saved-current-cursor restoration also checks bounds, encoding boundaries and half-pair consistency. Within that borrow, private VM marks restore only offsets against the same immutable input. These checks do not establish that unrelated equal-length buffers are identical. Rooted identity and immutability are the owner's semantic contract; violating it can produce incorrect answers or a panic. The core remains safe Rust and does not introduce unchecked public view constructors.
 
-The ordinary byte/program constructors scan to validate/count. Experimental [owner-bound validation](binding.md) retains the immutable owner and initial metadata, then scopes new views without repeating those scans. The relocation matrix and development probe use that path. The host still has to establish the actual root/immutability and non-collecting-getter invariants. Initial validation remains synchronous and has a separate work/latency boundary.
+The ordinary byte/program constructors scan to validate/count. [Owner-bound validation](binding.md) retains the immutable owner and initial metadata, then scopes new views without repeating those scans. The relocation matrix and development probe use that path. The host still has to establish the actual root/immutability and non-collecting-getter invariants. Initial validation remains synchronous and has a separate work/latency boundary.
 
 ## Work and completion
 

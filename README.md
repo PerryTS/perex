@@ -1,8 +1,10 @@
 # Perex
 
-An independent ECMAScript regex engine being developed for [Perry](https://github.com/PerryTS/perry) and other embedders.
+An independent ECMAScript regex engine for [Perry](https://github.com/PerryTS/perry) and other embedders that own their memory.
 
-**Status: experimental compiler, matcher, borrowed input and capture spans.** One evaluator implements core matching, numbered/named captures, repetition, scoped flags, assertions and backreferences using caller-owned storage and original subject bytes. Experimental pause/resume retains offset state between scoped borrows, supports explicit scratch replacement and reborrows through immutable owner bindings without rescanning. Full Unicode/grammar support, actual host invariants and Perry integration remain outstanding. There is no production adoption. The crate has no dependencies and uses no standard library.
+Perex is Perry's only regular-expression engine: its runtime's `RegExp`, string methods and glob matching, and its CLI's own patterns, all run on it. One evaluator implements matching, numbered and named captures, repetition, scoped flags, assertions and backreferences over caller-owned storage and the original subject bytes. A search can pause at any instruction, release every borrow, and resume against storage a moving collector has relocated.
+
+Against every pattern harvested from Test262 — 47,658 compared cases — Perex and V8 make the same syntax decision and produce the same complete answer on every one. The remaining gap is the `v` flag's set operators, string members and properties of strings, which Perex reports as unsupported rather than approximating; see [conformance](docs/conformance.md). The crate has no dependencies and uses no standard library.
 
 Against V8, on the twenty-five authored cases in [`bench/`](bench/), Perex is at or better than V8 on every one when the faster of its two execution paths is taken — but taking it is the open part: nothing yet chooses between the interpreter and the [compilation tier](docs/compilation.md), and the tier is AArch64-only and loses badly on long subjects. [`docs/performance.md`](docs/performance.md) records the figures, the method, and every measurement that refuted an idea, which is the standard this project holds its own claims to.
 
@@ -15,7 +17,7 @@ Perex is designed around one matching engine and explicit host memory ownership:
 - Explicit syntax, memory, resource-limit and cancellation outcomes.
 - No hidden process-global cache or second runtime heap.
 
-The public API will be Rust. Implementation-language choices remain open. A future convenience API can use ordinary owned Rust buffers while executing the same core.
+The API is Rust and never allocates. An owned-buffer convenience layer belongs in the embedder over the same core, as Perry's adapter does.
 
 ## Using it
 
@@ -81,14 +83,14 @@ emits. See [`bench/README.md`](bench/README.md).
 | Program representation and execution state | JS objects, `lastIndex`, callbacks and string operations |
 | Engine conformance, fuzzing and microbenchmarks | Whole-application correctness, CPU and memory measurements |
 
-Perex does not depend on `perry-runtime`. Perry will use a pinned Perex revision through a thin adapter. Local development can use a Cargo path override; there should be one authoritative engine source. No Perry dependency is installed yet; the experimental API has not met the full integration/adoption gates.
+Perex does not depend on `perry-runtime`. Perry depends on the published crate through thin adapters: a traced, relocation-aware one in its runtime and an owned-buffer one for its build tooling. This repository is the one authoritative engine source.
 
 Start with the [implemented engine and its limits](docs/engine.md), [architecture](docs/architecture.md), the [memory contract](docs/memory-contract.md), and the [implementation milestones](docs/roadmap.md). The [research notes](docs/research.md) explain the source material and what existing engine tests do and do not establish.
 
 The [compilation plan](docs/compilation-plan.md) separates parsing from final
 storage allocation without retaining the original pattern view or resetting work.
 
-The experimental [input API](docs/input.md) reads the original string, including individual surrogate halves inside four-byte UTF-8 characters. Capture spans borrow those units without constructing substrings. `span::BoundSpan` traverses captures in bounded steps across owner relocation, including initial seeking, so a host can allocate exact output strings without a subject conversion buffer. Its consumer callback runs inside the input borrow; allocation and collection belong between steps. Validation, seeking and relocation costs are documented explicitly. The [performance requirements](docs/performance.md) preserve per-case CPU and RSS results alongside complete host measurements.
+The [input API](docs/input.md) reads the original string, including individual surrogate halves inside four-byte UTF-8 characters. Capture spans borrow those units without constructing substrings. `span::BoundSpan` traverses captures in bounded steps across owner relocation, including initial seeking, so a host can allocate exact output strings without a subject conversion buffer. Its consumer callback runs inside the input borrow; allocation and collection belong between steps. Validation, seeking and relocation costs are documented explicitly. The [performance requirements](docs/performance.md) preserve per-case CPU and RSS results alongside complete host measurements.
 
 `BoundSpan::retarget` selects another span of the same immutable binding and reuses
 the current offset when it shortens the seek. Adjacent reads need no prefix
@@ -170,9 +172,3 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 [Skipping a failed start's run](docs/repetition.md) removes the starts inside a leading atom repeat's run once one of them has failed, since each reaches a subset of the positions the first one tried.
 
 [Single-atom repetition merging](docs/repetition.md) removes duplicate partitions when match ordering can be preserved, using the same evaluator and caller-owned storage.
-
-Unicode-sets (`v`) admission currently covers patterns without character
-classes or property escapes, including empty patterns, captures, assertions,
-backreferences and builtin character escapes. They emit the same Unicode
-programs as `u`. Nested sets, string members and property escapes remain
-explicitly unsupported; complete `v` compatibility is still an adoption gate.
