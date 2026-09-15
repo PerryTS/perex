@@ -437,3 +437,103 @@ interpreter when that runs out.
 
 The cross-backend comparison planned for stage 6 needs no oracle, because the
 two backends must produce identical answers.
+
+## What adopting this in a host needs
+
+Stages 1 to 4 are done and the tier still runs nowhere. This is what stands
+between it and Perry, in the order it would have to be built, with what each
+part is worth.
+
+### What it is worth
+
+Per match, walking every match of `"ab12 cd345;".repeat(100000)` — 1.1 MB, ASCII,
+200,000 matches — on the development machine under other load, best of five:
+
+| Per match | `/[0-9]+/g` | `/([a-z]+)([0-9]+)/g` |
+|---|---:|---:|
+| A `Search` per match, as a host runs one | 139 ns | 197 ns |
+| One search restarted per match | 112 ns | 169 ns |
+| Synchronous `find` per match | 95 ns | 154 ns |
+| Generated code per match | 7.8 ns | 6.6 ns |
+| V8's whole `exec` loop, including its result arrays | 27 ns | 42 ns |
+
+So the tier is twelve to twenty times the interpreter on this shape, and below
+V8's per-match cost even counting what V8 allocates. That is the case for
+building the rest. It is one shape on one machine: the ratio, not the
+nanoseconds, is the result.
+
+For scale, Perry's own per-match cost in a callback `replace` is about 3,200 ns
+after Perry issue #10225, of which the engine is 140 to 200. Making the engine
+free would leave that loop at roughly eighteen times Node. The tier is worth
+building for what a host will be once its own costs come down, not for what it
+fixes today.
+
+### Stage 5: an x86-64 encoder
+
+CI is x86-64, so today CI cannot execute a single generated instruction, and by
+this project's rules an untested code generator is not evidence. The instruction
+selection in `emit` is already separate from `a64`'s encoding; the second
+backend implements the same operations, its own emulator decodes independently,
+and `verify` gains an x86-64 decoder against the same proofs.
+
+Two backends also give a test no oracle can: the same program over the same
+subject must produce identical answers on both, so a mistake in one shows up
+without asking V8 or the interpreter what the answer is.
+
+### Stage 6: choosing a path
+
+The budget already answers this. Run the generated code with a small allowance;
+if it returns `EXHAUSTED`, the interpreter runs the same search from the same
+start. Wasted work is bounded by the allowance times the code's length, and
+correctness never depends on which path ran. `/needle/` over 256 KiB — where
+generated code is nineteen times slower than the interpreter, because it tries
+every start where admission skips them — becomes a bounded loss, and the
+allowance is chosen by measuring exactly that case.
+
+The rule is then: the program is in the subset, the subject is ASCII storage,
+code exists for the target, and an allowance is set. Everything else is the
+interpreter, as now.
+
+### Stage 7: the host boundary
+
+Two routes, and they are not equivalent:
+
+- **Ahead of time.** Perry compiles TypeScript to a binary, so a regex literal's
+  code can be emitted at build time, linked as ordinary read-only data, and
+  checked by `verify` when it is first used — the same check `Program::from_words`
+  already performs for a program. No executable memory is mapped at runtime,
+  which is what makes it work on platforms that forbid it, iOS among them.
+  Dynamic `new RegExp` keeps the interpreter.
+- **At runtime.** Map, protect and call, as `bench/src/bin/native.rs` already
+  does. It covers dynamic patterns, and it needs W^X mapping, an entitlement
+  under the hardened runtime on macOS, and is unavailable on iOS.
+
+Ahead of time first: it covers the literals that dominate real programs, and it
+avoids the platform questions entirely.
+
+### Stage 8: coverage
+
+The subset is a sequence of atoms, greedy repeats of atoms, captures, the
+anchors and a literal lookbehind, over ASCII storage. What falls back is
+alternation, lazy repeats, backreferences, non-ASCII characters and classes, and
+case-insensitive classes. `examples/compilable` counts what qualifies over the
+benchmark patterns; the same count over Perry's own patterns decides whether
+alternation — the one that needs real branching in generated code — is worth
+adding before anything else.
+
+### What has to be decided
+
+- Ahead-of-time or runtime first; this note argues ahead of time.
+- Whether the x86-64 encoder comes before or after a host integration on
+  AArch64. CI argues for before.
+- How much coverage is required before adoption, measured over the host's own
+  patterns rather than guessed.
+- Where the host-side work lives, since emitting, linking, verifying and
+  selecting are all the host's, and this crate keeps `#![forbid(unsafe_code)]`.
+
+### What stays true whatever is decided
+
+Generated code is an optimization of one definition: the interpreter. Both paths
+run every differential case, disagreement is a bug rather than a fallback, and
+the subset is decided from the program before a search, never from how one is
+going.
