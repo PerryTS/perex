@@ -280,19 +280,27 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
         if quantum == 0 {
             return Ok(Progress::Pending);
         }
-        let result = self
-            .resources
+        // Each field is borrowed on its own, so the state the evaluator works
+        // through is this operation's rather than a copy of it.
+        let Self {
+            resources,
+            buffers,
+            shape,
+            state,
+            budget,
+        } = self;
+        let result = resources
             .with_views(|program, input| {
-                if Shape::new(program, input) != self.shape {
+                if Shape::new(program, input) != *shape {
                     return Err(ExecError::ChangedResources);
                 }
                 let cursor = input
-                    .resume_cursor(self.state.current)
+                    .resume_cursor(state.current)
                     .ok_or(ExecError::ChangedResources)?;
-                let mut scratch = self.buffers.scratch();
-                if scratch.registers.len() < self.shape.registers()
-                    || scratch.frames.len() < self.state.frames
-                    || scratch.undo.len() < self.state.undo
+                let mut scratch = buffers.scratch();
+                if scratch.registers.len() < shape.registers()
+                    || scratch.frames.len() < state.frames
+                    || scratch.undo.len() < state.undo
                 {
                     return Err(ExecError::ChangedResources);
                 }
@@ -301,13 +309,12 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
                     input,
                     cursor,
                     scratch: &mut scratch,
-                    state: self.state,
-                    budget: self.budget,
+                    state,
+                    budget: *budget,
                 };
                 let result = vm.run(quantum);
                 vm.state.current = vm.cursor.mark();
-                self.state = vm.state;
-                self.budget = vm.budget;
+                *budget = vm.budget;
                 result
             })
             .map_err(SearchError::Resource)?;
@@ -457,7 +464,9 @@ struct Vm<'a, 'p, 's, 'w> {
     input: Input<'a>,
     cursor: Cursor<'a>,
     scratch: &'w mut Scratch<'s>,
-    state: State,
+    /// Borrowed, not copied: an operation's state is a few hundred bytes, and
+    /// every advance would otherwise copy it in and out again.
+    state: &'w mut State,
     budget: Budget,
 }
 /// Phases run in the same dispatcher round as the one that set them, when that
@@ -1450,12 +1459,13 @@ pub fn find(
     // The caller already holds both immutable views. Enter the same evaluator
     // directly; constructing a rooted-owner binding is unnecessary for this
     // single borrow. Search uses this identical VM across multiple borrows.
+    let mut state = State::new(start_utf16, input.len_utf16());
     let mut vm = Vm {
         program,
         input,
         cursor: input.cursor(),
         scratch: &mut scratch,
-        state: State::new(start_utf16, input.len_utf16()),
+        state: &mut state,
         budget: *budget,
     };
     let result = vm.run(usize::MAX);

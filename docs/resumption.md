@@ -90,9 +90,14 @@ as the result:
 | `/[0-9]+/g` | 139 ns | 112 ns | 95 ns |
 | `/([a-z]+)([0-9]+)/g` | 197 ns | 169 ns | 154 ns |
 
-That removes about a fifth of the per-match cost of the resumable path and
-leaves roughly 17 ns, which is the view acquisition and state transfer each
-advance does.
+That removes about a fifth of the per-match cost of the resumable path. What
+was left was the view acquisition and the state transfer each advance does, and
+the transfer is now gone too: the evaluator borrows the operation's state
+instead of copying its few hundred bytes in and out every advance. Alternating
+binaries under load, that took a further 10 to 20 ns off each search on this
+path — a `Search` per match from 150-198 ns to 144-157, one restarted per match
+from 123-131 to 115-126 — while the synchronous `find`, which keeps its state
+locally, and the generated code did not move.
 
 A host can also lend its scratch instead of giving it up: `&mut O` is a
 `ScratchOwner` wherever `O` is one, so a search holds a pointer to the host's
