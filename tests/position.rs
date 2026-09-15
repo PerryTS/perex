@@ -513,6 +513,59 @@ fn a_restarted_search_finds_what_a_new_one_finds() {
     assert!(compared > 300, "{compared} matches compared");
 }
 
+/// A search over borrowed scratch finds what one that owns it finds, restarts
+/// the same way, and hands the borrow back. A host that keeps its buffers
+/// across calls lends them like this instead of moving them into every search.
+#[test]
+fn a_borrowed_scratch_owner_searches_like_an_owned_one() {
+    for (label, storage) in subjects() {
+        for &(pattern, flags) in PATTERNS {
+            let owner = Owner::new(pattern, flags, storage.clone());
+            let length = owner.with_input(|_, input| input.len_utf16());
+            let program = BoundProgram::new(&owner, &mut Budget::new(10_000_000)).unwrap();
+            let subject = BoundSubject::new(&owner).unwrap();
+            let resources = BoundResources {
+                program: &program,
+                subject: &subject,
+            };
+            let mut lent = Buffers::new();
+            for start in 0..=length {
+                let owned = finish(
+                    Search::new(&resources, start, Buffers::new(), Budget::new(1_000_000)).unwrap(),
+                    &owner,
+                );
+                let mut search =
+                    Search::new(&resources, start, &mut lent, Budget::new(1_000_000)).unwrap();
+                let progress = loop {
+                    match search.advance(3) {
+                        Ok(Progress::Pending) => owner.relocate(),
+                        Ok(progress) => break progress,
+                        Err(error) => panic!("/{pattern}/{flags} over {label}: {error:?}"),
+                    }
+                };
+                let mut captures = vec![None; search.capture_count()];
+                let matched = progress == Progress::Matched;
+                if matched {
+                    search.copy_captures(&mut captures).unwrap();
+                }
+                assert_eq!(matched, owned.matched, "/{pattern}/{flags} over {label}");
+                if matched {
+                    assert_eq!(captures, owned.captures, "/{pattern}/{flags} over {label}");
+                }
+                assert_eq!(
+                    search.remaining_work(),
+                    owned.remaining,
+                    "/{pattern}/{flags} over {label}"
+                );
+                search.restart_at(start);
+                // Handing the borrow back leaves the owner reusable for the
+                // next search, which is how a host keeps one set of buffers.
+                let _: &mut Buffers = search.into_buffers();
+            }
+        }
+    }
+}
+
 /// Restarting is a new operation: what the previous one ended as does not
 /// survive it, and a start past the end is no match.
 #[test]

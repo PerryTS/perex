@@ -94,6 +94,18 @@ That removes about a fifth of the per-match cost of the resumable path and
 leaves roughly 17 ns, which is the view acquisition and state transfer each
 advance does.
 
+A host can also lend its scratch instead of giving it up: `&mut O` is a
+`ScratchOwner` wherever `O` is one, so a search holds a pointer to the host's
+buffers rather than a copy. A host that keeps its scratch across calls — a pool,
+a per-thread buffer — then builds and moves nothing per search, and the borrow
+is what stops a nested search from sharing live scratch with the one it
+interrupted; a compile-fail example in the trait's documentation fixes that.
+Perry measured a 336-byte structure move per call into `Search` from building
+its buffers each time (Perry issue #10166), which is what this removes. It makes
+no measurable difference in a Rust microbenchmark, where the move is within one
+frame and the compiler elides it; the cost is in a host that constructs the
+owner per call.
+
 A host that resumes after an empty match must advance the way the specification
 does: one code point under the `u` flag, one unit otherwise. Advancing a single
 unit inside a surrogate pair does not make progress, because a `u` search
@@ -123,6 +135,10 @@ The owned-scratch witness begins with no frames or undo entries and grows only a
 The scratch-reuse witness consumes completed, pending, cancelled, work-limited and capacity-blocked operations. It destroys and poisons the previous program/subject owner while keeping the exact scratch allocations, then matches unrelated resources with those allocations. Reclaiming scratch must acquire no additional resource view.
 
 The development `scratch_cost` driver compares fixed buffers, fresh zero-frame/undo buffers, reuse, and reuse with a 64 KiB payload retention cap. Growth uses powers of two up to the same fixed caps (16,384 frames and 131,072 undo entries), with allocation and cleanup outside resource views. `verify` checks every iteration's complete captures and work against synchronous `find`. Timing modes report explicitly owned scratch payload, all buffer allocations/frees, replacement overlap, transferred live metadata and retained payload; these counters exclude allocator metadata, engine state on the stack, program/capture storage and process RSS. Compilation scratch, program capacity and capture capacity are reported separately. External process measurements are still required, and no convenience allocation policy is installed in the core or Perry.
+
+`tests/position.rs` checks a borrowed owner against an owning one: the same
+answer, captures and remaining work from every start of every subject in its
+corpus, with the borrow handed back through `into_buffers` for the next search.
 
 `tests/position.rs` also covers restarting. It walks every match of every
 pattern in its set over each subject twice — a new search from the previous

@@ -77,6 +77,27 @@ impl ScratchOwner for Scratch<'_> {
         }
     }
 }
+/// Lending an owner rather than giving it up, so a search holds a pointer to
+/// the host's buffers instead of a copy of them. A host that keeps its scratch
+/// across calls — a pool, a per-thread buffer — then pays no move per search,
+/// and the borrow is what keeps a nested search from sharing live scratch with
+/// the one it interrupted:
+///
+/// ```compile_fail
+/// use perex::executor::{Frame, Scratch, Search, Undo};
+/// # fn share<R: perex::executor::Resources>(resources: &R, budget: perex::Budget) {
+/// let (mut registers, mut frames, mut undo) = (vec![0; 8], vec![Frame::default(); 8], vec![Undo::default(); 8]);
+/// let mut owner = Scratch { registers: &mut registers, frames: &mut frames, undo: &mut undo };
+/// let outer = Search::new(resources, 0, &mut owner, budget).ok().unwrap();
+/// let inner = Search::new(resources, 0, &mut owner, budget).ok().unwrap();
+/// # let _ = (outer, inner);
+/// # }
+/// ```
+impl<O: ScratchOwner + ?Sized> ScratchOwner for &mut O {
+    fn scratch(&mut self) -> Scratch<'_> {
+        (**self).scratch()
+    }
+}
 
 /// A rooted, immutable program/subject pair whose backing allocations may move.
 ///
