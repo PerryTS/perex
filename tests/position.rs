@@ -411,6 +411,153 @@ fn a_global_loop_from_positions_does_linear_work() {
     );
 }
 
+/// Where a global loop resumes after an empty match: the next code point under
+/// the `u` flag, the next unit otherwise. A unit is not enough there, because a
+/// start inside a surrogate pair is normalized back to the pair, which would
+/// find the same empty match forever.
+fn after_empty(owner: &Owner, at: usize, unicode: bool) -> usize {
+    if !unicode {
+        return at + 1;
+    }
+    owner.with_input(|_, input| {
+        let mut cursor = input.cursor_at(at).expect("a position in the subject");
+        match cursor.next_point() {
+            Some(_) => cursor.position(),
+            None => at + 1,
+        }
+    })
+}
+
+/// Walking every match of a subject: restarting one search must give what a
+/// new search from the previous position gives — the same spans, captures,
+/// charged work and positions — for every pattern and storage, with the owner
+/// relocating at every pause.
+#[test]
+fn a_restarted_search_finds_what_a_new_one_finds() {
+    let mut compared = 0;
+    for (label, storage) in subjects() {
+        for &(pattern, flags) in PATTERNS {
+            let owner = Owner::new(pattern, flags, storage.clone());
+            let length = owner.with_input(|_, input| input.len_utf16());
+            let program = BoundProgram::new(&owner, &mut Budget::new(10_000_000)).unwrap();
+            let subject = BoundSubject::new(&owner).unwrap();
+            let resources = BoundResources {
+                program: &program,
+                subject: &subject,
+            };
+            // Every match, as a global loop takes them: from the end of the
+            // last one, a unit on when it was empty.
+            let mut fresh = Vec::new();
+            let (mut start, mut near) = (0, None);
+            // One allowance for the whole walk, as a host gives an operation,
+            // so the work each match leaves can be compared.
+            let mut budget = Budget::new(usize::MAX);
+            while start <= length {
+                let search = match near {
+                    Some(near) => Search::new_near(&resources, start, near, Buffers::new(), budget),
+                    None => Search::new(&resources, start, Buffers::new(), budget),
+                }
+                .unwrap_or_else(|_| panic!("/{pattern}/{flags} over {label} from {start}"));
+                let outcome = finish(search, &owner);
+                budget = Budget::new(outcome.remaining);
+                near = Some(outcome.position);
+                if !outcome.matched {
+                    break;
+                }
+                let span = outcome.captures[0].expect("a match has a span");
+                fresh.push((
+                    outcome.captures.clone(),
+                    outcome.remaining,
+                    outcome.position,
+                ));
+                start = if span.is_empty() {
+                    after_empty(&owner, span.end(), flags.contains('u'))
+                } else {
+                    span.end()
+                };
+            }
+
+            let mut restarted = Vec::new();
+            let mut search =
+                Search::new(&resources, 0, Buffers::new(), Budget::new(usize::MAX)).unwrap();
+            let mut start = 0;
+            while start <= length {
+                let progress = loop {
+                    match search.advance(3) {
+                        Ok(Progress::Pending) => owner.relocate(),
+                        Ok(progress) => break progress,
+                        Err(error) => panic!("/{pattern}/{flags} over {label}: {error:?}"),
+                    }
+                };
+                if progress != Progress::Matched {
+                    break;
+                }
+                let mut captures = vec![None; search.capture_count()];
+                search.copy_captures(&mut captures).unwrap();
+                let span = captures[0].expect("a match has a span");
+                restarted.push((captures, search.remaining_work(), search.position()));
+                start = if span.is_empty() {
+                    after_empty(&owner, span.end(), flags.contains('u'))
+                } else {
+                    span.end()
+                };
+                search.restart_at(start);
+            }
+            assert_eq!(
+                restarted, fresh,
+                "/{pattern}/{flags} over {label}: restarting must find what new searches find"
+            );
+            compared += fresh.len();
+        }
+    }
+    assert!(compared > 300, "{compared} matches compared");
+}
+
+/// Restarting is a new operation: what the previous one ended as does not
+/// survive it, and a start past the end is no match.
+#[test]
+fn a_restart_leaves_no_state_of_the_search_before_it() {
+    let owner = Owner::new("a+", "", wtf8("xaaay"));
+    let program = BoundProgram::new(&owner, &mut Budget::new(1_000_000)).unwrap();
+    let subject = BoundSubject::new(&owner).unwrap();
+    let resources = BoundResources {
+        program: &program,
+        subject: &subject,
+    };
+    // Frames too small for the search's retries: a capacity request, which the
+    // restart must clear.
+    let mut cramped = Buffers::new();
+    cramped.frames.clear();
+    cramped.undo.clear();
+    let mut search = Search::new(&resources, 0, cramped, Budget::new(1_000_000)).unwrap();
+    let blocked = search.advance(64);
+    assert!(matches!(
+        blocked,
+        Err(SearchError::Execution(ExecError::Frames | ExecError::Undo))
+    ));
+    search.restart_at(0);
+    let search = search
+        .rebuffer(Buffers::new())
+        .unwrap_or_else(|_| panic!("replacement scratch is sufficient"));
+    let outcome = finish(search, &owner);
+    assert!(outcome.matched);
+    assert_eq!(outcome.captures[0], Span::new(1, 4));
+
+    // A cancelled search restarts, and a start past the end is no match.
+    let mut search = Search::new(&resources, 0, Buffers::new(), Budget::new(1_000_000)).unwrap();
+    search.cancel();
+    assert!(matches!(
+        search.advance(64),
+        Err(SearchError::Execution(ExecError::Cancelled))
+    ));
+    search.restart_at(5);
+    assert_eq!(search.advance(64).unwrap(), Progress::NoMatch);
+    search.restart_at(6);
+    assert_eq!(search.advance(64).unwrap(), Progress::NoMatch);
+    search.restart_at(1);
+    assert_eq!(search.advance(64).unwrap(), Progress::Matched);
+}
+
 #[test]
 fn a_position_from_another_subject_is_refused() {
     let owner = Owner::new("a", "", wtf8("éa"));

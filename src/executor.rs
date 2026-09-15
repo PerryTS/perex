@@ -197,6 +197,25 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
         Ok(search)
     }
 
+    /// Search the same resources again, from `start_utf16`, keeping this
+    /// operation's shape, scratch owner and remaining budget, and starting from
+    /// where this search left off.
+    ///
+    /// A host that walks every match of one subject — a global `replace`,
+    /// `matchAll`, or an `exec` loop — runs one search per match. Building a
+    /// [`Search`] for each re-acquires both owners to take their shape and
+    /// re-checks the scratch, which this reuses: the same views the next
+    /// advance acquires anyway. The answer, the work charged and the position
+    /// are what a new search started at [`Search::position`] would produce.
+    ///
+    /// Completed, cancelled and failed searches restart alike; a blocked
+    /// capacity request does not survive, so read captures first.
+    pub fn restart_at(&mut self, start_utf16: usize) {
+        let near = self.position().mark;
+        self.state = State::new(start_utf16, self.shape.input.2);
+        self.state.near = near;
+    }
+
     /// A position in this search's subject that a later search or span reader
     /// can start from: the match's end once it has matched; otherwise the start
     /// of the last attempt it made, which for a sticky search is its requested

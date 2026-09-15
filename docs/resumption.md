@@ -70,6 +70,35 @@ What it buys, in work units, from `tests/position.rs`:
 Doubling the subject doubles the work from positions and quadruples it from the
 ends.
 
+### Searching again without rebuilding
+
+A host walking every match of one subject runs one search per match. Building a
+`Search` for each re-acquires both owners to read their shape and re-checks the
+scratch — work the next `advance` does again anyway. `Search::restart_at(start)`
+reuses the operation's shape, scratch owner and remaining budget, and starts
+from where the last search left off, so a loop pays for neither. The answer, the
+work charged and the position are what a new search from `Search::position`
+produces; a completed, cancelled or failed search restarts alike, and a pending
+capacity request does not survive, so captures are read first.
+
+Per match, best of five on a 1.1 MB ASCII subject with 200,000 matches, on a
+machine under other load, so treat the nanoseconds as approximate and the ratio
+as the result:
+
+| Pattern | A `Search` per match | One restarted | Synchronous `find` |
+|---|---:|---:|---:|
+| `/[0-9]+/g` | 139 ns | 112 ns | 95 ns |
+| `/([a-z]+)([0-9]+)/g` | 197 ns | 169 ns | 154 ns |
+
+That removes about a fifth of the per-match cost of the resumable path and
+leaves roughly 17 ns, which is the view acquisition and state transfer each
+advance does.
+
+A host that resumes after an empty match must advance the way the specification
+does: one code point under the `u` flag, one unit otherwise. Advancing a single
+unit inside a surrogate pair does not make progress, because a `u` search
+normalizes its start back to the pair, and the same empty match is found again.
+
 Two costs remain per search and are not changed by this. A program with a
 required-text condition, on a subject of 64 units or more, runs admission from
 the subject's beginning to that text's first occurrence; that is cheap where the
@@ -94,6 +123,16 @@ The owned-scratch witness begins with no frames or undo entries and grows only a
 The scratch-reuse witness consumes completed, pending, cancelled, work-limited and capacity-blocked operations. It destroys and poisons the previous program/subject owner while keeping the exact scratch allocations, then matches unrelated resources with those allocations. Reclaiming scratch must acquire no additional resource view.
 
 The development `scratch_cost` driver compares fixed buffers, fresh zero-frame/undo buffers, reuse, and reuse with a 64 KiB payload retention cap. Growth uses powers of two up to the same fixed caps (16,384 frames and 131,072 undo entries), with allocation and cleanup outside resource views. `verify` checks every iteration's complete captures and work against synchronous `find`. Timing modes report explicitly owned scratch payload, all buffer allocations/frees, replacement overlap, transferred live metadata and retained payload; these counters exclude allocator metadata, engine state on the stack, program/capture storage and process RSS. Compilation scratch, program capacity and capture capacity are reported separately. External process measurements are still required, and no convenience allocation policy is installed in the core or Perry.
+
+`tests/position.rs` also covers restarting. It walks every match of every
+pattern in its set over each subject twice — a new search from the previous
+position per match, and one search restarted per match — and requires the same
+captures, remaining work and positions from both, over 362 matches, with the
+owner relocated at every pause. A second test restarts a search that is blocked
+on a capacity request, one that was cancelled, and one whose start is past the
+end, and requires each to behave as a new search would. Three injected faults
+are caught: dropping the position the restart starts from, keeping the previous
+search's finished state, and refilling the budget.
 
 `tests/position.rs` covers starting from positions. Every pattern in its set — ASCII, two-byte, astral and lone-surrogate WTF-8 and UTF-16 subjects; the `u` flag; lookbehind, backreference, word boundary, end anchor, sticky, lone-surrogate and empty patterns — runs from every start including past the end, with a hint at every position of the subject including between surrogate halves, with storage relocated, poisoned and freed at every pause. Each run must give `find`'s answer and complete captures, charge no more work, and after a match stand at the match's end: 19,404 runs, 5,906 of which started from the hint. The loop witnesses above assert the linear and quadratic growth. Refusal is checked for a position from a subject of another layout and for one that lands inside a scalar of a subject with the same layout. A span reader from a position must read exactly the units a plain reader reads, charge no more, and charge exactly the distance plus the span when the position is two units before it. `a_sticky_loop_from_positions_does_linear_work` also asserts that a failed sticky attempt's position is its start. Six faults injected into the implementation — no layout check, a hint taken when farther, starting at the hint without walking to the start, a reader that forgets to seek, a match's position reported as its start, and a failed attempt's position reported as wherever its scanning stopped — are each caught.
 
