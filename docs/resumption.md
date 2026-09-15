@@ -99,6 +99,19 @@ path — a `Search` per match from 150-198 ns to 144-157, one restarted per matc
 from 123-131 to 115-126 — while the synchronous `find`, which keeps its state
 locally, and the generated code did not move.
 
+That result does not survive being compiled into a host. Perry measured the same
+two revisions in its own workspace, with its own codegen and link settings and
+one advance per search, and the change costs it 20 to 66 instructions per call:
+a hoisted `test` 4,835.3 to 4,855.3, an `exec` reading a capture 8,016.1 to
+8,039.1, a non-ASCII `test` 5,715.0 to 5,781.0, each reproduced to 0.2
+instructions by rebuilding both arms. This crate's own `examples/call_cost`
+moves the other way at the same two revisions, 3,825 to 3,767 instructions for
+a matching call and 1,031 to 968 for a missing one. The likely reason is that
+inlining differs between the two builds and the borrow stops being elided, but
+that is a hypothesis: nobody has read the two disassemblies. Where the change
+pays is a loop with several advances per search; where it is measured to cost,
+it costs a fraction of a percent.
+
 A host can also lend its scratch instead of giving it up: `&mut O` is a
 `ScratchOwner` wherever `O` is one, so a search holds a pointer to the host's
 buffers rather than a copy. A host that keeps its scratch across calls — a pool,
