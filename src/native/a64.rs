@@ -390,6 +390,11 @@ impl machine::Machine for Assembler<'_> {
         }
     }
 
+    fn enter(&mut self) {
+        // Everything this target uses is either an argument or scratch the
+        // convention lets a call clobber, so there is nothing to save.
+    }
+
     fn return_start(&mut self) {
         self.mov(X0, slot(machine::FROM));
         self.ret();

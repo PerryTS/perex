@@ -12,3 +12,4 @@ pub mod a64;
 pub mod emit;
 pub(crate) mod machine;
 pub mod verify;
+pub mod x64;

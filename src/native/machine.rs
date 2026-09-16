@@ -124,7 +124,12 @@ pub(crate) trait Machine {
     /// The bytes written, or the first error that stopped them being written.
     fn done(&mut self) -> Result<usize, EncodeError>;
 
+    /// Save whatever the calling convention expects a call to preserve. Emitted
+    /// once, before anything else.
+    fn enter(&mut self);
+
     /// The code a call may return: a start position, or one of the two codes.
+    /// Each restores what `enter` saved.
     fn return_start(&mut self);
     fn return_code(&mut self, code: i32);
 

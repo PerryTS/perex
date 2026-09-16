@@ -91,7 +91,7 @@ impl Patches {
         Ok(())
     }
     /// Point every branch collected here at the next instruction.
-    fn bind(&mut self, asm: &mut Assembler<'_>) {
+    fn bind<M: Machine>(&mut self, asm: &mut M) {
         for patch in &self.list[..self.count] {
             asm.bind(*patch);
         }
@@ -241,9 +241,9 @@ impl Tables {
 
     /// Emit an address for a table of everything this class admits, and keep
     /// the table to be written once the code is done.
-    fn address(
+    fn address<M: Machine>(
         &mut self,
-        asm: &mut Assembler<'_>,
+        asm: &mut M,
         program: Program<'_>,
         into: Slot,
         a: u32,
@@ -267,7 +267,7 @@ impl Tables {
     }
 
     /// Write every table where the addresses above point.
-    fn place(&mut self, asm: &mut Assembler<'_>) {
+    fn place<M: Machine>(&mut self, asm: &mut M) {
         for index in 0..self.count {
             asm.bind(self.at[index]);
             asm.data(&self.data[index]);
@@ -303,8 +303,8 @@ fn least_from(program: Program<'_>, mut pc: usize) -> usize {
 
 /// Test the byte at `AT` against one atom, branching to `fail` when it does not
 /// hold. Does not advance; the caller decides whether a match consumes.
-fn emit_atom(
-    asm: &mut Assembler<'_>,
+fn emit_atom<M: Machine>(
+    asm: &mut M,
     program: Program<'_>,
     op: u32,
     a: u32,
@@ -447,7 +447,10 @@ pub fn emit_search(
     code: &mut [u8],
     facts: &mut [Facts],
 ) -> Result<usize, EmitError> {
-    let length = generate(program, code)?;
+    let length = {
+        let mut asm = Assembler::new(code);
+        generate(program, &mut asm)?
+    };
     if let Err(error) = verify(&code[..length], program.register_count(), facts) {
         // Zero is permanently undefined on this architecture, so a host that
         // maps the buffer regardless faults instead of running unchecked code.
@@ -457,7 +460,7 @@ pub fn emit_search(
     Ok(length)
 }
 
-fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
+fn generate<M: Machine>(program: Program<'_>, asm: &mut M) -> Result<usize, EmitError> {
     if !supported(program) {
         return Err(EmitError::Unsupported);
     }
@@ -468,7 +471,7 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
         return Err(EmitError::TooLarge);
     }
 
-    let mut asm = Assembler::new(code);
+    asm.enter();
     let mut tables = Tables::new();
     // Failures with no repeat left to retreat give up on this start.
     let mut next_start = Patches::new();
@@ -562,7 +565,7 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
                     // Every character matched, so the text this describes is
                     // there, which is what the negative form fails on.
                     let present = asm.branch();
-                    absent.bind(&mut asm);
+                    absent.bind(asm);
                     let accepted = asm.branch();
                     asm.bind(present);
                     give_up(&mut next_start, &mut repeats, depth, asm.branch())?;
@@ -604,7 +607,7 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
                 // table, whose address is taken once here rather than in the
                 // loop that reads it.
                 let scan_table = if body_op == CLASS && body_b & !NEGATED >= TABLE_RANGES {
-                    tables.address(&mut asm, program, TABLE, body_a, body_b)?;
+                    tables.address(asm, program, TABLE, body_a, body_b)?;
                     Some(TABLE)
                 } else {
                     None
@@ -615,12 +618,10 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
                 let mut stop = Patches::new();
                 asm.compare(AT, TMP);
                 stop.push(asm.branch_if(Cond::AtLeast))?;
-                emit_atom(
-                    &mut asm, program, body_op, body_a, body_b, scan_table, &mut stop,
-                )?;
+                emit_atom(asm, program, body_op, body_a, body_b, scan_table, &mut stop)?;
                 asm.ahead(AT, AT, 1);
                 out_of_budget.push(asm.branch_back(scan))?;
-                stop.bind(&mut asm);
+                stop.bind(asm);
 
                 // Short of the minimum is failure, and retreating cannot help.
                 asm.copy(end, AT);
@@ -648,7 +649,7 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
             }
             _ => {
                 let mut fail = Patches::new();
-                emit_atom(&mut asm, program, op, a, b, None, &mut fail)?;
+                emit_atom(asm, program, op, a, b, None, &mut fail)?;
                 asm.ahead(AT, AT, 1);
                 // A consuming atom that fails retreats the innermost repeat, or
                 // gives up on this start when there is none.
@@ -670,7 +671,7 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
     while depth > 0 {
         depth -= 1;
         let mut repeat = repeats[depth].take().expect("an open repeat");
-        repeat.failures.bind(&mut asm);
+        repeat.failures.bind(asm);
         let end = repeat_end(depth);
         let floor = repeat_floor(depth);
         asm.compare(end, floor);
@@ -687,19 +688,23 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
         }
     }
 
-    next_start.bind(&mut asm);
+    next_start.bind(asm);
     if !one_start {
         asm.ahead(FROM, FROM, 1);
         out_of_budget.push(asm.branch_back(outer))?;
     }
 
-    no_match.bind(&mut asm);
+    no_match.bind(asm);
     asm.return_code(NO_MATCH as i32);
-    out_of_budget.bind(&mut asm);
+    out_of_budget.bind(asm);
     asm.return_code(EXHAUSTED as i32);
-    tables.place(&mut asm);
+    tables.place(asm);
     asm.done().map_err(EmitError::from)
 }
+
+#[cfg(test)]
+#[path = "x64_emulator.rs"]
+mod x64_emulator;
 
 #[cfg(test)]
 mod tests {
@@ -728,11 +733,11 @@ mod tests {
     /// The three regions sit at distinct base addresses, so an address says
     /// which one it is in. Real hardware needs no such tag; this is the
     /// emulator standing in for one address space.
-    const SUBJECT_BASE: u64 = 1 << 36;
-    const CODE_BASE: u64 = 1 << 40;
-    const REGISTERS_BASE: u64 = 1 << 44;
+    pub(super) const SUBJECT_BASE: u64 = 1 << 36;
+    pub(super) const CODE_BASE: u64 = 1 << 40;
+    pub(super) const REGISTERS_BASE: u64 = 1 << 44;
 
-    type Fault = &'static str;
+    pub(super) type Fault = &'static str;
 
     struct Machine<'a> {
         x: [u64; 31],
@@ -876,6 +881,70 @@ mod tests {
             }
             Err("ran past its bound")
         }
+    }
+
+    /// Execute x86-64 code the generator emitted, the way `execute` runs
+    /// AArch64: same regions, same bound, same three arguments.
+    fn execute_x64(
+        code: &[u8],
+        register_count: usize,
+        subject: &str,
+        start: u64,
+        budget: u64,
+    ) -> Result<Run, Fault> {
+        // x86-64 instructions vary in length; the shortest this emits is one
+        // byte, which is the bound to use where AArch64 counts words.
+        let bound = budget.saturating_add(1).saturating_mul(code.len() as u64);
+        let limit = bound.min(2_000_000) as usize;
+        let mut registers = [u64::MAX; 16];
+        let mut machine = x64_emulator::Machine {
+            r: [0; 16],
+            compared: (0, 0),
+            stack: [0; 32],
+            sp: 32,
+            entry: [0; 16],
+            subject: subject.as_bytes(),
+            code,
+            registers: &mut registers[..register_count],
+        };
+        // The System V argument registers: RDI, RSI, RDX, RCX and R8.
+        machine.r[7] = SUBJECT_BASE;
+        machine.r[6] = subject.len() as u64;
+        machine.r[2] = start;
+        machine.r[1] = REGISTERS_BASE;
+        machine.r[8] = budget;
+        let (answer, steps) = machine.run(limit)?;
+        Ok(Run {
+            answer,
+            registers,
+            steps,
+        })
+    }
+
+    /// Compile `pattern` and generate x86-64 code for it, which nothing
+    /// verifies yet: this is the encoder and the generator's selection, run.
+    fn generate_x64_for(
+        pattern: &str,
+        flags: &str,
+        code: &mut [u8],
+    ) -> Result<(usize, usize), EmitError> {
+        let source = Input::utf8(pattern);
+        let mut nodes = [Node::default(); 256];
+        let mut ranges = [Range::default(); 512];
+        let mut words = [0u32; 2048];
+        let mut budget = Budget::new(10_000_000);
+        let program = compile(
+            source,
+            flags,
+            &mut nodes,
+            &mut ranges,
+            &mut words,
+            &mut budget,
+        )
+        .expect("pattern compiles");
+        let mut asm = crate::native::x64::Assembler::new(code);
+        let length = generate(program, &mut asm)?;
+        Ok((length, program.register_count()))
     }
 
     /// One execution of generated code.
@@ -1219,6 +1288,63 @@ mod tests {
         }
     }
 
+    /// The same corpus, generated for x86-64 and run through the emulator for
+    /// that target. Two code generators are only worth having if they answer
+    /// alike, so both are held to the interpreter rather than to each other.
+    #[test]
+    fn x86_64_code_agrees_with_the_interpreter() {
+        let mut code = [0u8; 8192];
+        for &(pattern, flags) in PATTERNS {
+            let (length, count) =
+                generate_x64_for(pattern, flags, &mut code).unwrap_or_else(|error| {
+                    panic!("/{pattern}/{flags} should have code generated for it: {error:?}")
+                });
+            let emitted = &code[..length];
+            for &subject in SUBJECTS {
+                for start in (0..=subject.len() + 1).chain([usize::MAX]) {
+                    let context = || Case {
+                        pattern,
+                        flags,
+                        subject,
+                        start: start as u64,
+                        budget: u64::MAX,
+                    };
+                    let run = execute_x64(emitted, count, subject, start as u64, u64::MAX)
+                        .unwrap_or_else(|fault| panic!("{}: {fault}", context()));
+                    let (found, captures) = interpret(pattern, flags, subject, start);
+                    assert_eq!(
+                        run.answer >= 0,
+                        found,
+                        "{}: compiled said {}, interpreted said {found}",
+                        context(),
+                        run.answer
+                    );
+                    if !found {
+                        assert_eq!(run.answer, NO_MATCH as i64, "{}", context());
+                        continue;
+                    }
+                    let span = captures[0].expect("a match has a span");
+                    assert_eq!(run.answer as usize, span.start(), "{}: start", context());
+                    for (index, capture) in captures.iter().enumerate() {
+                        let Some(span) = capture else { continue };
+                        assert_eq!(
+                            run.registers[index * 2] as usize,
+                            span.start(),
+                            "{}: capture {index} start",
+                            context()
+                        );
+                        assert_eq!(
+                            run.registers[index * 2 + 1] as usize,
+                            span.end(),
+                            "{}: capture {index} end",
+                            context()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// A budget ends a search early or not at all. A run that runs out says
     /// so, a run that decides agrees with an unlimited one, and no run executes
     /// more than the verifier's bound, which [`execute`] enforces.
@@ -1261,6 +1387,36 @@ mod tests {
             }
         }
         assert!(exhausted > 0, "no budget was small enough to stop anything");
+    }
+
+    /// What the budget does to x86-64 code: the same property, on the other
+    /// target. A run that runs out says so, and one that decides agrees with an
+    /// unlimited one.
+    #[test]
+    fn a_budget_never_changes_an_x86_64_answer() {
+        let mut code = [0u8; 8192];
+        let mut exhausted = 0;
+        for &(pattern, flags) in PATTERNS {
+            let (length, count) = generate_x64_for(pattern, flags, &mut code).expect("generated");
+            let emitted = &code[..length];
+            for &subject in SUBJECTS {
+                let full = execute_x64(emitted, count, subject, 0, u64::MAX)
+                    .unwrap_or_else(|fault| panic!("/{pattern}/{flags} on {subject:?}: {fault}"));
+                for budget in [0, 1, 2, 3, 7, 16, 64] {
+                    let run = execute_x64(emitted, count, subject, 0, budget)
+                        .unwrap_or_else(|fault| panic!("/{pattern}/{flags}: {fault}"));
+                    if run.answer == EXHAUSTED as i64 {
+                        exhausted += 1;
+                        continue;
+                    }
+                    assert_eq!(
+                        run.answer, full.answer,
+                        "/{pattern}/{flags} on {subject:?} with budget {budget}"
+                    );
+                }
+            }
+        }
+        assert!(exhausted > 0, "no budget was small enough to run out");
     }
 
     #[test]
