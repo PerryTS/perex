@@ -300,3 +300,8 @@ interleaved per round.
   `/z/` against `"a"` from 23.6 ns to 12.5, against V8's 14.9 and 16.8 — and
   the short literal hits gained 2 to 7 percent. See
   [candidate](candidate.md#short-remainders).
+- **A boolean entry.** Kept. `executor::is_match` and
+  `Search::without_captures` end a search at its match instead of checking the
+  capture registers `find` copies out. Short matches gain up to 17 percent —
+  `/a/` against `"a"` from 50.0 ns to 41.5 — and nothing is slower. It moves
+  none of the matches ahead of V8's `test`. See [engine](engine.md).

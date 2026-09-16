@@ -214,6 +214,9 @@ pub(super) struct State {
     pub one_start: bool,
     /// Whether the program is anchored at the subject's start.
     pub anchored: bool,
+    /// Whether the search answers only whether a match exists, so a match
+    /// ends it without checking the captures it would otherwise report.
+    pub boolean: bool,
 }
 impl State {
     pub fn new(start: usize, length: usize) -> Self {
@@ -241,6 +244,7 @@ impl State {
             started: false,
             one_start: false,
             anchored: false,
+            boolean: false,
         }
     }
 }

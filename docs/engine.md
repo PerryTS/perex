@@ -28,6 +28,23 @@ The output is one immutable relocatable buffer: an eleven-word header, three wor
 
 `find` receives caller-owned register, backtracking-frame, undo-trail and capture-output slices. Stack/trail entries contain integer positions and register changes, not subject or program pointers. Execution-local cursor marks restore byte/UTF-16 positions in constant time on the same immutable borrow. They are private to the evaluator and are not an unchecked public resumption API. Straight matching without a saved choice does not need an undo history.
 
+`is_match` answers only whether a match exists, which is what `RegExp.prototype.test` needs. It is the same evaluator over the same scratch and budget, and differs from `find` in one place: a match ends the search where `find` goes on to check the capture registers it is about to copy out. Nothing reads them, so nothing checks them, and a match is charged two work units per capture less; a miss is charged the same. Registers are still written, since backreferences read them. `Search::without_captures` makes a resumable search do the same, after which `Search::capture` and `Search::copy_captures` refuse with `ExecError::Captures`; `Search::restart_at` keeps the choice.
+
+Against `find` on the same engine, in one process, interleaved, best of 21, with V8's `test` adjacent in time:
+
+| Case | `find` | `is_match` | V8 `test` |
+|---|---:|---:|---:|
+| `/a/` against `"a"` | 50.0 ns | 41.5 ns | 18.2 ns |
+| Sixteen-character literal | 57.0 ns | 51.0 ns | 15.3 ns |
+| Short literal, 29 characters | 53.0 ns | 47.0 ns | 37.6 ns |
+| Folded literal | 68.8 ns | 62.4 ns | 21.0 ns |
+| Captures, 25 characters | 446.9 ns | 423.4 ns | 60.2 ns |
+| `\w+!` over sixty | 174.9 ns | 152.1 ns | 36.5 ns |
+| End-anchored hit, 256 KiB | 58.4 ns | 50.6 ns | 13.8 ns |
+| `/z/` against `"a"` | 12.3 ns | 11.4 ns | 15.2 ns |
+
+Matches gain up to 17 percent, the shortest the most: 3 percent on the short class case, and under 1 percent where a long scan dominates. No case is slower, and `find` itself is unchanged within noise. None of the matches it applies to moves ahead of V8's `test`; `/a/` against `"a"` is still 2.3 times it. The `Search` form saves the same checking round but not the copy, which a resumable search already leaves to the host; it was not timed separately.
+
 [Consuming-atom repetitions](repetition.md) scan and retry with one frame per active repeat instead of a frame and register history per character. Capturing, compound and nullable repeated bodies retain the general instructions in the same evaluator. The optimization does not bound storage for arbitrary patterns or establish an application CPU/RSS improvement.
 
 One `Budget` covers all start positions, assertions, table scans, backreference comparisons, initial seeks and rollback. Syntax, unsupported features, work exhaustion and each insufficient scratch/storage category are distinct. Capture output is untouched on no-match/error and committed only after a complete match and bounds checks; never consume output without `Ok(true)`. Scratch contents after a call are opaque reusable workspace, with no retained engine borrow or hidden cache.
@@ -53,5 +70,7 @@ node tools/check-engine.mjs target/release/examples/engine_probe \
 `tools/check-names.mjs` checks 54,873 complete answers against Node with no differences, including 5,252 Unicode identifier boundary values, duplicate-name grammar, forward/self references, capture resets and lookbehind. Five additional Rust tests check named metadata, relocation, original string storage and bounded failures.
 
 `tools/check-legacy.mjs` adds 112,748 exact Node answers for 1,047 numeric spellings, forward/named capture counts, atom/quantifier boundaries, all 256 control-prefix suffix bytes and quantified assertions. Three Rust tests pin the corresponding interactions.
+
+`tests/is_match.rs` requires `is_match` to give `find`'s answer, and to charge exactly two units per capture less on a match and the same on a miss, over eighteen patterns — captures, named and numbered backreferences, lookbehind captures, capture resets in a repeat, anchors, nullable and empty patterns, `u`, `v` and `y` — and fourteen subjects from every start through past the end. A boolean `Search` must give the same answer and charge the same work at quanta of one, seventeen and unbounded, with its storage moved and poisoned at every pause, and must refuse both capture reads; restarting must keep the choice. Five injected faults are each caught: `is_match` still checking captures, a boolean match reported as none, restarting dropping the choice, captures readable after a boolean search, and `without_captures` doing nothing.
 
 Test262 pattern conformance is measured in [conformance](conformance.md). Still open: structured differential fuzzing; per-owner allocation accounting; and whole-application CPU/RSS comparisons in the host. Engine-level CPU figures are in [performance](performance.md).

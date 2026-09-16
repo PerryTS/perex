@@ -233,8 +233,21 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
     /// capacity request does not survive, so read captures first.
     pub fn restart_at(&mut self, start_utf16: usize) {
         let near = self.position().mark;
+        let boolean = self.state.boolean;
         self.state = State::new(start_utf16, self.shape.input.2);
         self.state.near = near;
+        self.state.boolean = boolean;
+    }
+
+    /// Answer only whether a match exists, as [`is_match`] does.
+    ///
+    /// A match then ends the search without checking the capture registers,
+    /// which saves the dispatcher round that checks them. Nothing reads them
+    /// afterwards either: [`Search::capture`] and [`Search::copy_captures`]
+    /// refuse with [`ExecError::Captures`] once this is set, whether or not
+    /// the search has matched. [`Search::restart_at`] keeps it.
+    pub fn without_captures(&mut self) {
+        self.state.boolean = true;
     }
 
     /// A position in this search's subject that a later search or span reader
@@ -364,6 +377,9 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
     fn require_match(&self) -> Result<(), ExecError> {
         if let Some(error) = self.state.blocked {
             return Err(error);
+        }
+        if self.state.boolean {
+            return Err(ExecError::Captures);
         }
         match self.state.phase {
             Phase::Finished(true) => {}
@@ -1434,7 +1450,12 @@ impl Vm<'_, '_, '_, '_> {
                 if self.state.assertion != UNSET {
                     return Err(ExecError::InvalidProgram);
                 }
-                self.state.phase = Phase::Validate(0);
+                // A boolean search reads no capture, so it has none to check.
+                self.state.phase = if self.state.boolean {
+                    Phase::Finished(true)
+                } else {
+                    Phase::Validate(0)
+                };
                 return Ok(Step::Phase);
             }
             CHAR | CHAR_I => {
@@ -1700,6 +1721,43 @@ pub fn find(
             copy_match_registers(vm.scratch.registers, captures, program.capture_count())?;
             Ok(true)
         }
+        Progress::NoMatch => Ok(false),
+        Progress::Pending => Err(ExecError::InvalidProgram),
+    }
+}
+
+/// Whether `program` matches `input` at or after `start_utf16`, without
+/// producing captures.
+///
+/// The same evaluator as [`find`], over the same scratch and budget, with one
+/// difference: a match ends the search where `find` goes on to check the
+/// capture registers it is about to copy out. Nothing here reads them, so
+/// nothing checks them, and the budget is charged for that check only by
+/// `find`. Registers are still written, since a backreference reads them.
+pub fn is_match(
+    program: Program<'_>,
+    input: Input<'_>,
+    start_utf16: usize,
+    mut scratch: Scratch<'_>,
+    budget: &mut Budget,
+) -> Result<bool, ExecError> {
+    if scratch.registers.len() < program.register_count() {
+        return Err(ExecError::Registers);
+    }
+    let mut state = State::new(start_utf16, input.len_utf16());
+    state.boolean = true;
+    let mut vm = Vm {
+        program,
+        input,
+        cursor: input.cursor(),
+        scratch: &mut scratch,
+        state: &mut state,
+        budget: *budget,
+    };
+    let result = vm.run(usize::MAX);
+    *budget = vm.budget;
+    match result? {
+        Progress::Matched => Ok(true),
         Progress::NoMatch => Ok(false),
         Progress::Pending => Err(ExecError::InvalidProgram),
     }
