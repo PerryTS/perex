@@ -416,25 +416,47 @@ at the subject's end starts near that end, and neither cares how long the
 subject is. Second, for everything else, whether the subject is short enough
 that entering a search costs more than the walk.
 
-There are two lengths, because a program whose generated code scans keeps the
-tier far longer than one whose does not. Both were measured rather than
-guessed, over subjects that match nothing. Ratios are generated code over the
-interpreter, so below 1.00 the tier wins:
+A program whose generated code scans keeps the tier at **any** length, because
+what a wrong choice costs it is bounded: `native::emit::allowance` gives such a
+call about one backward branch per eight hundred bytes, which lets its scan look
+at roughly one byte in a hundred before it gives the search back and the
+interpreter answers instead. A long subject is then a bet rather than a walk.
+`(?<=0123456789)abc` over 256 KiB, whose match is at byte 26, takes 7.5 ns that
+way against the interpreter's 115.2 and V8's 28.5; `/needle/` over 256 KiB
+holding none of it, the case that bet loses, takes 11.4 µs against the
+interpreter's 10.9 — under five per cent, for the other case's fifteen times.
+
+That bet only works because a branch covers eight bytes. Without a byte to scan
+for, a branch covers one start, and the bet costs what it stands to win, so
+those programs keep a length instead. Thirty-two bytes is where it sits, and it
+was measured rather than guessed, over subjects that match nothing — the case
+that looks at every start. Ratios are the tier's cost, with the allowance above,
+over the interpreter's, so below 1.00 the tier wins:
 
 | bytes | `[0-9]+[A-Z]+` | `NeEdLe`/i | `(\w+)@(\w+)\.com` | `needle` | `a+!` |
 |---:|---:|---:|---:|---:|---:|
 | | *no scan* | *no scan* | *no scan* | *scans* | *scans* |
-| 24 | 0.91x | 0.26x | 0.12x | 0.12x | 0.17x |
-| 32 | **1.18x** | 0.32x | 0.12x | 0.13x | 0.19x |
-| 64 | 2.91x | 0.59x | 4.90x | 0.17x | 0.16x |
-| 512 | 7.67x | 3.18x | 10.64x | 0.85x | 0.21x |
-| 2048 | 8.60x | 5.16x | 11.67x | **1.39x** | 0.21x |
-| 524288 | 8.44x | 6.45x | 5.90x | 1.88x | 0.21x |
+| 24 | 0.91x | 0.26x | 0.13x | 0.12x | 0.17x |
+| 32 | **1.18x** | 0.33x | 0.13x | 0.13x | 0.19x |
+| 48 | 1.87x | 0.44x | **1.04x** | 0.16x | 0.23x |
+| 64 | 2.89x | 0.59x | 2.17x | 0.17x | 0.16x |
+| 96 | 3.71x | **1.58x** | 1.90x | 0.22x | 0.18x |
+| 128 | 3.37x | 1.50x | 1.70x | 0.24x | 0.16x |
+| 512 | 2.09x | 1.48x | 1.25x | 0.86x | 0.21x |
+| 2048 | 1.28x | 1.20x | 1.06x | **1.37x** | 1.07x |
+| 524288 | 1.01x | 1.01x | 1.00x | 1.05x | 1.00x |
 
-Thirty-two bytes is the shortest crossing among the shapes that do not scan,
-and five hundred and twelve is where the ones that do still win. `a+!` never
-crosses, and the rule gives that up rather than reading more into one shape
-than it says.
+Thirty-two is the shortest crossing among the three that do not scan, and the
+most a program without a byte to scan for keeps. Their worst point is where the
+walk is long enough to hurt and short enough that the allowance still covers it:
+3.71x at ninety-six bytes.
+
+The two that scan cross nowhere that costs much. `needle` over 2 KiB holding
+none of it is the worst of them at 1.37x, where generated code's scan is simply
+slower than the interpreter's admission scan; past that the allowance takes over
+and the tier converges on the interpreter's own time — 1.05x over 512 KiB, where
+before the allowance it was 1.88x. That is what the bet buys: the losing side
+flattens while the winning side keeps its fifteen times.
 
 Measuring this found something the ratios could not have hidden. A
 start-anchored program's generated code tried every start and failed each at
@@ -446,46 +468,74 @@ magnitude slower.
 
 ### What the rule gives up
 
-A length cannot see what a subject holds, and some cases are faster in generated
-code for reasons only the subject shows:
+A length cannot see what a subject holds, and three cases are faster in
+generated code for a reason only the subject shows — their match is at the very
+start:
 
 | Case | Interpreter | Generated | The rule picks |
 |---|---:|---:|---|
-| `[a-z]+!`, `\w+!`, `[^0-9]+!` over sixty | 107.9–161.3 ns | 30.2–31.0 ns | interpreter |
-| `(?<=0123456789)abc` over 256 KiB | 118.5 ns | 7.7 ns | interpreter |
-| `[0-9]+[A-Z]+` over 256 KiB | 1.44 ms | 924 µs | interpreter |
+| `[a-z]+!` over sixty | 103.0 ns | 29.4 ns | interpreter |
+| `[^0-9]+!` over sixty | 125.0 ns | 29.3 ns | interpreter |
+| `\w+!` over sixty | 154.6 ns | 29.4 ns | interpreter |
 
-The first two match early, so generated code never walks far; the third is a
-case the interpreter is slow on. A host that knew would take between 1.6x and
-15x less. All three are content, and the rule refuses to look at content,
-because the alternative is a decision that changes with the subject — which is
-how a fallback stops being an optimization and starts being a second engine.
+Each begins with a class, so its generated code has no byte to scan for, and
+the allowance bet that covers the scanning programs would cost as much as it
+wins for these. What the rule refuses to do is look at the subject, because a
+decision that changes with the subject is how a fallback stops being an
+optimization and becomes a second engine.
 
-What would close them is the scan above, applied where a match must begin with
-a *set* of bytes rather than one: every case left in that table is a class or a
-folded literal. That is the next thing worth doing here.
+Scanning for a *set* of bytes rather than one does not close them either, and
+the classes say why. `\w` admits every byte from 48 to 122 with four holes in
+it, so a scan for that set would stop at nearly every byte of an alphabetic
+subject; `[^0-9]` is a complement and bounds no first byte at all. Only
+`[a-z]+!` has a set narrow enough for such a scan to skip anything, and its
+subject is all lowercase, so the scan would stop at the first byte there too.
+What is left in these three is not code generation but the interpreter's cost
+on `<class>+<literal>`: over the same sixty-one characters it takes 103 to 155
+ns where V8 takes 32 to 34 and generated code takes 29.
 
-### What a host gets
+### What a host gets, against V8
 
-The same cases as the table above, with the path the rule picks:
+Every case both drivers run: twenty, timed on the same machine adjacent in
+time, three passes each with the minimum taken. `Host` is the path the rule
+picks, called with the allowance the crate recommends — not the better of the
+two, which would describe a host that cannot exist. V8's two entry points
+bracket what `find` does: `test` produces no captures, `exec` produces them and
+allocates substrings besides.
 
-| Case | Interpreter | Generated | Host takes | Against the interpreter |
-|---|---:|---:|---:|---:|
-| `/a/` against `"a"` | 50.4 ns | 1.8 ns | generated | **0.03x** |
-| Sixteen-character literal | 58.0 ns | 4.3 ns | generated | **0.07x** |
-| Captures, 25 characters | 425.8 ns | 29.7 ns | generated | **0.07x** |
-| Short classes | 336.6 ns | 40.9 ns | generated | **0.12x** |
-| Short literal | 55.5 ns | 3.8 ns | generated | **0.07x** |
-| Folded literal | 67.7 ns | 13.8 ns | generated | **0.20x** |
-| End-anchored hit, 256 KiB | 57.2 ns | 3.1 ns | generated | **0.06x** |
-| `/z/` against `""` | 20.1 ns | 1.3 ns | generated | **0.06x** |
-| `a+!` over sixty | 99.6 ns | 30.9 ns | generated | **0.31x** |
-| `\w+!` over sixty | 161.3 ns | 30.2 ns | interpreter | 1.00x |
-| `/needle/` over 256 KiB | 11.3 µs | 44.2 µs | interpreter | 1.00x |
+| Case | Host | Interpreter | V8 `test` | V8 `exec` | vs `test` | vs `exec` |
+|---|---:|---:|---:|---:|---:|---:|
+| `/a/` against `"a"` | 1.7 ns | 49.0 | 17.4 | 31.6 | **0.10x** | **0.05x** |
+| One-character literal | 1.7 ns | 49.0 | 17.3 | 31.5 | **0.10x** | **0.05x** |
+| `/z/` against `""` | 1.2 ns | 19.7 | 12.0 | 13.8 | **0.10x** | **0.09x** |
+| Two-character literal | 1.9 ns | 49.9 | 18.4 | 31.9 | **0.10x** | **0.06x** |
+| Short literal | 3.7 ns | 54.2 | 32.1 | 39.8 | **0.12x** | **0.09x** |
+| `/z/` against `"a"` | 2.5 ns | 23.7 | 14.6 | 16.3 | **0.17x** | **0.15x** |
+| `/needle/` over 256 KiB | 11.4 µs | 10.9 µs | 66.6 µs | 66.4 µs | **0.17x** | **0.17x** |
+| Four-character literal | 2.2 ns | 50.8 | 12.2 | 24.7 | **0.18x** | **0.09x** |
+| Eight-character literal | 3.0 ns | 52.6 | 13.0 | 25.4 | **0.23x** | **0.12x** |
+| End-anchored hit, 256 KiB | 3.1 ns | 56.1 | 13.3 | 30.1 | **0.23x** | **0.10x** |
+| `/z/` against ten bytes | 3.7 ns | 24.1 | 14.7 | 16.3 | **0.25x** | **0.23x** |
+| Literal lookbehind, 256 KiB | 7.5 ns | 115.2 | 28.5 | 38.0 | **0.26x** | **0.20x** |
+| Sixteen-character literal | 4.3 ns | 55.5 | 13.9 | 26.6 | **0.31x** | **0.16x** |
+| Captures, 25 characters | 29.1 ns | 416.8 | 57.6 | 82.0 | **0.51x** | **0.35x** |
+| Short classes | 40.0 ns | 328.7 | 64.3 | 88.0 | **0.62x** | **0.45x** |
+| Folded literal | 13.3 ns | 65.2 | 16.9 | 32.7 | **0.79x** | **0.41x** |
+| `a+!` over sixty | 29.9 ns | 95.9 | 31.6 | 43.4 | **0.95x** | **0.69x** |
+| `[a-z]+!` over sixty | 103.0 ns | 103.0 | 31.9 | 43.9 | 3.23x | 2.35x |
+| `[^0-9]+!` over sixty | 125.0 ns | 125.0 | 32.3 | 44.8 | 3.87x | 2.79x |
+| `\w+!` over sixty | 154.6 ns | 154.6 | 34.3 | 45.9 | 4.51x | 3.37x |
 
-No case is worse than the interpreter, which is the property the rule is for.
-Nine of the eleven take between three and thirty times less time, where before
-the scan it was eight of eleven and the repeat shapes were not among them.
+Seventeen of the twenty are at or better than V8 at both of its entry points.
+The three behind are the shape the section above names, and what is left in
+them is interpreter cost rather than anything the tier decides. The
+twenty-first case the native driver runs, `[0-9]+[A-Z]+` over 256 KiB, has no
+counterpart in the V8 driver, which runs `[A-Z]{4}[0-9]{4}` there instead; the
+rule hands it to the interpreter, at 1.40 ms against generated code's 895 µs.
+
+Measured with `bench/target/release/perex-native` and `bench/node-bench.mjs`
+against Node 26.5.1, process CPU time, on a machine running other builds, which
+inflates absolute numbers more than ratios.
 
 ## Staging
 
@@ -511,9 +561,16 @@ the scan it was eight of eleven and the repeat shapes were not among them.
    verified code for either.
 7. **Done for a known first byte.** Generated code scans eight bytes at a time
    for the byte a match must begin with, which is what the interpreter's own
-   advantage over it was made of. What is left is the same scan for a *set* of
-   first bytes — a class, or a folded literal's two cases — which is every case
-   the path rule still gives up.
+   advantage over it was made of.
+8. **Done.** An allowance instead of a second length: a scanning program keeps
+   the tier at any length and is called with a budget proportional to the
+   subject, so a subject that turns out to hold no match costs that allowance
+   rather than the walk. The same scan for a *set* of first bytes was the plan
+   here and the measurement refused it — see *What the rule gives up*: two of
+   the three cases it was meant to close have no first-byte set narrow enough
+   to skip anything, and the third's subject defeats it. What is left in them
+   is interpreter cost on `<class>+<literal>`, which is not this document's
+   problem to solve.
 
 Each stage is independently useful and independently abandonable. Stage 1 costs
 nothing and tells us how much of the benchmark the tier could even apply to,
@@ -523,11 +580,13 @@ which is worth knowing before anyone writes an encoder.
 
 Stage 1 is covered by `tests/compilation.rs`, which fixes the subset's contract
 in both directions, including that a program the analysis refuses still compiles
-and is still searched, and stage 5 by the same file: the path rule takes the
-tier while a subject is short, keeps it at any length for a program that does
-not walk the subject, and never takes it for a program the tier cannot emit.
-`examples/compilable` reports the count over the benchmark patterns, and
-`bench --bin perex-native --crossover` is the sweep the length came from.
+and is still searched, and stages 5 and 8 by the same file: the path rule takes
+the tier while a subject is short, keeps it at any length for a program that
+does not walk the subject or that scans for a byte, never takes it for a program
+the tier cannot emit, and hands a long subject an allowance proportional to it
+rather than an unbounded one. `examples/compilable` reports the count over the
+benchmark patterns, and `bench --bin perex-native --crossover` is the sweep the
+length and the allowance came from.
 
 The generated code is covered by the unit tests in `src/native/`:
 

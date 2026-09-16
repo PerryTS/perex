@@ -166,16 +166,24 @@ fn the_path_rule_follows_the_program_and_the_length_alone() {
         });
     }
     // One whose generated code scans for the byte a match must begin with
-    // keeps it far longer, because that scan is what the interpreter's own
-    // advantage over it was made of.
-    let scanned = 512;
+    // keeps it at any length, because the allowance bounds what that costs
+    // when the subject holds no match: a long subject is a bet, not a walk.
     for (pattern, flags) in [("needle", ""), ("a+!", ""), ("(?<=ab)cd", "")] {
         with_program(pattern, flags, |program| {
             assert!(emit::preferred(program, short + 1), "/{pattern}/{flags}");
-            assert!(emit::preferred(program, scanned), "/{pattern}/{flags}");
-            assert!(!emit::preferred(program, scanned + 1), "/{pattern}/{flags}");
+            assert!(emit::preferred(program, 1 << 20), "/{pattern}/{flags}");
+            // Short subjects are searched to the end either way; longer ones
+            // get about one backward branch per eight hundred bytes.
+            assert_eq!(emit::allowance(program, short), usize::MAX);
+            assert_eq!(emit::allowance(program, 1 << 20), (1 << 20) / 800);
+            assert_eq!(emit::allowance(program, 1024), 64);
         });
     }
+    // A program the tier cannot emit is never called, so it has no allowance.
+    with_program("a|b", "", |program| {
+        assert!(!emit::supported(program));
+        assert_eq!(emit::allowance(program, 1 << 20), usize::MAX);
+    });
     // One that does not walk the subject keeps it at any length: an anchored
     // start is one start, and an end bound is a start near the end.
     for (pattern, flags) in [

@@ -6,7 +6,7 @@ Perex is Perry's only regular-expression engine: its runtime's `RegExp`, string 
 
 Against every pattern harvested from Test262 — 48,718 compared cases — Perex and V8 make the same syntax decision and produce the same complete answer on every one, with nothing reported unsupported; see [conformance](docs/conformance.md). The crate has no dependencies and uses no standard library.
 
-Against V8, on the twenty-five authored cases in [`bench/`](bench/), Perex is at or better than V8 on every one when the faster of its two execution paths is taken — but taking it is the open part: nothing yet chooses between the interpreter and the [compilation tier](docs/compilation.md), and the tier is AArch64-only and loses badly on long subjects. [`docs/performance.md`](docs/performance.md) records the figures, the method, and every measurement that refuted an idea, which is the standard this project holds its own claims to.
+Against V8, on the twenty cases both drivers in [`bench/`](bench/) run, Perex is at or better than V8 at both of its entry points on seventeen, taking whichever of its two execution paths its own rule picks rather than the better of the two. The three behind are `<class>+<literal>` shapes the rule hands to the interpreter. The [compilation tier](docs/compilation.md) generates AArch64 and x86-64 from one analysis and verifies both; what a host still owes it is mapping the code and calling it. [`docs/performance.md`](docs/performance.md) records the figures, the method, and every measurement that refuted an idea, which is the standard this project holds its own claims to.
 
 Perex is designed around one matching engine and explicit host memory ownership:
 

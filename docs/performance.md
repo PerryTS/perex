@@ -252,16 +252,31 @@ as one that confirmed it, and because each of these looked obviously right.
   dispatcher turned out to cost about two nanoseconds — enough to be worth
   batching a seek and a rollback, and nowhere near enough to explain the gap.
 
-### What closing the rest would take
+### What closing the rest took
 
-One route remains, and it is not the scan. Every case still behind is a search
+One route remained, and it was not the scan. Every case still behind is a search
 short enough that the fixed cost of starting one dominates it, and that cost is
 interpretation: a bytecode pausable at every instruction, which is why this
-engine exists. Closing it means compiling rather than interpreting, and
-executing generated code needs `#![forbid(unsafe_code)]` removed.
+engine exists. Closing it meant compiling rather than interpreting, which is
+[issue #2](https://github.com/PerryTS/perex/issues/2)'s decision, and the answer
+was a compilation tier rather than SIMD or `unsafe`.
 
-That is a safety decision about an engine a runtime points at untrusted input,
-not a performance one, and it is not made here. It is tracked as [issue #2](https://github.com/PerryTS/perex/issues/2).
+The crate stays `#![forbid(unsafe_code)]`. `native::emit` writes machine code
+into a caller-owned `&mut [u8]` and returns its length; a verifier proves the
+memory, control-flow, calling-convention and budget properties of those bytes
+before they are returned. Mapping the buffer executable and calling it is the
+host's, which is where the `unsafe` lives and where it is auditable — the same
+boundary as every other buffer this engine writes into. See
+[compilation](compilation.md).
+
+Measured against V8 on the twenty cases both drivers run, with the path the
+crate's own rule picks: seventeen are at or better than V8 at both entry points,
+including six of the seven in the table above. The three still behind are
+`[a-z]+!`, `[^0-9]+!` and `\w+!` — a class repeat followed by a literal, one of
+which is that table's seventh row. There the rule hands the search to the
+interpreter, because generated code has no first byte to scan for and only the
+subject would decide, which the rule will not look at. The per-case table is in
+[compilation](compilation.md#what-a-host-gets-against-v8).
 
 The SIMD route that issue also offered is withdrawn: it was there to close the
 scan-bound cases, and those are closed without it.

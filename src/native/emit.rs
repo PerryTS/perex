@@ -439,22 +439,17 @@ pub const EXHAUSTED: isize = -2;
 /// must contain. Generated code that cannot do the same looks at each start in
 /// turn, so it wins where the flat cost of entering a search dominates and
 /// loses where the scan does. Measured over subjects that match nothing, which
-/// is the case that looks at every start: `[0-9]+[A-Z]+` crosses at 24 to 32
-/// bytes, a folded literal past 128, and a two-capture pattern between 48 and
-/// 64. Thirty-two is the shortest of those rounded to a power of two.
-const SHORT_SUBJECT: usize = 32;
-
-/// The same, for a program whose generated code scans eight bytes at a time
-/// for the byte a match must begin with.
+/// is the case that looks at every start: `[0-9]+[A-Z]+` crosses between 24 and
+/// 32 bytes, a two-capture pattern between 32 and 48, and a folded literal
+/// between 64 and 96. Thirty-two is the shortest of those.
 ///
-/// That scan changes the shape of the comparison rather than the constant:
-/// `needle` over a subject holding none of it was 1.51x the interpreter at 128
-/// bytes and 15.09x at 512 KiB, and is 0.23x and 1.88x with it. `a+!` no
-/// longer crosses at all — 0.16x to 0.21x from 64 bytes to 512 KiB, because
-/// the interpreter walks the run its repeat leaves behind. Five hundred and
-/// twelve is where the measured shapes still win: `needle` is 0.85x there and
-/// 1.39x at 2,048. See `docs/compilation.md`.
-const SCANNED_SUBJECT: usize = 512;
+/// A program whose generated code scans eight bytes at a time for the byte a
+/// match must begin with keeps the tier at any length instead, because
+/// [`allowance`] bounds what the bet costs when it is wrong. Without a byte to
+/// scan for, a branch covers one start rather than eight bytes, and the same
+/// bet costs what it stands to win — 3.71x the interpreter on a 96-byte subject
+/// holding no match — so those keep the length above.
+const SHORT_SUBJECT: usize = 32;
 
 /// Whether a host holding generated code for this program should run it for a
 /// subject of this many bytes, or hand the search to the interpreter.
@@ -468,15 +463,36 @@ const SCANNED_SUBJECT: usize = 512;
 /// beginning, or one whose match must end at its end — keeps the tier at any
 /// length, because what generated code loses on a long subject is the walk.
 pub fn preferred(program: Program<'_>, bytes: usize) -> bool {
-    let room = if required_first_byte(program).is_some() {
-        SCANNED_SUBJECT
-    } else {
-        SHORT_SUBJECT
-    };
     supported(program)
-        && (bytes <= room
+        && (bytes <= SHORT_SUBJECT
+            || required_first_byte(program).is_some()
             || program.end_bound().is_some()
             || derive_start_anchored(program.words(), program.instructions()))
+}
+
+/// The budget to call generated code for this program with, over a subject of
+/// this many bytes.
+///
+/// A short subject is searched to the end either way, so the call is given
+/// what it needs. A longer one is a bet: generated code wins where the match
+/// is near the start and loses where it has to walk the whole subject, and
+/// nothing static can tell those apart. So the call is given an allowance of
+/// about one backward branch per eight hundred bytes, which lets its scan look
+/// at roughly one byte in a hundred before it gives the search back, and the
+/// interpreter answers instead. What a wrong bet costs is that allowance.
+///
+/// Measured: `(?<=0123456789)abc` over 256 KiB, whose match is at byte 26,
+/// takes 7.5 ns this way against the interpreter's 115.2 and V8's 28.5, where
+/// a rule that refused the bet took the interpreter's. `/needle/` over 256 KiB
+/// holding none of it, the case the bet loses, takes 11.4 µs against the
+/// interpreter's 10.9 — under five per cent, for the other case's fifteen
+/// times.
+pub fn allowance(program: Program<'_>, bytes: usize) -> usize {
+    if bytes <= SHORT_SUBJECT || !supported(program) {
+        usize::MAX
+    } else {
+        (bytes / 800).max(64)
+    }
 }
 
 /// Emit a whole search for `program` into `code`, returning its byte length.

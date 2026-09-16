@@ -10,7 +10,7 @@
 use perex::compiler::{compile, Node, Range};
 use perex::executor::{find, Frame, Scratch, Undo};
 use perex::input::Input;
-use perex::native::emit::{emit_search, preferred, supported, EXHAUSTED, NO_MATCH};
+use perex::native::emit::{allowance, emit_search, preferred, supported, EXHAUSTED, NO_MATCH};
 use perex::native::verify::{Facts, Target};
 
 /// The instruction set this machine runs, which is the one to emit for.
@@ -24,7 +24,9 @@ use perex::Budget;
 /// Backward branches one call to generated code may take before it gives the
 /// search back to the interpreter. Each executes at most the program's length
 /// in instructions, so this is what bounds a call however the pattern and the
-/// subject combine.
+/// subject combine. This one is large enough that every case here decides
+/// within it, which is what the unbounded column measures; the bounded column
+/// and the crossover use [`allowance`] instead.
 const ALLOWANCE: usize = 1 << 20;
 
 type Entry = extern "C" fn(*const u8, usize, usize, *mut usize, usize) -> isize;
@@ -234,8 +236,9 @@ fn crossover() {
                      &mut captures, &mut budget).map(isize::from).unwrap_or(-1)
             });
             let mut native = vec![usize::MAX; count.max(2)];
+            let budget = allowance(program, size);
             let compiled = time(iters, || {
-                match entry(bytes.as_ptr(), bytes.len(), 0, native.as_mut_ptr(), ALLOWANCE) {
+                match entry(bytes.as_ptr(), bytes.len(), 0, native.as_mut_ptr(), budget) {
                     EXHAUSTED => {
                         let mut budget = Budget::new(1_000_000_000);
                         find(program, subject, 0,
@@ -259,8 +262,8 @@ fn main() {
     // check, which is that generated code executed natively agrees with the
     // interpreter on this architecture.
     let checking = std::env::args().any(|arg| arg == "--check");
-    println!("{:<24}{:>12}{:>12}{:>10}{:>12}   answers", "case", "interp ns", "native ns",
-             "ratio", "host ns");
+    println!("{:<24}{:>12}{:>12}{:>12}{:>12}   answers", "case", "interp ns", "native ns",
+             "bounded ns", "host ns");
     println!("{}", "-".repeat(84));
     for case in cases() {
         let source = Input::utf8(case.pattern);
@@ -370,14 +373,31 @@ fn main() {
                 answer => answer,
             }
         });
-        // What a host actually gets: the path the rule picks, without running
-        // both. Reporting the better of the two would describe a host that
-        // cannot exist.
-        let takes_native = preferred(program, bytes.len());
-        println!("{:<24}{:>12.1}{:>12.1}{:>9.2}x{:>12.1}   {}{}", case.id, interpreted, compiled,
-                 compiled / interpreted,
-                 if takes_native { compiled } else { interpreted },
+        // An allowance proportional to the subject, taken always: generated
+        // code either decides within it or gives the search back, so a wrong
+        // guess costs that allowance rather than the whole walk.
+        let proportional = allowance(program, bytes.len());
+        let mut gave_back = 0usize;
+        let bounded = time(case.iters, || {
+            match entry(bytes.as_ptr(), bytes.len(), 0, native.as_mut_ptr(), proportional) {
+                EXHAUSTED => {
+                    gave_back += 1;
+                    let mut budget = Budget::new(1_000_000_000);
+                    find(program, subject, 0,
+                         Scratch { registers: &mut registers, frames: &mut frames, undo: &mut undo },
+                         &mut captures, &mut budget).map(isize::from).unwrap_or(-1)
+                }
+                answer => answer,
+            }
+        });
+
+        // What a host actually gets: the path the rule picks, run with the
+        // allowance the crate recommends, without running both. Reporting the
+        // better of the two would describe a host that cannot exist.
+        let host = if preferred(program, bytes.len()) { bounded } else { interpreted };
+        println!("{:<24}{:>12.1}{:>12.1}{:>12.1}{:>12.1}   {}{}", case.id, interpreted, compiled,
+                 bounded, host,
                  if agree { "agree" } else { "DIFFER" },
-                 if exhausted > 0 { ", allowance ran out" } else { "" });
+                 if exhausted > 0 || gave_back > 0 { ", gave back" } else { "" });
     }
 }
