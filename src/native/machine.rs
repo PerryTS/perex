@@ -36,7 +36,13 @@ pub(crate) const BYTE: Slot = Slot(7);
 pub(crate) const TMP: Slot = Slot(8);
 /// Open repeats keep two slots each: where the run currently ends, and the
 /// earliest end its minimum allows.
-pub(crate) const MAX_REPEATS: usize = 3;
+///
+/// Two is what both targets hold in registers. x86-64 has fifteen usable
+/// registers, two of which an encoder keeps for itself, and this file is the
+/// thirteen that leaves; a third repeat would have to live in memory, in the
+/// generated code and in what verifies it, to admit patterns of three
+/// sequential open repeats. Those fall back to the interpreter instead.
+pub(crate) const MAX_REPEATS: usize = 2;
 
 pub(crate) fn repeat_end(depth: usize) -> Slot {
     Slot(9 + depth as u8 * 2)

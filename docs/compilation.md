@@ -86,11 +86,11 @@ whatever the pattern and subject. The [verifier](#verifying-generated-code)
 refuses code in which any backward branch takes another form, anything else
 writes the budget, or anything branches into the middle of a guard.
 
-`[ab]*[ac]*a*x` over thirty `a`s shows what that is for. The compiler cannot
-merge those repeats, so generated code tries every division of the run among
-them: 837,222 instructions to report no match, where the interpreter's
+`[ab]*[ac]*x` over eighty `a`s shows what that is for. The compiler cannot
+merge those repeats, so generated code tries every division of the run between
+them: 1,807,007 instructions to report no match, where the interpreter's
 required-text check answers at once. With a budget of 1,000 the same call
-returns `EXHAUSTED` after 10,773.
+returns `EXHAUSTED` after 10,359.
 
 **This replaces the first version of this section, which required a static bound
 on a program's work and refused any unbounded repeat.** Stage 1 was built that
@@ -229,13 +229,15 @@ The first version compiles the subset that covers the measured gap: entry
 `SAVE`s, ASCII `CHAR` runs folded or not, `CLASS` of ASCII ranges folded or not,
 `ANY`, repeats of those whether bounded or not, the anchors and word boundary,
 a lookbehind whose body is a run of ASCII characters, and `MATCH`. What falls
-back is alternation, a lookahead or any other assertion needing a sub-search,
+back is a third open repeat, alternation, a lookahead or any other assertion needing a sub-search,
 properties, backreferences, non-ASCII characters and ranges, and any repeat that
 resets a capture per iteration.
 
 `Program::compilable` is that decision and is implemented; it is a property of
 the program alone, and the tier additionally requires wholly ASCII storage, a
-host-owned code buffer and a target it has an encoder for. `examples/compilable`
+host-owned code buffer, a target it has an encoder for, and no more than two
+open repeats at once — two is what both targets hold in registers, and a third
+would have to live in memory in the generated code and in what verifies it. `examples/compilable`
 reports it over the benchmark patterns, which is how the subset above was chosen
 rather than guessed.
 

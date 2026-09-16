@@ -475,7 +475,7 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
     // Starts with no match left to find, and loops with no budget left.
     let mut no_match = Patches::new();
     let mut out_of_budget = Patches::new();
-    let mut repeats: [Option<Repeat>; MAX_REPEATS] = [None, None, None];
+    let mut repeats: [Option<Repeat>; MAX_REPEATS] = [const { None }; MAX_REPEATS];
     let mut depth = 0usize;
 
     // An end-anchored match of bounded length cannot begin more than that many
@@ -1080,10 +1080,10 @@ mod tests {
         ("[a-z]$", ""),
         (".$", ""),
         ("x[0-9]$", ""),
-        // Three open repeats of overlapping classes, which the compiler cannot
-        // merge, over a run none of them can finish: every division of the run
-        // among them is tried.
-        ("[ab]*[ac]*a*x", ""),
+        // Two open repeats of overlapping classes, which the compiler cannot
+        // merge, over a run neither can finish: every division of the run
+        // between them is tried.
+        ("[ab]*[ac]*x", ""),
     ];
 
     const SUBJECTS: &[&str] = &[
@@ -1161,7 +1161,8 @@ mod tests {
     ];
 
     /// Thirty `a`s, which `[ab]*[ac]*a*x` divides every possible way.
-    const RUN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const RUN: &str =
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     #[test]
     fn generated_code_agrees_with_the_interpreter() {
@@ -1265,9 +1266,9 @@ mod tests {
     #[test]
     fn a_budget_stops_what_backtracking_would_not() {
         let mut code = [0u8; 4096];
-        let (length, count) = generate_for("[ab]*[ac]*a*x", "", &mut code).expect("generated");
+        let (length, count) = generate_for("[ab]*[ac]*x", "", &mut code).expect("generated");
         let emitted = &code[..length];
-        let (found, _) = interpret("[ab]*[ac]*a*x", "", RUN, 0);
+        let (found, _) = interpret("[ab]*[ac]*x", "", RUN, 0);
         let full = execute(emitted, count, RUN, 0, u64::MAX).expect("runs to completion");
         assert!(!found);
         assert_eq!(full.answer, NO_MATCH as i64);
