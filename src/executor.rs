@@ -1007,7 +1007,7 @@ impl Vm<'_, '_, '_, '_> {
     // Ordinary opcodes stay in one dispatch loop. A long sub-operation, pause,
     // failure or capacity request returns to the outer resumable phase loop.
     // This is the same instruction implementation for both entry points.
-    fn trial(&mut self, quantum: usize) -> Result<(), ExecError> {
+    fn trial<const PAUSABLE: bool>(&mut self, quantum: usize) -> Result<(), ExecError> {
         let initial = self.budget.remaining();
         let mut paid = match self.state.phase {
             Phase::Execute { op, a, b } => Some([op, a, b]),
@@ -1015,7 +1015,7 @@ impl Vm<'_, '_, '_, '_> {
         };
         self.state.phase = Phase::Trial;
         loop {
-            if initial - self.budget.remaining() >= quantum {
+            if PAUSABLE && initial - self.budget.remaining() >= quantum {
                 return Ok(());
             }
             let [op, a, b] = if let Some(opcode) = paid.take() {
@@ -1029,7 +1029,11 @@ impl Vm<'_, '_, '_, '_> {
                 self.state.pc += 1;
                 opcode
             };
-            let available = quantum.saturating_sub(initial - self.budget.remaining());
+            let available = if PAUSABLE {
+                quantum.saturating_sub(initial - self.budget.remaining())
+            } else {
+                usize::MAX
+            };
             match self.instruction(op, a, b, available) {
                 Ok(Step::Next) => {}
                 Ok(Step::Fail) => {
@@ -1069,6 +1073,11 @@ impl Vm<'_, '_, '_, '_> {
     }
 
     fn run(&mut self, quantum: usize) -> Result<Progress, ExecError> {
+        // A search that runs to its end in one call has an unbounded quantum,
+        // and its trials are compiled without re-reading it per instruction:
+        // the same instructions and charges, minus a comparison that can never
+        // succeed.
+        let unbounded = quantum == usize::MAX;
         let initial = self.budget.remaining();
         loop {
             if let Some(result) = self.state.phase.outcome() {
@@ -1170,14 +1179,18 @@ impl Vm<'_, '_, '_, '_> {
                         }
                         match self.state.phase {
                             Phase::Initialize(index) => self.initialize(index, quantum - used)?,
-                            Phase::Trial => self.trial(quantum - used)?,
+                            Phase::Trial if unbounded => self.trial::<false>(usize::MAX)?,
+                            Phase::Trial => self.trial::<true>(quantum - used)?,
                             _ => break,
                         }
                         chained += 1;
                     }
                 }
                 Phase::Initialize(index) => self.initialize(index, available)?,
-                Phase::Trial | Phase::Execute { .. } => self.trial(available)?,
+                Phase::Trial | Phase::Execute { .. } if unbounded => {
+                    self.trial::<false>(usize::MAX)?
+                }
+                Phase::Trial | Phase::Execute { .. } => self.trial::<true>(available)?,
                 Phase::Class { .. } => self.class_step(available)?,
                 Phase::Sequence { .. } => self.sequence_step(available)?,
                 Phase::AtomScan => self.atom_scan(false, available)?,

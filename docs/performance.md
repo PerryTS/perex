@@ -305,3 +305,18 @@ interleaved per round.
   capture registers `find` copies out. Short matches gain up to 17 percent —
   `/a/` against `"a"` from 50.0 ns to 41.5 — and nothing is slower. It moves
   none of the matches ahead of V8's `test`. See [engine](engine.md).
+- **Compiling the whole evaluator a second time without pause checks.**
+  Rejected. With the dispatcher loop and its trials both specialised for an
+  unbounded quantum, long scans gained 4 to 6 percent and repeats 3 to 8, but
+  two-, four- and eight-character literal hits lost 3 to 6 percent, the folded
+  literal 3 to 4, and the 256 KiB class miss 3 to 4, consistently across three
+  runs. Making `skip_verified`, which only the losing literal hits reach,
+  out of line did not change that. It is code layout, not work: the two copies
+  do the same thing.
+- **Compiling only the trial loop a second time.** Kept. The dispatcher loop
+  stays one function and chooses, per trial, a compilation that does not
+  compare the work done against the quantum before every instruction when
+  that quantum is unbounded. Captures gained 5 percent, repeats 4 to 9, the
+  one-character hits and the end-anchored hit 5, the lookbehind 4, and no case
+  lost more than 1.6 percent. The long-scan gains of the whole-evaluator form
+  are given up with its losses. See [engine](engine.md).
