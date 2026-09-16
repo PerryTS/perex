@@ -307,7 +307,7 @@ interleaved per round.
   none of the matches ahead of V8's `test`. See [engine](engine.md).
 - **Compiling the whole evaluator a second time without pause checks.**
   Rejected. With the dispatcher loop and its trials both specialised for an
-  unbounded quantum, long scans gained 4 to 6 percent and repeats 3 to 8, but
+  unbounded quantum, long scans gained 4 to 6 percent and repeats 2 to 8, but
   two-, four- and eight-character literal hits lost 3 to 6 percent, the folded
   literal 3 to 4, and the 256 KiB class miss 3 to 4, consistently across three
   runs. Making `skip_verified`, which only the losing literal hits reach,
@@ -320,3 +320,42 @@ interleaved per round.
   one-character hits and the end-anchored hit 5, the lookbehind 4, and no case
   lost more than 1.6 percent. The long-scan gains of the whole-evaluator form
   are given up with its losses. See [engine](engine.md).
+
+### Where the three leave it
+
+The engine before all three against the engine after, in one process,
+interleaved, best of 21, with V8 adjacent in time. `find` is compared with both
+of V8's entry points; `is_match`, which produces no captures, with `test`,
+which produces none either.
+
+| Case | `find` before | `find` after | `is_match` | V8 `test` | V8 `exec` |
+|---|---:|---:|---:|---:|---:|
+| `/z/` against `""` | 19.2 ns | **10.9 ns** | **10.0 ns** | 13.2 ns | 15.5 ns |
+| `/z/` against `"a"` | 23.4 ns | **12.4 ns** | **11.2 ns** | 15.8 ns | 18.2 ns |
+| `/z/` against ten bytes | 23.9 ns | **13.3 ns** | **12.4 ns** | 16.0 ns | 18.0 ns |
+| Short literal, 29 characters | 56.4 ns | 52.1 ns | 44.2 ns | 40.5 ns | 43.7 ns |
+| `/a/` against `"a"` | 50.2 ns | 46.0 ns | 39.1 ns | 18.4 ns | 35.1 ns |
+| Two-character literal | 51.4 ns | 48.4 ns | 42.7 ns | 19.3 ns | 36.0 ns |
+| Sixteen-character literal | 56.9 ns | 54.5 ns | 48.7 ns | 15.0 ns | 29.4 ns |
+| Folded literal | 67.8 ns | 65.3 ns | 60.6 ns | 17.8 ns | 37.5 ns |
+| End-anchored hit, 256 KiB | 58.1 ns | 55.8 ns | 48.4 ns | 13.9 ns | 35.1 ns |
+| Literal lookbehind, 256 KiB | 118.0 ns | 117.0 ns | 108.0 ns | 30.0 ns | 41.5 ns |
+| `a+!` over sixty | 97.0 ns | 92.8 ns | 85.8 ns | 33.8 ns | 49.8 ns |
+| `\w+!` over sixty | 156.2 ns | 153.1 ns | 147.2 ns | 36.7 ns | 52.0 ns |
+| Short classes | 339.6 ns | 338.4 ns | 330.9 ns | 69.1 ns | 94.6 ns |
+| Captures, 25 characters | 432.0 ns | 420.1 ns | 405.4 ns | 61.6 ns | 94.2 ns |
+
+Across the twenty-five cases `find` is 10 percent faster by geometric mean, and
+`is_match` 16 percent faster than `find` was. The six long subjects are
+unchanged and still ahead. The three short misses moved ahead of V8 at both
+entry points, so `find` is now ahead on nine cases and behind on sixteen, where
+it was six and nineteen.
+
+None of the sixteen matches moved ahead. The nearest is the short literal, where
+`is_match` is 1.09 times V8's `test` and `find` 1.19 times its `exec`. The rest
+are between 1.3 and 6.8 times `exec` for `find`, and between 2.1 and 6.6 times
+`test` for `is_match`. That is the shape the floor above describes: a start that
+matches costs a round through admission, one through the candidate scan and
+trial, and one through the answer, each doing bounds-checked work, where V8
+runs native code. The three changes removed what could be removed without
+removing a round a paused search needs, and what is left is those rounds.
