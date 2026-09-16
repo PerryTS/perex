@@ -280,3 +280,23 @@ subject would decide, which the rule will not look at. The per-case table is in
 
 The SIMD route that issue also offered is withdrawn: it was there to close the
 scan-bound cases, and those are closed without it.
+
+## The interpreter alone, 2026-09-16
+
+The compilation tier is not in any host yet, so what a host runs today is the
+interpreter. Against V8 on all twenty-five cases, measured with
+`bench/compare.sh` before the changes below, it was behind at both entry points
+on nineteen, between 1.48x and 7.43x against `test`, and ahead on the six long
+subjects by between 1.9x and four orders of magnitude.
+
+Three changes were tried to see how much of that the interpreter can close
+without compiling, each measured against the previous engine in one process,
+interleaved per round.
+
+- **Deciding a short search before it seeks.** Kept. An ASCII remainder under
+  64 bytes is scanned once on entering admission: no byte a match can begin
+  with decides the search, and the first one is where it starts. The three
+  short misses went from behind V8 at both entry points to ahead of both —
+  `/z/` against `"a"` from 23.6 ns to 12.5, against V8's 14.9 and 16.8 — and
+  the short literal hits gained 2 to 7 percent. See
+  [candidate](candidate.md#short-remainders).

@@ -92,6 +92,87 @@ compilation case against the exact previous binary and compatible alternatives,
 including short direct hits where the new analysis/phase can add overhead.
 
 
+## Short remainders
+
+A search used to take the same route whatever the subject's length: admission,
+then a dispatcher round to seek to the requested start, then another to scan
+from there. On a short subject those rounds are most of the search. `/z/`
+against `"a"` spent 23.6 ns deciding what one comparison decides, where V8
+spends 14.9.
+
+So on entering admission, an ASCII remainder shorter than 64 bytes is scanned
+once for a byte the descriptor admits. None decides the search: no start in the
+remainder can match. The first one found is where the search begins, since no
+start before it can match either, and the start phase is entered there as a
+seek would enter it — including the end bound, which a match anchored at the
+end would otherwise have applied. The scan is skipped where it could only add
+work: no descriptor, sticky or start-anchored searches, which examine one
+position, and a remainder of 64 bytes or more, which the existing scan chunks.
+
+The decision depends on the program, the subject and the start, never on the
+quantum, so a paused search makes it at the same charge. Positions through the
+first candidate are charged, as the scan from the start charges them; a miss of
+`n` positions is charged `n`, where it was charged at least `n + 1`. The step
+reads fewer bytes than the admission chunk `docs/resumption.md` bounds a pause
+by.
+
+### Measurement
+
+The same binary built against the previous and the new engine, in one process,
+interleaved per round, best of twenty-one; V8 adjacent in time:
+
+| Case | Before | After | V8 `test` | V8 `exec` |
+|---|---:|---:|---:|---:|
+| `/z/` against `""` | 19.5 ns | **11.8 ns** | 12.6 ns | 14.5 ns |
+| `/z/` against `"a"` | 23.6 ns | **12.5 ns** | 14.9 ns | 16.8 ns |
+| `/z/` against ten bytes | 24.4 ns | **13.5 ns** | 15.2 ns | 17.6 ns |
+| `/a/` against `"a"` | 50.6 ns | 49.5 ns | 17.8 ns | 34.6 ns |
+| Eight-character literal | 56.5 ns | 53.3 ns | 13.4 ns | 27.4 ns |
+| Short literal, 29 characters | 56.0 ns | 52.2 ns | 39.0 ns | 45.2 ns |
+
+The three misses go from behind V8 at both entry points to ahead of both. The
+short literal hits lose one round and gain between 2 and 7 percent. Of the rest
+of the twenty-five cases in `bench/`, none moved by more than 1.1 percent except
+the 256 KiB literal lookbehind, which measured between 0 and 2.9 percent slower
+across five runs of 21 rounds each: its remainder is too long to scan, and it
+pays only for being told so.
+
+The claim that a program is anchored at the subject's start is derived at the
+start of every search, and the same measurement priced that derivation at
+1.3 ns of the empty search. It now decides the common case — a consuming
+instruction straight after the entry `SAVE`s — before building its branch stack.
+Without that, the misses were about 1 ns slower and the literal hits up to
+1 ns slower; `[^0-9]+!` was 0.8 percent slower than before rather than 1.1.
+
+### Checks
+
+`tests/short_start.rs` compares thirty-four patterns against the same pattern
+written as `(?:P|(?!))`, whose descriptor is empty so the scan never runs,
+asserting that it is. Subjects are ASCII, from empty to eighty bytes around the
+64-byte limit, with the needed bytes absent, first, last, in the middle and
+repeated, from starts at zero, one, the middle, the end and past it. The
+patterns cover literals, folding, classes, alternation, captures and named
+groups, lookbehind and lookahead, end anchors with and without `m`, `^`, the
+`y` and `u` flags, backreferences, leading repeats, a class with no ASCII
+member, nullable patterns and the empty pattern. A miss the scan decides must
+charge no more than the search it replaces, a miss over `n` positions is
+charged exactly `n`, and a candidate before an end bound must not become the
+start. Six injected faults are each caught: a start one past the candidate, the
+end bound ignored, a candidate taken as absent, sticky searches scanned, the
+scan read from the subject's start rather than the requested one, and the length
+limit removed. A seventh, testing the class with no ASCII member for a NUL byte
+instead of deciding it outright, was not a fault: no candidate is found either
+way. The engine differential and the candidate, end-candidate, classes and
+atom-filter harnesses, plain and at one- and seventeen-unit quanta with
+relocation and growth, and the admission, casefold, names, legacy, repetition,
+modifiers, sets, Unicode-sets and sequences harnesses report no differences.
+
+`tests/resumption.rs` tested an eighty-member class against `"x"` as a long
+operation that must pause at a one-unit quantum. Since candidate scanning landed
+that search never reached the class — its descriptor rejects every ASCII byte —
+and paused only between phases, which this change removes. It is now tested
+against `"é"`, which the class has to be evaluated against.
+
 ## Strict end condition
 
 Format 10 adds word 8, encoded like word 7, for possible last-consumed ASCII

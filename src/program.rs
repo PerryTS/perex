@@ -266,6 +266,17 @@ fn derive_alternation(words: &[u32], instructions: usize) -> bool {
 /// Derived from the instructions each search, like [`derive_leading`], rather
 /// than stored, so no program word can claim it falsely.
 pub(crate) fn derive_start_anchored(words: &[u32], instructions: usize) -> bool {
+    // Almost every program reaches a consuming instruction straight after its
+    // entry `SAVE`s, which decides the claim without the branch stack below.
+    // This runs at the start of every search, so the common case stays short.
+    let entry = leading_pc(words, instructions);
+    if entry < instructions && entry < LEADING_SCAN {
+        match words[HEADER + entry * 3] {
+            START => return true,
+            SPLIT => {}
+            _ => return false,
+        }
+    }
     let mut pending = [0usize; LEADING_BRANCHES];
     let mut depth = 0;
     let mut pc = 0;

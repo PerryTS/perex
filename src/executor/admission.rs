@@ -1,4 +1,5 @@
 //! Resumable necessary-condition search through original subject storage.
+use super::candidate::ShortStart;
 use super::*;
 
 /// The original storage the condition search reads. The bytes borrow the
@@ -126,6 +127,14 @@ impl Vm<'_, '_, '_, '_> {
                 if !self.end_candidate()? {
                     self.state.phase = Phase::Finished(false);
                     return Ok(());
+                }
+                match self.short_start()? {
+                    ShortStart::Absent => {
+                        self.state.phase = Phase::Finished(false);
+                        return Ok(());
+                    }
+                    ShortStart::At(at) => return self.begin_start(at),
+                    ShortStart::Unknown => {}
                 }
                 if self.input.len_utf16() < 64 || self.program.words[2] & ADMISSION == 0 {
                     self.state.phase = Phase::Start;

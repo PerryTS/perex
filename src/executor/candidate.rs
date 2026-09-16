@@ -14,6 +14,19 @@ struct Prefix {
     members: usize,
 }
 
+/// The longest remainder `short_start` scans for one unit of work.
+const SHORT_REMAINDER: usize = 64;
+
+/// What a scan of a short remainder decides about the first start.
+pub(super) enum ShortStart {
+    /// The remainder is too long, or the program or storage does not qualify.
+    Unknown,
+    /// No byte a match can begin with is in the remainder.
+    Absent,
+    /// The first byte a match can begin with is at this offset.
+    At(usize),
+}
+
 impl Vm<'_, '_, '_, '_> {
     pub(super) fn end_candidate(&mut self) -> Result<bool, ExecError> {
         // The upper byte is the length bound, not part of this descriptor.
@@ -36,6 +49,58 @@ impl Vm<'_, '_, '_, '_> {
             || (descriptor != 1
                 && u32::from(unit) >= (descriptor >> 8) & 255
                 && u32::from(unit) <= (descriptor >> 16) & 255))
+    }
+
+    /// Where the first start can be, decided by one scan of a short ASCII
+    /// remainder for a byte a match can begin with, before the search seeks.
+    ///
+    /// A remainder holding none decides the whole search. One that holds one
+    /// sends the search straight to it, since no start before it can match.
+    /// Either way the dispatcher round that would seek to the requested start
+    /// and the one that would scan from there are not taken.
+    ///
+    /// The decision depends on the program, the subject and the start alone,
+    /// never on the quantum, so a paused search makes it at the same charge.
+    /// Positions through the first candidate are charged, as the scan from the
+    /// start would have charged them; the remainder is shorter than a word
+    /// scan's chunk, so the step stays inside the bound a pause documents.
+    #[inline(always)]
+    pub(super) fn short_start(&mut self) -> Result<ShortStart, ExecError> {
+        let descriptor = self.program.words[7];
+        let from = self.state.requested_start;
+        let Some(rest) = self.input.ascii_bytes().and_then(|bytes| bytes.get(from..)) else {
+            return Ok(ShortStart::Unknown);
+        };
+        if descriptor == 0 || self.state.one_start || rest.len() >= SHORT_REMAINDER {
+            return Ok(ShortStart::Unknown);
+        }
+        let (found, inspected) = if descriptor == 1 || rest.is_empty() {
+            (None, 1)
+        } else {
+            first_in_range::<false, false>(rest, (descriptor >> 8) as u8, (descriptor >> 16) as u8)
+        };
+        self.charge(inspected)?;
+        Ok(match found {
+            Some(index) => ShortStart::At(from + index),
+            None => ShortStart::Absent,
+        })
+    }
+
+    /// Enter the start phase at `at` as a seek there would, for a start that
+    /// `short_start` found.
+    pub(super) fn begin_start(&mut self, at: usize) -> Result<(), ExecError> {
+        // An end-anchored match of bounded length cannot begin before its
+        // bound, which the start phase would otherwise have applied.
+        let target = match self.program.end_bound() {
+            Some(bound) => at.max(self.input.len_utf16().saturating_sub(bound)),
+            None => at,
+        };
+        self.state.near = Mark::NONE;
+        self.cursor = self
+            .input
+            .cursor_at(target)
+            .ok_or(ExecError::InvalidProgram)?;
+        self.sought(AfterSeek::Start)
     }
 
     pub(super) fn start_candidate(&mut self) {

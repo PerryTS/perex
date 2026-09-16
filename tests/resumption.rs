@@ -368,7 +368,9 @@ fn long_operations_pause_without_repeating_prefix_work() {
             0,
         ),
         ("[a-z]".to_owned(), "", "0".repeat(800), 0),
-        (format!("[{classes}]"), "", "x".to_owned(), 0),
+        // A subject the class must actually be tested against. On ASCII
+        // storage a class with no ASCII member is decided before any start.
+        (format!("[{classes}]"), "", "é".to_owned(), 0),
         (format!("[{classes}]"), "u", "😀".repeat(80), 0),
         (
             "😀needle".to_owned(),
@@ -412,7 +414,10 @@ fn long_operations_pause_without_repeating_prefix_work() {
     ];
     for (pattern, flags, subject, start) in cases {
         let owner = Owner::new(&pattern, flags, Subject::Bytes(subject.as_bytes().to_vec()));
-        assert!(compare(&owner, start, 1) > 0);
+        assert!(
+            compare(&owner, start, 1) > 0,
+            "{pattern:?} {flags:?} {start}"
+        );
         compare(&owner, start, 17);
     }
 }
