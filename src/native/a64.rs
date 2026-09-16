@@ -444,6 +444,42 @@ impl machine::Machine for Assembler<'_> {
     fn load_window_byte(&mut self, dst: machine::Slot, offset: u32) {
         self.ldrb_imm(slot(dst), WINDOW, offset);
     }
+    fn advance_by(&mut self, dst: machine::Slot, by: machine::Slot) {
+        self.add_reg(slot(dst), slot(dst), slot(by));
+    }
+    fn load_word(&mut self, dst: machine::Slot, base: machine::Slot, index: machine::Slot) {
+        self.ldr_reg(slot(dst), slot(base), slot(index));
+    }
+    fn splat(&mut self, dst: machine::Slot, byte: u8) {
+        let word = u64::from(byte) * 0x0101_0101_0101_0101;
+        self.movz(slot(dst), word as u16);
+        for shift in [16, 32, 48] {
+            self.movk(slot(dst), (word >> shift) as u16, shift);
+        }
+    }
+    fn first_equal(
+        &mut self,
+        dst: machine::Slot,
+        word: machine::Slot,
+        splat: machine::Slot,
+        scratch: machine::Slot,
+    ) -> Patch {
+        // A byte equals another exactly when their difference is zero, and a
+        // word holds a zero byte exactly when subtracting one from each byte
+        // borrows into its top bit where the byte itself has none.
+        self.mov_low_bits(slot(scratch));
+        self.eor(WINDOW, slot(word), slot(splat));
+        self.sub_reg(slot(dst), WINDOW, slot(scratch));
+        self.bic(slot(dst), slot(dst), WINDOW);
+        self.ands_high_bits(slot(dst), slot(dst));
+        let none = self.b_cond_forward(Cond::Eq);
+        // The lowest such bit is in the first byte that matched, and this is a
+        // little-endian load, so counting the bits below it gives its offset.
+        self.rbit(slot(dst), slot(dst));
+        self.clz(slot(dst), slot(dst));
+        self.lsr(slot(dst), slot(dst), 3);
+        none
+    }
     fn store_position(&mut self, value: machine::Slot, index: u32) {
         self.str_index(slot(value), slot(machine::REGISTERS), index);
     }
@@ -495,6 +531,55 @@ impl machine::Machine for Assembler<'_> {
     }
 }
 
+impl Assembler<'_> {
+    /// Eight bytes at `[rn + rm]`, which a scan reads at once.
+    pub(crate) fn ldr_reg(&mut self, rt: Reg, rn: Reg, rm: Reg) {
+        self.word(0xf860_6800 | u32::from(rm.0) << 16 | u32::from(rn.0) << 5 | u32::from(rt.0));
+    }
+    pub(crate) fn eor(&mut self, rd: Reg, rn: Reg, rm: Reg) {
+        self.word(0xca00_0000 | u32::from(rm.0) << 16 | u32::from(rn.0) << 5 | u32::from(rd.0));
+    }
+    pub(crate) fn sub_reg(&mut self, rd: Reg, rn: Reg, rm: Reg) {
+        self.word(0xcb00_0000 | u32::from(rm.0) << 16 | u32::from(rn.0) << 5 | u32::from(rd.0));
+    }
+    /// `rd = rn & !rm`.
+    pub(crate) fn bic(&mut self, rd: Reg, rn: Reg, rm: Reg) {
+        self.word(0x8a20_0000 | u32::from(rm.0) << 16 | u32::from(rn.0) << 5 | u32::from(rd.0));
+    }
+    /// `rd = rn & 0x8080808080808080`, setting the flags. The immediate is the
+    /// one repeating pattern this needs, so its encoding is written out rather
+    /// than derived.
+    pub(crate) fn ands_high_bits(&mut self, rd: Reg, rn: Reg) {
+        self.word(0xf201_c000 | u32::from(rn.0) << 5 | u32::from(rd.0));
+    }
+    /// `rd = 0x0101010101010101`, likewise.
+    pub(crate) fn mov_low_bits(&mut self, rd: Reg) {
+        self.word(0xb200_c3e0 | u32::from(rd.0));
+    }
+    /// Sixteen bits of a constant, at `shift` bits up, leaving the rest.
+    pub(crate) fn movk(&mut self, rd: Reg, imm: u16, shift: u32) {
+        if !shift.is_multiple_of(16) || shift >= 64 {
+            self.fail(EncodeError::Immediate);
+            return;
+        }
+        self.word(0xf280_0000 | (shift / 16) << 21 | u32::from(imm) << 5 | u32::from(rd.0));
+    }
+    pub(crate) fn rbit(&mut self, rd: Reg, rn: Reg) {
+        self.word(0xdac0_0000 | u32::from(rn.0) << 5 | u32::from(rd.0));
+    }
+    pub(crate) fn clz(&mut self, rd: Reg, rn: Reg) {
+        self.word(0xdac0_1000 | u32::from(rn.0) << 5 | u32::from(rd.0));
+    }
+    /// `rd = rn >> shift`, unsigned.
+    pub(crate) fn lsr(&mut self, rd: Reg, rn: Reg, shift: u32) {
+        if shift >= 64 {
+            self.fail(EncodeError::Immediate);
+            return;
+        }
+        self.word(0xd340_fc00 | shift << 16 | u32::from(rn.0) << 5 | u32::from(rd.0));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,6 +602,22 @@ mod tests {
     #[test]
     fn encodes_what_the_assembler_encodes() {
         assert_eq!(assemble(|a| a.ret()), [0xd65f_03c0]);
+        // The scan, whose words came from the assembler the same way.
+        assert_eq!(assemble(|a| a.ldr_reg(Reg(7), X0, X2)), [0xf862_6807]);
+        assert_eq!(assemble(|a| a.eor(Reg(15), Reg(7), X5)), [0xca05_00ef]);
+        assert_eq!(
+            assemble(|a| a.sub_reg(Reg(6), Reg(15), Reg(9))),
+            [0xcb09_01e6]
+        );
+        assert_eq!(assemble(|a| a.bic(Reg(6), Reg(6), Reg(15))), [0x8a2f_00c6]);
+        assert_eq!(
+            assemble(|a| a.ands_high_bits(Reg(6), Reg(6))),
+            [0xf201_c0c6]
+        );
+        assert_eq!(assemble(|a| a.mov_low_bits(Reg(9))), [0xb200_c3e9]);
+        assert_eq!(assemble(|a| a.rbit(Reg(6), Reg(6))), [0xdac0_00c6]);
+        assert_eq!(assemble(|a| a.clz(Reg(6), Reg(6))), [0xdac0_10c6]);
+        assert_eq!(assemble(|a| a.lsr(Reg(6), Reg(6), 3)), [0xd343_fcc6]);
         assert_eq!(assemble(|a| a.movz(X0, 0)), [0xd280_0000]);
         assert_eq!(assemble(|a| a.movz(X0, 1)), [0xd280_0020]);
         assert_eq!(assemble(|a| a.movz(X3, 65535)), [0xd29f_ffe3]);

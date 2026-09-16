@@ -275,6 +275,42 @@ impl Tables {
     }
 }
 
+/// The byte every match must begin with, when there is one.
+///
+/// A scan for it skips starts in bulk where the loop below tries them one at a
+/// time. Only an exact byte counts: a folded character matches two, and a class
+/// matches a set, neither of which this scan looks for. Assertions before it
+/// are stepped over — a lookbehind reads what is before the start, so what the
+/// match itself begins with is unchanged.
+fn required_first_byte(program: Program<'_>) -> Option<u8> {
+    let mut pc = 0;
+    loop {
+        if pc >= program.instructions() {
+            return None;
+        }
+        let [op, a, _] = program.instruction(pc);
+        match op {
+            SAVE | START | END => pc += 1,
+            ASSERT if literal_lookbehind(program, pc).is_some() => pc = a as usize,
+            CHAR => return u8::try_from(a).ok().filter(u8::is_ascii),
+            // A repeat that must take at least one character begins with what
+            // its body matches.
+            ATOM_REPEAT => {
+                let record = program.repeat(a as usize);
+                if record[0] == 0 {
+                    return None;
+                }
+                let [body, byte, _] = program.instruction(pc + 3);
+                return (body == CHAR)
+                    .then(|| u8::try_from(byte).ok())
+                    .flatten()
+                    .filter(u8::is_ascii);
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// Characters every match must still consume from `pc` onwards. A repeat
 /// contributes its minimum, since that is all it is obliged to take.
 fn least_from(program: Program<'_>, mut pc: usize) -> usize {
@@ -397,19 +433,28 @@ pub const NO_MATCH: isize = -1;
 pub const EXHAUSTED: isize = -2;
 
 /// Subjects up to this many bytes are where generated code beats the
-/// interpreter for a program that has to try every start.
+/// interpreter for a program that has to look at every start.
 ///
-/// Generated code tries starts one at a time; the interpreter skips them in
-/// bulk, searching raw bytes for what a match must contain. So the tier wins
-/// where the flat cost of entering a search dominates and loses where the
-/// scan does, and the crossing is a length. Measured over subjects that match
-/// nothing, which is the case that tries every start: `[0-9]+[A-Z]+` and `a+!`
-/// cross at 24 to 32 bytes, `needle` at 64, a folded literal past 128, and a
-/// two-capture pattern between 48 and 64. Thirty-two is the shortest of those
-/// rounded to a power of two, so at worst a host gives up a small win on the
-/// two shapes that cross earliest — 1.06x and 1.13x on the measured pair —
-/// rather than taking a large loss on any of them. See `docs/compilation.md`.
+/// The interpreter skips starts in bulk, searching raw bytes for what a match
+/// must contain. Generated code that cannot do the same looks at each start in
+/// turn, so it wins where the flat cost of entering a search dominates and
+/// loses where the scan does. Measured over subjects that match nothing, which
+/// is the case that looks at every start: `[0-9]+[A-Z]+` crosses at 24 to 32
+/// bytes, a folded literal past 128, and a two-capture pattern between 48 and
+/// 64. Thirty-two is the shortest of those rounded to a power of two.
 const SHORT_SUBJECT: usize = 32;
+
+/// The same, for a program whose generated code scans eight bytes at a time
+/// for the byte a match must begin with.
+///
+/// That scan changes the shape of the comparison rather than the constant:
+/// `needle` over a subject holding none of it was 1.51x the interpreter at 128
+/// bytes and 15.09x at 512 KiB, and is 0.23x and 1.88x with it. `a+!` no
+/// longer crosses at all — 0.16x to 0.21x from 64 bytes to 512 KiB, because
+/// the interpreter walks the run its repeat leaves behind. Five hundred and
+/// twelve is where the measured shapes still win: `needle` is 0.85x there and
+/// 1.39x at 2,048. See `docs/compilation.md`.
+const SCANNED_SUBJECT: usize = 512;
 
 /// Whether a host holding generated code for this program should run it for a
 /// subject of this many bytes, or hand the search to the interpreter.
@@ -423,8 +468,13 @@ const SHORT_SUBJECT: usize = 32;
 /// beginning, or one whose match must end at its end — keeps the tier at any
 /// length, because what generated code loses on a long subject is the walk.
 pub fn preferred(program: Program<'_>, bytes: usize) -> bool {
+    let room = if required_first_byte(program).is_some() {
+        SCANNED_SUBJECT
+    } else {
+        SHORT_SUBJECT
+    };
     supported(program)
-        && (bytes <= SHORT_SUBJECT
+        && (bytes <= room
             || program.end_bound().is_some()
             || derive_start_anchored(program.words(), program.instructions()))
 }
@@ -523,8 +573,48 @@ fn generate<M: Machine>(program: Program<'_>, asm: &mut M) -> Result<usize, Emit
     // too, but `supported` refuses those before this.
     let one_start = derive_start_anchored(program.words(), program.instructions());
 
+    // A match that must begin with a known byte lets the search skip starts in
+    // bulk. Eight bytes are read and tested at once, where trying starts one at
+    // a time reads one and runs the body's first test on it, and the budget is
+    // spent once per eight bytes rather than once per byte. What is left over
+    // at the end of the subject, and a subject too short for a word at all, is
+    // the byte-at-a-time loop after it.
+    let scanned = (!one_start).then(|| required_first_byte(program)).flatten();
+
     let outer = asm.here();
     no_match.push(asm.start_without_room())?;
+    if let Some(byte) = scanned {
+        // Slots the body has not reached yet: its repeats begin after this.
+        let (splat, word) = (repeat_end(0), repeat_floor(0));
+        let (offset, scratch, bound) = (repeat_end(1), repeat_floor(1), TABLE);
+        let mut byte_at_a_time = Patches::new();
+        asm.compare_position(LENGTH, 8);
+        byte_at_a_time.push(asm.branch_if(Cond::Less))?;
+        asm.behind(bound, LENGTH, 8);
+        asm.splat(splat, byte);
+        let words = asm.here();
+        asm.compare(FROM, bound);
+        byte_at_a_time.push(asm.branch_if(Cond::Greater))?;
+        asm.load_word(word, SUBJECT, FROM);
+        let absent = asm.first_equal(offset, word, splat, scratch);
+        asm.advance_by(FROM, offset);
+        let found = asm.branch();
+        asm.bind(absent);
+        asm.ahead(FROM, FROM, 8);
+        out_of_budget.push(asm.branch_back(words))?;
+        byte_at_a_time.bind(asm);
+        let bytes = asm.here();
+        no_match.push(asm.start_without_room())?;
+        asm.load_byte(BYTE, SUBJECT, FROM);
+        asm.compare_byte(BYTE, u32::from(byte));
+        let here = asm.branch_if(Cond::Equal);
+        asm.ahead(FROM, FROM, 1);
+        out_of_budget.push(asm.branch_back(bytes))?;
+        asm.bind(found);
+        asm.bind(here);
+        // A word may hold the byte past the last start that has room.
+        no_match.push(asm.start_without_room())?;
+    }
     asm.copy(AT, FROM);
 
     let mut pc = 0;
@@ -848,6 +938,47 @@ mod tests {
                 } else if w & 0xffe0_fc1f == 0xeb00_001f {
                     let (a, b) = (self.read(rn)?, self.read(rm)?);
                     self.flags(a, b);
+                } else if w & 0xff80_0000 == 0xf280_0000 {
+                    // Sixteen bits of a constant, leaving the rest.
+                    let shift = ((w >> 21) & 3) * 16;
+                    let kept = !(0xffffu64 << shift);
+                    let value = (self.read(rd)? & kept) | u64::from((w >> 5) & 0xffff) << shift;
+                    self.write(rd, value)?;
+                } else if w & 0xffe0_fc00 == 0xf860_6800 {
+                    // Eight bytes at once, which is what a scan reads.
+                    let at = self.read(rn)?.wrapping_add(self.read(rm)?);
+                    let mut value = 0u64;
+                    for byte in 0..8 {
+                        value |= u64::from(self.load(at + byte)?) << (byte * 8);
+                    }
+                    self.write(rd, value)?;
+                } else if w & 0xffe0_fc00 == 0xca00_0000 {
+                    let value = self.read(rn)? ^ self.read(rm)?;
+                    self.write(rd, value)?;
+                } else if w & 0xffe0_fc00 == 0xcb00_0000 {
+                    let value = self.read(rn)?.wrapping_sub(self.read(rm)?);
+                    self.write(rd, value)?;
+                } else if w & 0xffe0_fc00 == 0x8a20_0000 {
+                    let value = self.read(rn)? & !self.read(rm)?;
+                    self.write(rd, value)?;
+                } else if w & 0xffff_fc00 == 0xf201_c000 {
+                    let value = self.read(rn)? & 0x8080_8080_8080_8080;
+                    self.write(rd, value)?;
+                    self.z = value == 0;
+                    self.c = false;
+                } else if w & 0xffff_ffe0 == 0xb200_c3e0 {
+                    self.write(rd, 0x0101_0101_0101_0101)?;
+                } else if w & 0xfffc_0000 == 0xdac0_0000 {
+                    let value = self.read(rn)?;
+                    let value = match (w >> 10) & 7 {
+                        0 => value.reverse_bits(),
+                        4 => u64::from(value.leading_zeros()),
+                        _ => return Err("a one-source instruction the emulator does not decode"),
+                    };
+                    self.write(rd, value)?;
+                } else if w & 0xffc0_0000 == 0xd340_0000 {
+                    let value = self.read(rn)? >> ((w >> 16) & 63);
+                    self.write(rd, value)?;
                 } else if w & 0xffe0_fc00 == 0x3860_6800 {
                     let at = self.read(rn)?.wrapping_add(self.read(rm)?);
                     let byte = self.load(at)?;

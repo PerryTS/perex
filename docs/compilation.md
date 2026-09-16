@@ -360,6 +360,44 @@ it, and compares every answer with the interpreter at every start, on whichever
 architecture the runner is. That driver is the host half — mapping, protecting
 and calling — which a runtime would own.
 
+## Skipping starts
+
+Generated code used to look at every start position in turn, which is what the
+interpreter's admission scan exists not to do: it searches raw bytes for what a
+match must contain and skips almost all of them. That difference was the whole
+of why a host ever chose the interpreter.
+
+Where a match must begin with a known byte — a literal first character, or a
+repeat of one that must take at least one — generated code now scans for it
+eight bytes at a time. One 64-bit load, an exclusive or against that byte
+repeated, and the subtract-and-mask that finds a zero byte; the first match's
+offset is the count of trailing zero bits over eight. What is left at the end of
+the subject, and a subject shorter than eight bytes, is a byte-at-a-time loop
+after it. The budget is spent once per eight bytes rather than once per start,
+so the pause bound improves with it.
+
+The verifier needed one new thing for this: an eight-byte load is inside the
+subject only where the position it reads from has eight bytes of room, which the
+comparison against `length - 8` establishes. The arithmetic itself it follows
+only as far as which register each instruction writes — the result is data, not
+a position or an address, and nothing is refined from its flags.
+
+Measured over subjects that hold no match, which is the case that looks at every
+start:
+
+| bytes | `needle` before | `needle` after | `a+!` before | `a+!` after |
+|---:|---:|---:|---:|---:|
+| 128 | 1.51x | **0.23x** | 1.53x | **0.16x** |
+| 512 | 5.48x | **0.85x** | 2.19x | **0.21x** |
+| 2048 | 9.62x | **1.39x** | 2.34x | **0.21x** |
+| 524288 | 15.09x | **1.88x** | 2.51x | **0.21x** |
+
+`a+!` no longer crosses at all: the interpreter walks the run its repeat leaves
+behind, where the scan steps over it. `needle` crosses around a thousand bytes
+instead of sixty-four, and its worst case is 1.9x rather than 15x. A folded
+literal has no single byte to scan for, and a class does not either, so those
+are unchanged — which is what the two lengths in the rule below are.
+
 ## Choosing the path
 
 The last row of the table above is the warning: over 256 KiB generated code is
@@ -378,25 +416,25 @@ at the subject's end starts near that end, and neither cares how long the
 subject is. Second, for everything else, whether the subject is short enough
 that entering a search costs more than the walk.
 
-That length was measured rather than guessed, over subjects that match nothing,
-which is the case that tries every start. Ratios are generated code over the
+There are two lengths, because a program whose generated code scans keeps the
+tier far longer than one whose does not. Both were measured rather than
+guessed, over subjects that match nothing. Ratios are generated code over the
 interpreter, so below 1.00 the tier wins:
 
-| bytes | `needle` | `NeEdLe`/i | `[0-9]+[A-Z]+` | `a+!` | `(\w+)@(\w+)\.com` |
+| bytes | `[0-9]+[A-Z]+` | `NeEdLe`/i | `(\w+)@(\w+)\.com` | `needle` | `a+!` |
 |---:|---:|---:|---:|---:|---:|
-| 8 | 0.10x | 0.08x | 0.31x | 0.32x | 0.02x |
-| 16 | 0.24x | 0.16x | 0.58x | 0.56x | 0.09x |
-| 24 | 0.36x | 0.25x | 0.85x | 0.83x | 0.12x |
-| 32 | 0.47x | 0.31x | **1.13x** | **1.06x** | 0.12x |
-| 64 | 0.95x | 0.58x | 2.87x | 1.35x | 4.90x |
-| 128 | 1.51x | 0.80x | 4.54x | 1.53x | 6.62x |
-| 2048 | 9.62x | 5.12x | 8.41x | 2.34x | 11.67x |
-| 524288 | 15.09x | 6.55x | 9.59x | 2.51x | 5.90x |
+| | *no scan* | *no scan* | *no scan* | *scans* | *scans* |
+| 24 | 0.91x | 0.26x | 0.12x | 0.12x | 0.17x |
+| 32 | **1.18x** | 0.32x | 0.12x | 0.13x | 0.19x |
+| 64 | 2.91x | 0.59x | 4.90x | 0.17x | 0.16x |
+| 512 | 7.67x | 3.18x | 10.64x | 0.85x | 0.21x |
+| 2048 | 8.60x | 5.16x | 11.67x | **1.39x** | 0.21x |
+| 524288 | 8.44x | 6.45x | 5.90x | 1.88x | 0.21x |
 
-Thirty-two bytes is the shortest crossing rounded to a power of two. At that
-length two of the five shapes are already 1.06x and 1.13x, which is the price
-of one number rather than five; one byte further and the worst of them is
-4.54x, which is why the number is not larger.
+Thirty-two bytes is the shortest crossing among the shapes that do not scan,
+and five hundred and twelve is where the ones that do still win. `a+!` never
+crosses, and the rule gives that up rather than reading more into one shape
+than it says.
 
 Measuring this found something the ratios could not have hidden. A
 start-anchored program's generated code tried every start and failed each at
@@ -408,23 +446,24 @@ magnitude slower.
 
 ### What the rule gives up
 
-A length cannot see what a subject holds, and three of the measured cases are
-faster in generated code for reasons only the subject shows:
+A length cannot see what a subject holds, and some cases are faster in generated
+code for reasons only the subject shows:
 
 | Case | Interpreter | Generated | The rule picks |
 |---|---:|---:|---|
-| `a+!`, `[a-z]+!`, `\w+!`, `[^0-9]+!` over sixty | 99.8–159.1 ns | 29.3–30.6 ns | interpreter |
-| `(?<=0123456789)abc` over 256 KiB | 115.8 ns | 29.1 ns | interpreter |
-| `[0-9]+[A-Z]+` over 256 KiB | 1.44 ms | 910 µs | interpreter |
+| `[a-z]+!`, `\w+!`, `[^0-9]+!` over sixty | 107.9–161.3 ns | 30.2–31.0 ns | interpreter |
+| `(?<=0123456789)abc` over 256 KiB | 118.5 ns | 7.7 ns | interpreter |
+| `[0-9]+[A-Z]+` over 256 KiB | 1.44 ms | 924 µs | interpreter |
 
 The first two match early, so generated code never walks far; the third is a
 case the interpreter is slow on. A host that knew would take between 1.6x and
-5.3x more. Both are content, and the rule refuses to look at content, because
-the alternative is a decision that changes with the subject — which is how a
-fallback stops being an optimization and starts being a second engine.
+15x less. All three are content, and the rule refuses to look at content,
+because the alternative is a decision that changes with the subject — which is
+how a fallback stops being an optimization and starts being a second engine.
 
-Closing that is not a better rule; it is generated code that skips starts the
-way the interpreter does. That is worth doing and is not done.
+What would close them is the scan above, applied where a match must begin with
+a *set* of bytes rather than one: every case left in that table is a class or a
+folded literal. That is the next thing worth doing here.
 
 ### What a host gets
 
@@ -432,20 +471,21 @@ The same cases as the table above, with the path the rule picks:
 
 | Case | Interpreter | Generated | Host takes | Against the interpreter |
 |---|---:|---:|---:|---:|
-| `/a/` against `"a"` | 50.1 ns | 1.1 ns | generated | **0.02x** |
-| Sixteen-character literal | 56.9 ns | 3.5 ns | generated | **0.06x** |
-| Captures, 25 characters | 432.1 ns | 29.3 ns | generated | **0.07x** |
-| Short classes | 339.4 ns | 41.4 ns | generated | **0.12x** |
-| Short literal | 54.0 ns | 11.8 ns | generated | **0.22x** |
-| Folded literal | 66.6 ns | 13.6 ns | generated | **0.20x** |
-| End-anchored hit, 256 KiB | 56.8 ns | 2.4 ns | generated | **0.04x** |
-| `/z/` against `""` | 22.1 ns | 1.3 ns | generated | **0.06x** |
-| `\w+!` over sixty | 159.1 ns | 30.2 ns | interpreter | 1.00x |
-| Literal lookbehind, 256 KiB | 115.8 ns | 29.1 ns | interpreter | 1.00x |
-| `/needle/` over 256 KiB | 11.1 µs | 220 µs | interpreter | 1.00x |
+| `/a/` against `"a"` | 50.4 ns | 1.8 ns | generated | **0.03x** |
+| Sixteen-character literal | 58.0 ns | 4.3 ns | generated | **0.07x** |
+| Captures, 25 characters | 425.8 ns | 29.7 ns | generated | **0.07x** |
+| Short classes | 336.6 ns | 40.9 ns | generated | **0.12x** |
+| Short literal | 55.5 ns | 3.8 ns | generated | **0.07x** |
+| Folded literal | 67.7 ns | 13.8 ns | generated | **0.20x** |
+| End-anchored hit, 256 KiB | 57.2 ns | 3.1 ns | generated | **0.06x** |
+| `/z/` against `""` | 20.1 ns | 1.3 ns | generated | **0.06x** |
+| `a+!` over sixty | 99.6 ns | 30.9 ns | generated | **0.31x** |
+| `\w+!` over sixty | 161.3 ns | 30.2 ns | interpreter | 1.00x |
+| `/needle/` over 256 KiB | 11.3 µs | 44.2 µs | interpreter | 1.00x |
 
 No case is worse than the interpreter, which is the property the rule is for.
-Eight of the eleven take between four and forty-five times less time.
+Nine of the eleven take between three and thirty times less time, where before
+the scan it was eight of eleven and the repeat shapes were not among them.
 
 ## Staging
 
@@ -469,8 +509,11 @@ Eight of the eleven take between four and forty-five times less time.
    instruction selection is shared with AArch64 through `native::machine`, and
    one analysis verifies both. `emit_search` takes the target and returns
    verified code for either.
-7. Generated code that skips starts as the interpreter does, which is what the
-   rule's give-ups are made of.
+7. **Done for a known first byte.** Generated code scans eight bytes at a time
+   for the byte a match must begin with, which is what the interpreter's own
+   advantage over it was made of. What is left is the same scan for a *set* of
+   first bytes — a class, or a folded literal's two cases — which is every case
+   the path rule still gives up.
 
 Each stage is independently useful and independently abandonable. Stage 1 costs
 nothing and tells us how much of the benchmark the tier could even apply to,

@@ -153,21 +153,27 @@ fn refusal_is_not_rejection() {
 /// only ever about which is faster.
 #[test]
 fn the_path_rule_follows_the_program_and_the_length_alone() {
+    // A program that has to look at every start keeps the tier while the
+    // subject is short enough for the flat cost of a search to dominate.
     let short = 32;
-    // A program that has to try every start keeps the tier while the subject
-    // is short enough for the flat cost of a search to dominate its walk.
-    for (pattern, flags) in [
-        ("needle", ""),
-        ("[0-9]+[A-Z]+", ""),
-        ("a+!", ""),
-        ("NeEdLe", "i"),
-    ] {
+    for (pattern, flags) in [("[0-9]+[A-Z]+", ""), ("NeEdLe", "i"), (r"(\w+)@(\w+)", "")] {
         with_program(pattern, flags, |program| {
             assert!(emit::supported(program), "/{pattern}/{flags} is emitted");
             assert!(emit::preferred(program, 0));
             assert!(emit::preferred(program, short));
             assert!(!emit::preferred(program, short + 1));
             assert!(!emit::preferred(program, 1 << 20));
+        });
+    }
+    // One whose generated code scans for the byte a match must begin with
+    // keeps it far longer, because that scan is what the interpreter's own
+    // advantage over it was made of.
+    let scanned = 512;
+    for (pattern, flags) in [("needle", ""), ("a+!", ""), ("(?<=ab)cd", "")] {
+        with_program(pattern, flags, |program| {
+            assert!(emit::preferred(program, short + 1), "/{pattern}/{flags}");
+            assert!(emit::preferred(program, scanned), "/{pattern}/{flags}");
+            assert!(!emit::preferred(program, scanned + 1), "/{pattern}/{flags}");
         });
     }
     // One that does not walk the subject keeps it at any length: an anchored

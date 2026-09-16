@@ -124,6 +124,69 @@ impl Machine<'_> {
                         self.store(address, value)?;
                     }
                 }
+                // `mov reg, r/m`: eight bytes of the subject at once.
+                0x8b => {
+                    let modrm = self.byte(at)?;
+                    at += 1;
+                    let target = ((modrm >> 3) & 7) as usize | (reg_high as usize) << 3;
+                    let (address, next) = self.address(modrm, at, index_high, base_high)?;
+                    at = next;
+                    let mut value = 0u64;
+                    for byte in 0..8 {
+                        value |= u64::from(self.load(address + byte)?) << (byte * 8);
+                    }
+                    self.r[target] = value;
+                }
+                // `add`, `xor`, `sub` and `and` of a register pair, the last
+                // of which sets the flags a scan branches on.
+                0x01 | 0x31 | 0x29 | 0x21 => {
+                    let modrm = self.byte(at)?;
+                    at += 1;
+                    if modrm >> 6 != 3 {
+                        return Err("an arithmetic form the emulator does not decode");
+                    }
+                    let source = ((modrm >> 3) & 7) as usize | (reg_high as usize) << 3;
+                    let target = (modrm & 7) as usize | (base_high as usize) << 3;
+                    let (left, right) = (self.r[target], self.r[source]);
+                    let value = match byte {
+                        0x01 => left.wrapping_add(right),
+                        0x31 => left ^ right,
+                        0x29 => left.wrapping_sub(right),
+                        _ => left & right,
+                    };
+                    self.r[target] = value;
+                    if byte == 0x21 {
+                        self.compared = (value, 0);
+                    }
+                }
+                // `not r/m` and `shr r/m, imm8`.
+                0xf7 | 0xc1 => {
+                    let modrm = self.byte(at)?;
+                    at += 1;
+                    if modrm >> 6 != 3 {
+                        return Err("a form the emulator does not decode");
+                    }
+                    let target = (modrm & 7) as usize | (base_high as usize) << 3;
+                    match ((modrm >> 3) & 7, byte) {
+                        (2, 0xf7) => self.r[target] = !self.r[target],
+                        (5, 0xc1) => {
+                            let shift = self.byte(at)?;
+                            at += 1;
+                            self.r[target] >>= u32::from(shift) & 63;
+                        }
+                        _ => return Err("a form the emulator does not decode"),
+                    }
+                }
+                // A whole 64-bit constant.
+                0xb8..=0xbf => {
+                    let target = (byte - 0xb8) as usize | (base_high as usize) << 3;
+                    let mut value = [0u8; 8];
+                    for (i, slot) in value.iter_mut().enumerate() {
+                        *slot = self.byte(at + i)?;
+                    }
+                    at += 8;
+                    self.r[target] = u64::from_le_bytes(value);
+                }
                 // `mov r/m, imm32`, sign-extended.
                 0xc7 => {
                     let modrm = self.byte(at)?;
@@ -218,6 +281,20 @@ impl Machine<'_> {
                     let second = self.byte(at)?;
                     at += 1;
                     match second {
+                        // `bsf reg, r/m`: the lowest bit a scan matched.
+                        0xbc => {
+                            let modrm = self.byte(at)?;
+                            at += 1;
+                            if modrm >> 6 != 3 {
+                                return Err("a `bsf` form the emulator does not decode");
+                            }
+                            let target = ((modrm >> 3) & 7) as usize | (reg_high as usize) << 3;
+                            let source = (modrm & 7) as usize | (base_high as usize) << 3;
+                            let value = self.r[source];
+                            if value != 0 {
+                                self.r[target] = u64::from(value.trailing_zeros());
+                            }
+                        }
                         // `movzx reg, byte r/m`.
                         0xb6 => {
                             let modrm = self.byte(at)?;

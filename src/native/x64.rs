@@ -309,6 +309,80 @@ impl<'a> Assembler<'a> {
         self.memory(src, base, offset);
     }
 
+    /// Eight bytes at `[base + index]`, which a scan reads at once.
+    pub(crate) fn load_quad(&mut self, dst: Reg, base: Reg, index: Reg) {
+        self.rex(true, dst, index, base);
+        self.byte(0x8b);
+        self.modrm(0, dst, Reg(4));
+        self.sib(0, index, base);
+        if base.0 & 7 == 5 {
+            self.fail(EncodeError::Immediate);
+        }
+    }
+
+    /// `dst ^= src`.
+    pub(crate) fn xor(&mut self, dst: Reg, src: Reg) {
+        self.rex(true, src, Reg(0), dst);
+        self.byte(0x31);
+        self.modrm(3, src, dst);
+    }
+
+    /// `dst += src`.
+    pub(crate) fn add(&mut self, dst: Reg, src: Reg) {
+        self.rex(true, src, Reg(0), dst);
+        self.byte(0x01);
+        self.modrm(3, src, dst);
+    }
+
+    /// `dst -= src`.
+    pub(crate) fn sub(&mut self, dst: Reg, src: Reg) {
+        self.rex(true, src, Reg(0), dst);
+        self.byte(0x29);
+        self.modrm(3, src, dst);
+    }
+
+    /// `dst = !dst`.
+    pub(crate) fn not(&mut self, dst: Reg) {
+        self.rex(true, Reg(0), Reg(0), dst);
+        self.byte(0xf7);
+        self.modrm(3, Reg(2), dst);
+    }
+
+    /// `dst &= src`, which also sets the flags this branches on.
+    pub(crate) fn and(&mut self, dst: Reg, src: Reg) {
+        self.rex(true, src, Reg(0), dst);
+        self.byte(0x21);
+        self.modrm(3, src, dst);
+    }
+
+    /// A whole 64-bit constant, which the scan's masks need and no shorter
+    /// form can hold.
+    pub(crate) fn mov_wide(&mut self, dst: Reg, value: u64) {
+        self.rex(true, Reg(0), Reg(0), dst);
+        self.byte(0xb8 + (dst.0 & 7));
+        self.bytes(&value.to_le_bytes());
+    }
+
+    /// `dst` = how many low bits of `src` are zero, which is only defined
+    /// where `src` is not.
+    pub(crate) fn bit_scan(&mut self, dst: Reg, src: Reg) {
+        self.rex(true, dst, Reg(0), src);
+        self.bytes(&[0x0f, 0xbc]);
+        self.modrm(3, dst, src);
+    }
+
+    /// `dst >>= shift`, unsigned.
+    pub(crate) fn shr(&mut self, dst: Reg, shift: u8) {
+        if shift >= 64 {
+            self.fail(EncodeError::Immediate);
+            return;
+        }
+        self.rex(true, Reg(0), Reg(0), dst);
+        self.byte(0xc1);
+        self.modrm(3, Reg(5), dst);
+        self.byte(shift);
+    }
+
     // -- Control flow --------------------------------------------------------
 
     pub(crate) fn ret(&mut self) {
@@ -516,6 +590,41 @@ impl machine::Machine for Assembler<'_> {
             _ => self.fail(EncodeError::Immediate),
         }
     }
+    fn advance_by(&mut self, dst: machine::Slot, by: machine::Slot) {
+        self.add(slot(dst), slot(by));
+    }
+    fn load_word(&mut self, dst: machine::Slot, base: machine::Slot, index: machine::Slot) {
+        self.load_quad(slot(dst), slot(base), slot(index));
+    }
+    fn splat(&mut self, dst: machine::Slot, byte: u8) {
+        self.mov_wide(slot(dst), u64::from(byte) * 0x0101_0101_0101_0101);
+    }
+    fn first_equal(
+        &mut self,
+        dst: machine::Slot,
+        word: machine::Slot,
+        splat: machine::Slot,
+        scratch: machine::Slot,
+    ) -> Patch {
+        // A byte equals another exactly when their difference is zero, and a
+        // word holds a zero byte exactly when subtracting one from each byte
+        // borrows into its top bit where the byte itself has none.
+        self.mov(slot(dst), slot(word));
+        self.xor(slot(dst), slot(splat));
+        self.mov(slot(scratch), slot(dst));
+        self.mov_wide(SCRATCH, 0x0101_0101_0101_0101);
+        self.sub(slot(scratch), SCRATCH);
+        self.not(slot(dst));
+        self.and(slot(scratch), slot(dst));
+        self.mov_wide(SCRATCH, 0x8080_8080_8080_8080);
+        self.and(slot(scratch), SCRATCH);
+        let none = self.jcc_forward(Cond::Equal);
+        // The lowest such bit is in the first byte that matched, and this is a
+        // little-endian load, so counting the bits below it gives its offset.
+        self.bit_scan(slot(dst), slot(scratch));
+        self.shr(slot(dst), 3);
+        none
+    }
     fn store_position(&mut self, value: machine::Slot, index: u32) {
         match i32::try_from(index * 8) {
             Ok(offset) => self.store(slot(machine::REGISTERS), offset, slot(value)),
@@ -646,6 +755,22 @@ mod tests {
         assert_eq!(assemble(|a| a.test(R8)), [0x4d, 0x85, 0xc0]);
         assert_eq!(assemble(|a| a.dec(R8)), [0x49, 0xff, 0xc8]);
         assert_eq!(assemble(|a| a.ret()), [0xc3]);
+        // The scan, whose bytes came from the assembler the same way.
+        assert_eq!(
+            assemble(|a| a.load_quad(R10, RDI, RDX)),
+            [0x4c, 0x8b, 0x14, 0x17]
+        );
+        assert_eq!(assemble(|a| a.add(R9, RDX)), [0x49, 0x01, 0xd1]);
+        assert_eq!(assemble(|a| a.xor(R10, R9)), [0x4d, 0x31, 0xca]);
+        assert_eq!(assemble(|a| a.sub(RBX, RAX)), [0x48, 0x29, 0xc3]);
+        assert_eq!(assemble(|a| a.not(R10)), [0x49, 0xf7, 0xd2]);
+        assert_eq!(assemble(|a| a.and(RBX, R10)), [0x4c, 0x21, 0xd3]);
+        assert_eq!(
+            assemble(|a| a.mov_wide(RAX, 0x0101_0101_0101_0101)),
+            [0x48, 0xb8, 1, 1, 1, 1, 1, 1, 1, 1]
+        );
+        assert_eq!(assemble(|a| a.bit_scan(R10, RBX)), [0x4c, 0x0f, 0xbc, 0xd3]);
+        assert_eq!(assemble(|a| a.shr(R10, 3)), [0x49, 0xc1, 0xea, 0x03]);
     }
 
     #[test]

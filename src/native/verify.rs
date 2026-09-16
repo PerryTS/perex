@@ -279,6 +279,21 @@ pub(super) enum Insn {
         index: Option<u8>,
         disp: i64,
     },
+    /// Eight bytes from `base + index`, which a scan reads at once.
+    LoadWord {
+        rt: u8,
+        base: u8,
+        index: u8,
+    },
+    /// Something this follows only as far as which register it writes: the
+    /// arithmetic a scan does over eight bytes at a time, whose result is data
+    /// rather than a position or an address, and whose flags nothing may be
+    /// refined from. `reads` names its other operands, so that a register a
+    /// target refuses is refused here too; an unused one repeats `rd`.
+    Compute {
+        rd: u8,
+        reads: [u8; 2],
+    },
     /// A whole register into `base + disp`.
     Store {
         rt: u8,
@@ -369,6 +384,39 @@ fn decode_a64(code: &[u8], at: usize) -> Option<(Insn, usize)> {
             base: rn,
             index: None,
             disp: i64::from(imm12),
+        }
+    } else if w & 0xffe0_fc00 == 0xf860_6800 {
+        Insn::LoadWord {
+            rt: rd,
+            base: rn,
+            index: rm,
+        }
+    } else if w & 0xffe0_fc00 == 0xca00_0000
+        || w & 0xffe0_fc00 == 0xcb00_0000
+        || w & 0xffe0_fc00 == 0x8a20_0000
+    {
+        // Exclusive or, subtraction and bit clear, over whole registers.
+        Insn::Compute {
+            rd,
+            reads: [rn, rm],
+        }
+    } else if w & 0xffff_fc00 == 0xdac0_0000
+        || w & 0xffff_fc00 == 0xdac0_1000
+        || w & 0xffc0_fc00 == 0xd340_fc00
+        || w & 0xffff_fc00 == 0xf201_c000
+    {
+        // Bit reverse and count, a shift, and the repeating mask a scan tests
+        // with, each of one source.
+        Insn::Compute {
+            rd,
+            reads: [rn, rn],
+        }
+    } else if w & 0xffff_ffe0 == 0xb200_c3e0 || w & 0xff80_0000 == 0xf280_0000 {
+        // The other repeating mask, and the halves of a splatted byte, which
+        // read nothing.
+        Insn::Compute {
+            rd,
+            reads: [rd, rd],
         }
     } else if w & 0xffc0_0000 == 0xf900_0000 {
         Insn::Store {
@@ -495,6 +543,65 @@ fn decode_x64(code: &[u8], at: usize) -> Option<(Insn, usize)> {
         0x58..=0x5f => Insn::Pop {
             r: (opcode - 0x58) | base_high << 3,
         },
+        // `mov reg, r/m`: eight bytes of the subject at once.
+        0x8b if wide => {
+            let (reg, base, index, disp, end, register) = operand(cursor)?;
+            cursor = end;
+            match (register, index, disp) {
+                (false, Some(index), 0) => Insn::LoadWord {
+                    rt: reg,
+                    base,
+                    index,
+                },
+                _ => return None,
+            }
+        }
+        // `add r/m, reg`, which moves a position on by a distance.
+        0x01 if wide => {
+            let (reg, base, _, _, end, register) = operand(cursor)?;
+            cursor = end;
+            if !register {
+                return None;
+            }
+            Insn::AddReg {
+                rd: base,
+                rn: base,
+                rm: reg,
+            }
+        }
+        // The arithmetic a scan does over eight bytes at a time.
+        0x31 | 0x29 | 0x21 if wide => {
+            let (reg, base, _, _, end, register) = operand(cursor)?;
+            cursor = end;
+            if !register {
+                return None;
+            }
+            Insn::Compute {
+                rd: base,
+                reads: [base, reg],
+            }
+        }
+        // `not r/m` and `shr r/m, imm8`.
+        0xf7 | 0xc1 if wide => {
+            let (reg, base, _, _, end, register) = operand(cursor)?;
+            if !register || (opcode == 0xf7 && reg & 7 != 2) || (opcode == 0xc1 && reg & 7 != 5) {
+                return None;
+            }
+            cursor = end + usize::from(opcode == 0xc1);
+            Insn::Compute {
+                rd: base,
+                reads: [base, base],
+            }
+        }
+        // A whole 64-bit constant, which the scan's masks need.
+        0xb8..=0xbf if wide => {
+            cursor += 8;
+            let rd = (opcode - 0xb8) | base_high << 3;
+            Insn::Compute {
+                rd,
+                reads: [rd, rd],
+            }
+        }
         // `mov r/m, reg`: a register pair, or a store.
         0x89 => {
             let (reg, base, index, disp, end, register) = operand(cursor)?;
@@ -607,6 +714,18 @@ fn decode_x64(code: &[u8], at: usize) -> Option<(Insn, usize)> {
             let second = byte(cursor)?;
             cursor += 1;
             match second {
+                // `bsf reg, r/m`, which finds the byte a scan matched.
+                0xbc if wide => {
+                    let (reg, base, _, _, end, register) = operand(cursor)?;
+                    cursor = end;
+                    if !register {
+                        return None;
+                    }
+                    Insn::Compute {
+                        rd: reg,
+                        reads: [base, base],
+                    }
+                }
                 // `movzx reg, byte r/m`.
                 0xb6 if !wide => {
                     let (reg, base, index, disp, end, register) = operand(cursor)?;
@@ -677,6 +796,7 @@ impl Insn {
         match self {
             Insn::Ret | Insn::Branch { .. } => [0; 3],
             Insn::MovImm { rd, .. } | Insn::Address { rd, .. } | Insn::Dec { rd } => [rd, 0, 0],
+            Insn::Compute { rd, reads } => [rd, reads[0], reads[1]],
             Insn::BranchIfZero { rt, .. } => [rt, 0, 0],
             Insn::Test { rn } => [rn, 0, 0],
             Insn::Push { r } | Insn::Pop { r } => [r, 0, 0],
@@ -692,7 +812,8 @@ impl Insn {
                 base,
                 index: Some(index),
                 ..
-            } => [rt, base, index],
+            }
+            | Insn::LoadWord { rt, base, index } => [rt, base, index],
             Insn::Load { rt, base, .. } | Insn::Store { rt, base, .. } => [rt, base, 0],
         }
     }
@@ -708,8 +829,9 @@ impl Insn {
             | Insn::SubImm32 { rd, .. }
             | Insn::AddReg { rd, .. }
             | Insn::Dec { rd }
+            | Insn::Compute { rd, .. }
             | Insn::Address { rd, .. } => Some(rd),
-            Insn::Load { rt, .. } | Insn::Pop { r: rt } => Some(rt),
+            Insn::Load { rt, .. } | Insn::LoadWord { rt, .. } | Insn::Pop { r: rt } => Some(rt),
             _ => None,
         }
     }
@@ -954,12 +1076,12 @@ fn add_values(a: Value, b: Value) -> Value {
     }
 }
 
-/// Whether one byte at this address is inside the subject or the code.
-fn readable(value: Value, code_length: usize) -> bool {
+/// Whether `width` bytes at this address are inside the subject or the code.
+fn readable(value: Value, code_length: usize, width: i32) -> bool {
     match value {
-        Value::SubjectAt { slack, .. } => slack >= 1,
-        Value::Code(at) => (at as usize) < code_length,
-        Value::CodeSpan { at, width } => at as usize + width as usize <= code_length,
+        Value::SubjectAt { slack, .. } => slack >= width,
+        Value::Code(at) => (at as usize) + width as usize <= code_length,
+        Value::CodeSpan { at, width: span } => at as usize + span as usize <= code_length,
         _ => false,
     }
 }
@@ -1038,6 +1160,11 @@ fn transfer(insn: Insn, state: &State) -> (State, State) {
         Insn::CmpReg { rn, rm } => next.flags = Flags::Registers(rn, rm),
         Insn::Test { rn } => next.flags = Flags::Immediate(rn, 0),
         Insn::Load { rt, .. } => next.set(rt, Value::Byte),
+        Insn::LoadWord { rt, .. } => next.set(rt, Value::Top),
+        Insn::Compute { rd, .. } => {
+            next.set(rd, Value::Top);
+            next.flags = Flags::Unknown;
+        }
         Insn::Address { rd, at } => next.set(rd, Value::Code(at)),
         Insn::BranchIfZero { .. } => {}
         Insn::Branch { cond: None, .. } => {}
@@ -1142,7 +1269,7 @@ fn obligations(
                 _ if disp > 0 => add_const(address, disp.unsigned_abs()),
                 _ => sub_const(state, address, disp.unsigned_abs()),
             };
-            require(readable(address, code_length), Reason::Load)
+            require(readable(address, code_length, 1), Reason::Load)
         }
         Insn::Store { rt, base, disp } => {
             require(
@@ -1153,6 +1280,14 @@ fn obligations(
             )?;
             require(is_position(state.get(rt)), Reason::Stored)
         }
+        Insn::LoadWord { base, index, .. } => require(
+            readable(
+                add_values(state.get(base), state.get(index)),
+                code_length,
+                8,
+            ),
+            Reason::Load,
+        ),
         Insn::CmpImm32 { rn, .. } => require(fits32(state.get(rn)), Reason::Compare),
         _ => Ok(()),
     }

@@ -159,6 +159,19 @@ pub(crate) trait Machine {
     /// `dst` is byte `offset` of that window, counting from its earliest,
     /// zero-extended.
     fn load_window_byte(&mut self, dst: Slot, offset: u32);
+    /// `dst += by`, where `by` is a distance rather than a position.
+    fn advance_by(&mut self, dst: Slot, by: Slot);
+    /// Eight bytes of the subject at `base + index`, which the caller has
+    /// established the subject holds. A scan reads them at once rather than
+    /// one at a time.
+    fn load_word(&mut self, dst: Slot, base: Slot, index: Slot);
+    /// `dst` holds `byte` in each of its own eight bytes.
+    fn splat(&mut self, dst: Slot, byte: u8);
+    /// Branch when no byte of `word` equals the byte `splat` repeats.
+    /// Otherwise `dst` is how many bytes of `word` precede the first that
+    /// does. `scratch` may be written.
+    fn first_equal(&mut self, dst: Slot, word: Slot, splat: Slot, scratch: Slot) -> Patch;
+
     /// `registers[index] = value`, where `value` is a position.
     fn store_position(&mut self, value: Slot, index: u32);
 
