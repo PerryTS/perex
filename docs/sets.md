@@ -9,8 +9,9 @@ rather than reusing the `u` path.
 
 ## What is implemented
 
-The union grammar: members, ranges, nested classes, class escapes and property
-escapes, with the escaping and reserved-punctuation rules the grammar requires.
+The class grammar: members, ranges, nested classes, class escapes and property
+escapes, the set operators and nested complements, with the escaping and
+reserved-punctuation rules the grammar requires.
 
 - `[a]`, `[a-z]`, `[^a-z]`, `[a[b]c]`, `[[a-z][0-9]]`
 - `[\d]`, `[\w]`, `[\s]` and their complements
@@ -19,11 +20,45 @@ escapes, with the escaping and reserved-punctuation rules the grammar requires.
 - doubled `&& !! ## $$ %% ** ++ ,, .. :: ;; << == >> ?? @@ ^^ `` ~~` rejected
 - `\&`, `\-`, `\!`, `\#`, `\%`, `\,`, `\:`, `\;`, `\<`, `\=`, `\>`, `\@`,
   `` \` ``, `\~` accepted as escaped members
+- `[[a-z]--[aeiou]]`, `[a--b--c]`, `[\p{L}&&\p{ASCII}]`, `[a&&b&&c]`
+- `[[^a]]`, `[[^a]b]`, `[^[a-z]--[aeiou]]`
 
 Members are appended to the same range scratch a `u` class uses, so the program
 representation, class normalization and the evaluator's membership loop are
 unchanged. A `v` class costs no more program storage than the equivalent `u`
 class.
+
+## The operators, and what they compile to
+
+A property is stored as a reference to a shared table rather than as intervals,
+so computing a difference or an intersection over one would mean materializing
+every code point it admits. Nothing is materialized. Every operand matches
+exactly one code point, so an operator is the constructs the engine already
+has:
+
+| Written | Built as |
+|---|---|
+| `[A--B]` | not `B` here, then `A` |
+| `[A--B--C]` | not `B` here, not `C` here, then `A` |
+| `[A&&B]` | `A` here, then `B` |
+| `[A&&B&&C]` | (`A` here, then `B`) here, then `C` |
+| `[[^A]]` | not `A` here, then any code point |
+
+That is exact under `i` as well, and for the reason the section below gives: a
+class matches a character when some case equivalent of it is a member, which is
+membership of the set closed under folding, and `v` asks for the complement of
+the closed set. No program word, opcode or evaluator rule is added, and a union
+of ordinary members is still one class, so an ordinary `v` class costs exactly
+what it did.
+
+What it costs is an assertion at each position an operator class is tried. On a
+10,500-unit subject whose match is at unit 19, `[[a-z]--[aeiou]]` charges 19
+work units and 91 ns where the hand-written `[b-df-hj-np-tv-z]` charges 15 and
+66 ns, and `[[a-z]&&[b-z]]` charges 15 and 80 ns.
+
+The grammar's own rule that a range is not an operand is kept: `[a-z--[aeiou]]`
+is a syntax error, as it is in V8, and the set it looks like is spelled
+`[[a-z]--[aeiou]]`.
 
 ## The complement rule
 
@@ -54,12 +89,10 @@ Tracked in [issue #1](https://github.com/PerryTS/perex/issues/1). These report `
 offset where they appear. They are never answered as no-match, and never
 reported as syntax errors.
 
-- **Set operators**: `[a--b]` subtraction and `[a&&b]` intersection. Computing
-  them requires materializing a property's intervals into caller scratch, which
-  changes what the host must size that scratch for.
 - **String members**: `[\q{abc|de}]`. A class member spanning more than one
   character needs the evaluator to consume a variable number of characters and
-  to order alternatives by length.
+  to order alternatives by length. An operator whose operand is one is
+  unsupported with it.
 - **Properties of strings**: `\p{RGI_Emoji}`, `\p{Basic_Emoji}`,
   `\p{Emoji_Keycap_Sequence}`, `\p{RGI_Emoji_Modifier_Sequence}`,
   `\p{RGI_Emoji_Flag_Sequence}`, `\p{RGI_Emoji_Tag_Sequence}`,
@@ -67,8 +100,6 @@ reported as syntax errors.
   generated sequence data. Their names are known, so an unnegated one under `v`
   reports the gap; `\P` of one, or any of them under `u`, stays a syntax error,
   which is what the grammar requires.
-- **Nested complement**: `[[^a]]`, for the same materialization reason as the
-  operators.
 
 A gap is only ever declared for a pattern the grammar accepts. Declaring one
 for an invalid pattern would hide a missing syntax error, so `tools/check-sets.mjs`
@@ -84,8 +115,14 @@ subjects under `v`, `iv`, `gv`, `u` and `iu`. It compares syntax acceptance as
 carefully as matching, because a new grammar most often fails by accepting what
 the specification rejects.
 
-At 16,770 cases: 15,782 compared, 0 differences, 4,342 patterns rejected by both
+At 16,770 cases: 16,250 compared, 0 differences, 4,342 patterns rejected by both
 engines and none by only one, and 0 gaps declared on invalid patterns.
+
+`tests/unicode_sets.rs` additionally answers the operators against the sets they
+describe — subtraction and intersection over ranges, properties and nested
+classes, chains of each, astral operands, the empty class, nested complements
+inside and beside a union, a complemented operator class, and the `i` cases
+where closure before the operator is what makes `v` differ from `u`.
 
 `tests/unicode_sets.rs` asserts the three outcomes stay separated: what compiles,
 what is an explicit gap, and what is a syntax error.
@@ -93,8 +130,8 @@ what is an explicit gap, and what is a syntax error.
 ## Effect on the corpus
 
 Across the patterns harvested from Test262 (see [conformance](conformance.md)),
-this took the unsupported count from 161 patterns to 106, added 550 cases to the
-compared population and 350 to the patterns correctly rejected as syntax errors,
-with differences remaining at 0. The 106 that remain are 41 properties of
-strings, 33 string disjunctions, 16 subtractions and 16 intersections — that is,
-74 needing string matching and 32 needing set operators.
+the union grammar took the unsupported count from 161 patterns to 106, and the
+operators and nested complements took it to 74: 47,998 cases compared, 0
+differences, 3,410 patterns rejected by both engines and none by only one. The
+74 that remain are 41 properties of strings and 33 string disjunctions, all of
+them needing a member that matches more than one character.

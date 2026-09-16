@@ -1,6 +1,6 @@
 # Compiler and evaluator
 
-Perex has one compiler and ordered bytecode evaluator, and it is Perry's production regex engine. It is not a complete ECMAScript regular-expression implementation: the `v` flag's set operators, string members and properties of strings report an explicit unsupported outcome. There are no matching-library dependencies or fallback routes. All core modules remain `no_std` and forbid unsafe code.
+Perex has one compiler and ordered bytecode evaluator, and it is Perry's production regex engine. It is not a complete ECMAScript regular-expression implementation: the `v` flag's string members and properties of strings report an explicit unsupported outcome. There are no matching-library dependencies or fallback routes. All core modules remain `no_std` and forbid unsafe code.
 
 Compilation supports a one-call API and an explicit [prepared plan](compilation-plan.md).
 Both use the same parser and emitter; preparation permits exact output allocation
@@ -14,7 +14,7 @@ Flags `i`, `m`, `s`, `u` and `y` affect the engine. `d` and `g` are accepted; ca
 
 [Legacy numeric/control escapes and quantified lookahead](legacy.md) follow Annex B, including octal/backreference ambiguity and distinct Unicode-mode syntax errors.
 
-Unicode-mode [character properties](properties.md), including general categories, binary properties, Script and Script_Extensions, use shared immutable tables. Scoped `i`, `m` and `s` groups use lexical instruction choices, as described in [modifiers](modifiers.md). The `v` flag implements the union class grammar, its escaping and reserved-punctuation rules, property escapes and the complement-after-folding rule, as described in [sets](sets.md). Its omitted features are set operators, string members and properties of strings. They are reported as `CompileError::Unsupported`, not fabricated syntax errors or no-match. The parser is not yet a complete syntax validator for omitted features. Invalid `v` expressions can therefore be reported unsupported until that grammar is implemented. No compatibility percentage should describe these outcomes as handled.
+Unicode-mode [character properties](properties.md), including general categories, binary properties, Script and Script_Extensions, use shared immutable tables. Scoped `i`, `m` and `s` groups use lexical instruction choices, as described in [modifiers](modifiers.md). The `v` flag implements the class grammar — union, the set operators, nested complements, escaping and reserved punctuation, property escapes and the complement-after-folding rule — as described in [sets](sets.md). Its omitted features are string members and properties of strings. They are reported as `CompileError::Unsupported`, not fabricated syntax errors or no-match. The parser is not yet a complete syntax validator for omitted features. Invalid `v` expressions can therefore be reported unsupported until that grammar is implemented. No compatibility percentage should describe these outcomes as handled.
 
 ## Memory and work
 
@@ -54,4 +54,4 @@ node tools/check-engine.mjs target/release/examples/engine_probe \
 
 `tools/check-legacy.mjs` adds 112,748 exact Node answers for 1,047 numeric spellings, forward/named capture counts, atom/quantifier boundaries, all 256 control-prefix suffix bytes and quantified assertions. Three Rust tests pin the corresponding interactions.
 
-Test262 pattern conformance is measured in [conformance](conformance.md). Still open: the `v` set operators, string members and properties of strings; structured differential fuzzing; per-owner allocation accounting; and whole-application CPU/RSS comparisons in the host. Engine-level CPU figures are in [performance](performance.md).
+Test262 pattern conformance is measured in [conformance](conformance.md). Still open: the `v` flag's string members and properties of strings; structured differential fuzzing; per-owner allocation accounting; and whole-application CPU/RSS comparisons in the host. Engine-level CPU figures are in [performance](performance.md).

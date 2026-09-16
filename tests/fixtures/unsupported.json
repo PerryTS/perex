@@ -3,15 +3,5 @@
     "id": "v-string-set",
     "outcome": "unsupported",
     "feature": "Unicode sets"
-  },
-  {
-    "id": "v-subtraction-hit",
-    "outcome": "unsupported",
-    "feature": "Unicode sets"
-  },
-  {
-    "id": "v-subtraction-miss",
-    "outcome": "unsupported",
-    "feature": "Unicode sets"
   }
 ]
