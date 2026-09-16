@@ -175,7 +175,7 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 
 [Unicode sets](docs/sets.md) implements the `v` grammar: union, ranges, nesting, the set operators, nested complements, string members, the properties of strings, its escaping and reserved-punctuation rules, and its complement-after-folding rule. A property of strings is a shared table of sequences and a program reference to it, never members copied into a program.
 
-[Test262 pattern conformance](docs/conformance.md) compares every pattern harvested from the suite's regular-expression tests against Node, for syntax acceptance and complete match answers. The one remaining gap is Unicode-sets class syntax.
+[Test262 pattern conformance](docs/conformance.md) compares every pattern harvested from the suite's regular-expression tests against Node, for syntax acceptance and complete match answers. There is no remaining gap: 48,718 cases compared, nothing unsupported and no difference, on the harvest recorded there.
 
 [Leading literal starts](docs/leading.md) reject an impossible start with a byte comparison instead of an initialized trial. The claim is re-derived from the instructions during program validation, so it cannot disagree with them.
 
