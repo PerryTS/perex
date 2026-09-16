@@ -43,23 +43,28 @@ threshold. That gives 48,720 cases.
 
 | | |
 |---|---|
-| Cases compared | 47,998 |
+| Cases compared | 48,248 |
 | **Differences** | **0** |
-| Syntax rejections, both engines | 3,410 |
+| Syntax rejections, both engines | 3,390 |
 | Syntax disagreements | **0** |
-| Unsupported (Unicode sets) | 740 cases, 74 distinct patterns |
+| Unsupported (Unicode sets) | 470 cases, 47 distinct patterns |
 | Oracle could not finish | 2 cases |
 | Unstable oracle answers | 0 |
 
+Measured on Node v26.5.1 with `--work 64000000`; CI re-measures on the pinned
+Node 26.8.1.
+
 Syntax agreement is exact: of every harvested pattern, the two engines reject
-the same 3,410 cases and accept the rest, with no pattern accepted by one and
+the same 3,390 cases and accept the rest, with no pattern accepted by one and
 rejected by the other.
 
-The one gap is **Unicode sets**: 74 distinct patterns, which Perex reports as
-an explicit unsupported feature rather than answering wrongly. They are 41
-properties of strings and 33 string disjunctions `\q{…}` — all of them needing
-a class member that matches more than one character. The union grammar, the set
-operators and nested complements are implemented; see [sets](sets.md) and
+The one gap is **Unicode sets**: 47 distinct patterns, which Perex reports as
+an explicit unsupported feature rather than answering wrongly. Every one of
+them names a property of strings — `\p{RGI_Emoji}`, `\p{Basic_Emoji}`,
+`\p{Emoji_Keycap_Sequence}` and the rest — alone, in a union, or as an operand
+of `--` or `&&`; six of those also use a string disjunction beside one. The
+union grammar, the set operators, nested complements and string members
+`\q{…}` are implemented; see [sets](sets.md) and
 [issue #1](https://github.com/PerryTS/perex/issues/1).
 
 ## Cost, not correctness

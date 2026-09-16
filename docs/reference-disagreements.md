@@ -49,3 +49,45 @@ of disappearing. It is not an allow-list, and it binds no expected answer.
 Observed with Node v26.5.1 and V8 14.6.202.34-node.24 on darwin arm64. The
 pinned CI version is Node 26.8.1; this has not yet been re-checked there, and no
 upstream report has been filed yet.
+
+# Case-insensitive `v` string members: a V8 disagreement
+
+Under `v` with `i`, the two engines answer a class whose member is a string of
+one code point differently:
+
+```js
+/[\q{a}]/iv.test("A")   // Perex: true.  Node 26.5.1: false
+/[\q{A}]/iv.test("a")   // both: true
+/[\q{ab}]/iv.test("AB") // both: true
+/[a]/iv.test("A")       // both: true
+```
+
+The specification makes a one-character member a character of the class, and a
+character of a `v` class folds. `ClassSetOperand :: ClassStringDisjunction`
+returns `MaybeSimpleCaseFolding(rer, charSet)`, which "maps each CharSetElement
+of charSet character-by-character into a canonical form", so `\q{A}` under `i`
+contributes the element `a`. Compiling `Atom :: CharacterClass` then takes "the
+CharSet containing every CharSetElement of cs that consists of a single
+character" and passes it to `CharacterSetMatcher`, which compares
+`Canonicalize(rer, a)` with `Canonicalize(rer, char)` — the subject character is
+canonicalized too. `A` therefore matches. Only elements of two or more
+characters are compiled separately, as sequences.
+
+V8's answers are not internally consistent with each other. It folds a
+one-character member when an operator compares it — `/[\q{a}--[A]]/iv` does not
+match `"a"`, so the subtraction saw `A` and `a` as the same member — and it
+folds members of two or more characters when matching, but it does not fold a
+one-character member when matching: `/[\q{A}]/iv` matches `"a"` and not `"A"`.
+Whichever half is intended, the two cannot both be right, and the half that
+agrees with `/[a]/iv` is the one Perex implements.
+
+Eleven cases of `tools/check-sets.mjs` are this one difference: a one-character
+`\q{…}` member alone, beside a longer member, inside a complement, and on either
+side of `--` and `&&`. `tests/fixtures/sets-reference-disagreements.json` binds
+each exact input with both engines' answers; the check reports them by default
+and `--allow-reviewed-reference-disagreements` permits exactly those, failing if
+either side's answer changes. Observed with Node v26.5.1 and V8
+14.6.202.34-node.24 on darwin arm64. The spec text was read on 2026-09-16 from
+the editor's draft; no third implementation was consulted, and no upstream
+report has been filed yet. This does not edit the oracle or claim conformance
+beyond the cases listed.

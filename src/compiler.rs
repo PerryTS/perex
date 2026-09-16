@@ -89,6 +89,11 @@ const REPEAT: u32 = 36;
 const WRAP: u32 = 37;
 const NAME_META: u32 = 38;
 const NAME_DECL: u32 = 39;
+/// A `v` string member while its class is parsed: `a` is its first character
+/// node, `b` how many follow it, `c` the next string of the same set. It is
+/// never emitted — by the time a class body is instructions, every string is
+/// either a sequence of its characters or inert.
+const STRING: u32 = 40;
 mod admission;
 mod candidate;
 mod classes;

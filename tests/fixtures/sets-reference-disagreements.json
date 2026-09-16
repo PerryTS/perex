@@ -1,0 +1,352 @@
+[
+  {
+    "id": "sets:15758",
+    "case": {
+      "id": "sets:15758",
+      "source": "[\\q{a|b}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:15758",
+      "outcome": "no-match"
+    },
+    "perex": {
+      "id": "sets:15758",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    }
+  },
+  {
+    "id": "sets:16278",
+    "case": {
+      "id": "sets:16278",
+      "source": "[\\q{a}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:16278",
+      "outcome": "no-match"
+    },
+    "perex": {
+      "id": "sets:16278",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    }
+  },
+  {
+    "id": "sets:16538",
+    "case": {
+      "id": "sets:16538",
+      "source": "[\\q{ab|a}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:16538",
+      "outcome": "no-match"
+    },
+    "perex": {
+      "id": "sets:16538",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    }
+  },
+  {
+    "id": "sets:16668",
+    "case": {
+      "id": "sets:16668",
+      "source": "[\\q{a|ab}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:16668",
+      "outcome": "no-match"
+    },
+    "perex": {
+      "id": "sets:16668",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    }
+  },
+  {
+    "id": "sets:17448",
+    "case": {
+      "id": "sets:17448",
+      "source": "[\\q{|a}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:17448",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            0
+          ],
+          "units": []
+        }
+      ],
+      "groups": null
+    },
+    "perex": {
+      "id": "sets:17448",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    }
+  },
+  {
+    "id": "sets:17578",
+    "case": {
+      "id": "sets:17578",
+      "source": "[\\q{a|}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:17578",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            0
+          ],
+          "units": []
+        }
+      ],
+      "groups": null
+    },
+    "perex": {
+      "id": "sets:17578",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    }
+  },
+  {
+    "id": "sets:17708",
+    "case": {
+      "id": "sets:17708",
+      "source": "[\\q{A|B}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:17708",
+      "outcome": "no-match"
+    },
+    "perex": {
+      "id": "sets:17708",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    }
+  },
+  {
+    "id": "sets:19138",
+    "case": {
+      "id": "sets:19138",
+      "source": "[^\\q{a}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:19138",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    },
+    "perex": {
+      "id": "sets:19138",
+      "outcome": "no-match"
+    }
+  },
+  {
+    "id": "sets:20178",
+    "case": {
+      "id": "sets:20178",
+      "source": "[[a-z]--\\q{a}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:20178",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    },
+    "perex": {
+      "id": "sets:20178",
+      "outcome": "no-match"
+    }
+  },
+  {
+    "id": "sets:20698",
+    "case": {
+      "id": "sets:20698",
+      "source": "[\\q{a}&&[a-z]]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:20698",
+      "outcome": "no-match"
+    },
+    "perex": {
+      "id": "sets:20698",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    }
+  },
+  {
+    "id": "sets:20828",
+    "case": {
+      "id": "sets:20828",
+      "source": "[[a-z]&&\\q{a}]",
+      "flags": "div",
+      "subject": "A",
+      "start_utf16": 0
+    },
+    "node": {
+      "id": "sets:20828",
+      "outcome": "no-match"
+    },
+    "perex": {
+      "id": "sets:20828",
+      "outcome": "match",
+      "captures": [
+        {
+          "span": [
+            0,
+            1
+          ],
+          "units": [
+            65
+          ]
+        }
+      ],
+      "groups": null
+    }
+  }
+]

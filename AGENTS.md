@@ -3,7 +3,7 @@
 - This repository is the authoritative reusable engine source; it must build independently of Perry.
 - Implement one production compiler/matcher. Other engines may be development references, never production fallbacks.
 - Follow `docs/memory-contract.md`: explicit storage ownership, relocation-safe programs, scoped scratch, exact string semantics and offset-only results.
-- The compiler/matcher, input layer and resumable execution are implemented and are Perry's production regex engine. `v`-flag string members and properties of strings remain unsupported. Do not claim matching, compatibility or performance that has not been measured.
+- The compiler/matcher, input layer and resumable execution are implemented and are Perry's production regex engine. `v`-flag properties of strings remain unsupported. Do not claim matching, compatibility or performance that has not been measured.
 - Traverse the host's original subject without copying it or creating a UTF-16 conversion buffer. Integer spans remain the result contract.
 - Keep Perry-specific GC/object code and private application workloads in the host project.
 - Preserve upstream provenance and licenses when importing code or tests.

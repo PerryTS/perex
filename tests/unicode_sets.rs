@@ -1,6 +1,6 @@
-//! Unicode-sets (`v`) flag admission and class grammar. String members and
-//! properties of strings remain explicitly unsupported; everything else uses
-//! the existing class representation and evaluator.
+//! Unicode-sets (`v`) flag admission and class grammar. Properties of strings
+//! remain explicitly unsupported; everything else uses the existing class
+//! representation and evaluator.
 use perex::{
     Budget,
     compiler::{CompileError, Node, Range, compile},
@@ -89,6 +89,119 @@ fn unicode_sets_operators_match_the_set_they_describe() {
     }
 }
 
+/// A class with string members matches its members longest first, and falls
+/// back to a shorter one when what follows the class fails. A member of one
+/// code point is a code point of the class, and the empty member matches
+/// where no code point does.
+#[test]
+fn unicode_sets_string_members_match_the_sequences_they_spell() {
+    for (source, flags, subject, expected) in [
+        (r"[\q{ab}]", "v", "xab", Some((1, 3))),
+        (r"[\q{ab|cd}]", "v", "xcd", Some((1, 3))),
+        (r"[\q{ab}x]", "v", "zx", Some((1, 2))),
+        // Longest first: the two-code-point member is tried before the one
+        // the class also holds.
+        (r"[\q{ab|a}]", "v", "ab", Some((0, 2))),
+        (r"[\q{ab}a]", "v", "ab", Some((0, 2))),
+        // And the shorter member is still reachable when the longer one
+        // leaves the rest of the pattern nothing to match.
+        (r"[\q{ab}a]b", "v", "ab", Some((0, 2))),
+        (r"[\q{abc|ab}]c", "v", "abc", Some((0, 3))),
+        // A member of one code point is a code point, so it folds under `i`
+        // exactly as a written character does.
+        (r"[\q{a}]", "v", "a", Some((0, 1))),
+        (r"[\q{a}]", "iv", "A", Some((0, 1))),
+        (r"[^\q{a}]", "iv", "A", None),
+        (r"[\q{AB}]", "iv", "ab", Some((0, 2))),
+        // Simple folding only: `ß` and `ss` are different members.
+        (r"[\q{ss}]", "iv", "\u{df}", None),
+        // The empty member matches between characters.
+        (r"[\q{}]", "v", "x", Some((0, 0))),
+        (r"[a\q{}]", "v", "", Some((0, 0))),
+        (r"[\q{ab|}]y", "v", "y", Some((0, 1))),
+        // Astral members count as one code point each.
+        (
+            r"[\q{\u{1f600}\u{1f601}}]",
+            "v",
+            "\u{1f600}\u{1f601}",
+            Some((0, 4)),
+        ),
+        // Quantifiers and lookbehind see the whole member.
+        (r"[\q{ab}]{2}", "v", "abab", Some((0, 4))),
+        (r"(?<=[\q{ab}])c", "v", "abc", Some((2, 3))),
+        // Operators combine strings by the text they spell and code points
+        // positionally, which are different questions in the same class.
+        (r"[[\q{ab}]--[\q{ab}]]", "v", "ab", None),
+        (r"[\q{ab|cd}--\q{ab}]", "v", "ab", None),
+        (r"[\q{ab|cd}--\q{ab}]", "v", "cd", Some((0, 2))),
+        (r"[\q{ab|cd}--\q{ab}--\q{cd}]", "v", "abcd", None),
+        (r"[[a-z]--\q{ab}]", "v", "ab", Some((0, 1))),
+        (r"[\q{ab}--[a-z]]", "v", "ab", Some((0, 2))),
+        (r"[\q{a}--[a-z]]", "v", "a", None),
+        (r"[\q{AB}--\q{ab}]", "iv", "AB", None),
+        (r"[\q{AB}--\q{ab}]", "v", "AB", Some((0, 2))),
+        (r"[\q{ab}&&\q{ab|cd}]", "v", "ab", Some((0, 2))),
+        (r"[\q{ab}&&\q{cd}]", "v", "ab", None),
+        (r"[\q{ab}&&[a-z]]", "v", "ab", None),
+        (r"[\q{a}&&[a-z]]", "v", "a", Some((0, 1))),
+        (r"[\q{ab}&&\q{ab}&&[a]]", "v", "ab", None),
+        (r"[\q{|a}--\q{}]", "v", "a", Some((0, 1))),
+    ] {
+        assert_eq!(
+            first(source, flags, subject),
+            expected.map(|(a, b)| Span::new(a, b).unwrap()),
+            "/{source}/{flags} over {subject:?}"
+        );
+    }
+}
+
+/// What the grammar refuses around string members: `\q` that spells no
+/// disjunction, a disjunction where a single character belongs, and a
+/// complement of a set whose syntax may hold strings — which the grammar
+/// decides from the syntax, not from what survives an operator.
+#[test]
+fn unicode_sets_string_member_grammar_errors_stay_syntax_errors() {
+    for source in [
+        r"\q{ab}",
+        r"[\q]",
+        r"[\q{ab]",
+        r"[a-\q{b}]",
+        r"[\q{a}-z]",
+        r"[\q{\q{a}}]",
+        r"[\q{\d}]",
+        r"[\q{a-b}]",
+        r"[\q{ab}-]",
+        r"[\q{a&&b}]",
+        r"[^\q{}]",
+        r"[^\q{ab}]",
+        r"[^[\q{ab}]--[\q{ab}]]",
+        r"[^[\q{ab}]&&[\q{ab}]]",
+    ] {
+        assert!(
+            matches!(program(source, "v"), Err(CompileError::Syntax { .. })),
+            "/{source}/v must be a syntax error, got {:?}",
+            program(source, "v")
+        );
+    }
+    // A complement is fine when no operand of it may hold strings, including
+    // an intersection where one side cannot.
+    for source in [r"[^\q{a}]", r"[^\q{a|b}]", r"[^[\q{ab}]&&[b]]"] {
+        assert!(program(source, "v").is_ok(), "/{source}/v must compile");
+    }
+    // `\q` is an escape of the `v` grammar only. Without `u` or `v` the
+    // Annex B grammar reads it as the identity escape it always was.
+    assert!(program(r"[\q{ab}]", "").is_ok());
+    for flags in ["u", "iu"] {
+        assert!(
+            matches!(
+                program(r"[\q{ab}]", flags),
+                Err(CompileError::Syntax { .. })
+            ),
+            "/[\\q{{ab}}]/{flags}"
+        );
+    }
+}
+
 fn program(source: &str, flags: &str) -> Result<Vec<u32>, CompileError> {
     let mut nodes = vec![Node::default(); 512];
     let mut ranges = vec![Range::default(); 512];
@@ -171,6 +284,10 @@ fn unicode_sets_admission_keeps_syntax_errors_and_remaining_omissions_explicit()
         "[a--b--c]",
         "[a&&b&&c]",
         "[[a-z]--[[a-c][x-z]]]",
+        r"[\q{ab|a}]",
+        r"[\q{ab}--\q{ab}]",
+        r"[\q{}]",
+        r"[\q{ab}&&\q{ab|cd}]",
     ] {
         let outcome = program(source, "iv");
         assert!(
@@ -178,13 +295,12 @@ fn unicode_sets_admission_keeps_syntax_errors_and_remaining_omissions_explicit()
             "{source} must be compiled or rejected, never reported unsupported"
         );
     }
-    // String members and properties of strings stay explicit gaps rather than
-    // approximations: both need a member to match more than one character.
+    // Properties of strings stay an explicit gap rather than an approximation:
+    // their members are sequences the pinned Unicode data does not carry.
     for source in [
-        r"[\q{ab|a}]",
-        r"[\q{ab}--\q{ab}]",
         r"\p{RGI_Emoji}",
         r"[\p{Basic_Emoji}]",
+        r"[\p{RGI_Emoji}--\q{ab}]",
     ] {
         assert!(
             matches!(

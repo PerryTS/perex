@@ -8,13 +8,15 @@
 // is counted on its own; a pattern it rejects that Node accepts, or accepts
 // that Node rejects, is a difference.
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { parseAnswers, stableDifferences, boundedAnswers } from './reference.mjs';
 
-const [probe, output, ...probeArgs] = process.argv.slice(2);
-assert(output, 'usage: check-sets.mjs PROBE OUTPUT_DIR [PROBE_ARGS...]');
+const argv = process.argv.slice(2);
+const reviewed = argv.includes('--allow-reviewed-reference-disagreements');
+const [probe, output, ...probeArgs] = argv.filter(arg => arg !== '--allow-reviewed-reference-disagreements');
+assert(output, 'usage: check-sets.mjs PROBE OUTPUT_DIR [--allow-reviewed-reference-disagreements] [PROBE_ARGS...]');
 
 const R = String.raw;
 const bodies = [
@@ -41,8 +43,19 @@ const bodies = [
   // Character escapes and astral members.
   R`\x41`, R`\x41-\x5a`, R`A`, R`\u{1f600}`, R`\u{1f600}-\u{1f610}`,
   R`\n\t\r`, R`\0`, R`\cA`, '\u{1f600}', '\u{1f600}-\u{1f610}',
-  // String members.
+  // String members: their own grammar, their order against shorter members,
+  // and the operators over them.
   R`\q{abc}`, R`\q{a|b}`, R`\q{}`, R`\q{abc|d}x`, R`[\q{ab}]`,
+  R`\q{a}`, R`\q{ab}`, R`\q{ab|a}`, R`\q{a|ab}`, R`\q{abc|ab}`,
+  R`\q{ab}a`, R`a\q{ab}`, R`\q{ab}\q{ab}`, R`\q{ab}\q{cd}`,
+  R`\q{|a}`, R`\q{a|}`, R`\q{A|B}`, R`\q{AB}`, R`\q{\u{1f600}a}`,
+  R`\q{a-b}`, R`\q{\d}`, R`\q{\q{a}}`, R`\q{a`, R`\q{a}}`, R`a-\q{b}`,
+  R`\q{ab}-`, R`^\q{ab}`, R`^\q{a}`, R`^[\q{ab}]`,
+  R`[\q{ab}]--[\q{ab}]`, R`[\q{ab|cd}]--[\q{ab}]`, R`\q{ab}--\q{ab}`,
+  R`\q{ab|cd}--\q{ab}--\q{cd}`, R`\q{a}--[a]`, R`[a-z]--\q{ab}`,
+  R`[a-z]--\q{a}`, R`\q{ab}--[a-z]`, R`\q{ab}&&\q{ab|cd}`,
+  R`\q{ab}&&\q{cd}`, R`\q{a}&&[a-z]`, R`[a-z]&&\q{a}`,
+  R`\q{ab}&&[a-z]`, R`[\q{ab}]&&[\q{ab}]&&[a]`, R`^[\q{ab}]--[\q{ab}]`,
 ];
 
 const SUBJECTS = [
@@ -110,7 +123,26 @@ for (const [id, answer] of actual) {
 }
 const comparable = cases.filter(row => compared.has(row.id));
 const expectedSubset = new Map([...compared.keys()].map(id => [id, expected.get(id)]));
-const { differences, unstable } = stableDifferences(expectedSubset, compared, comparable);
+let { differences, unstable } = stableDifferences(expectedSubset, compared, comparable);
+const rawDifferences = differences.length;
+
+// Where the two engines disagree about the specification rather than about
+// this implementation, the exact input and both answers are bound in a
+// reviewed fixture and the development option permits only those. Anything
+// new, or any listed answer that has changed on either side, still fails.
+let referenceDisagreements = [];
+if (reviewed) {
+  referenceDisagreements = JSON.parse(
+    readFileSync(new URL('../tests/fixtures/sets-reference-disagreements.json', import.meta.url)),
+  );
+  for (const row of referenceDisagreements) {
+    assert.deepEqual(cases.find(item => item.id === row.id), row.case, 'reviewed input changed');
+    assert.deepEqual(expected.get(row.id), row.node, 'Node disagreement changed');
+    assert.deepEqual(actual.get(row.id), row.perex, 'Perex disagreement changed');
+  }
+  const ids = new Set(referenceDisagreements.map(row => row.id));
+  differences = differences.filter(row => !ids.has(row.id));
+}
 
 // A pattern reported unsupported must still be a pattern the grammar accepts:
 // declaring a gap on an invalid pattern would hide a missing syntax error.
@@ -142,6 +174,8 @@ const report = {
   unsupported_on_invalid_patterns: unsupportedOnInvalid.length,
   syntax,
   unstable_oracle_answers: unstable,
+  raw_differences: rawDifferences,
+  reviewed_reference_disagreements: referenceDisagreements.length,
   differences: differences.length,
   first_differences: differences.slice(0, 25).map(d => ({
     ...d,
