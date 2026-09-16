@@ -10,4 +10,5 @@
 //! This is experimental and unstable, like the rest of the embedding surface.
 pub mod a64;
 pub mod emit;
+pub(crate) mod machine;
 pub mod verify;

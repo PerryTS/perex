@@ -15,47 +15,16 @@
 //! that registers it does not write have already been cleared.
 #![allow(dead_code)]
 
-use super::a64::{Assembler, Cond, EncodeError, Label, Patch, Reg, X0, X1, X2, X3, X4, X16};
+use super::a64::Assembler;
+use super::machine::{
+    AT, BYTE, Cond, EncodeError, FROM, LENGTH, Label, MAX_REPEATS, Machine, Patch, SUBJECT, Slot,
+    TABLE, TMP, repeat_end, repeat_floor,
+};
 use super::verify::{Facts, VerifyError, verify};
 use crate::program::{
     ANY, ANY_S, ASSERT, ASSERT_END, ATOM_REPEAT, CHAR, CHAR_I, CLASS, END, MATCH, NEGATED,
     PROPERTY, Program, SAVE, START, Y, consuming, derive_start_anchored,
 };
-
-/// Where the arguments arrive. The first five follow the C calling convention
-/// this targets; the rest are scratch it may use freely.
-const SUBJECT: Reg = X0;
-const LENGTH: Reg = X1;
-const START_REG: Reg = X2;
-const REGISTERS: Reg = X3;
-/// Backward branches the code may still take. Written only by the decrement
-/// that guards each of them, which is what [`verify`] checks.
-const BUDGET: Reg = X4;
-/// The last start with room for everything a match must consume, fixed for
-/// the whole search.
-const LAST: Reg = X16;
-/// The position inside the current attempt.
-const AT: Reg = Reg(6);
-/// The byte just loaded from the subject.
-const BYTE: Reg = Reg(7);
-/// Scratch within a single step.
-const TMP: Reg = Reg(8);
-const TMP2: Reg = Reg(15);
-/// The membership table a repeated multi-range class is tested through, held
-/// across that repeat's scan.
-const TABLE: Reg = Reg(5);
-
-/// Open repeats keep two registers each: where the run currently ends, and the
-/// earliest end its minimum allows. Three is what X9 through X14 hold, and
-/// three sequential repeats is more than the measured cases use.
-const MAX_REPEATS: usize = 3;
-
-fn repeat_end(depth: usize) -> Reg {
-    Reg(9 + depth as u8 * 2)
-}
-fn repeat_floor(depth: usize) -> Reg {
-    Reg(10 + depth as u8 * 2)
-}
 
 /// Branches waiting for a label that has not been emitted yet.
 const MAX_PATCHES: usize = 512;
@@ -276,7 +245,7 @@ impl Tables {
         &mut self,
         asm: &mut Assembler<'_>,
         program: Program<'_>,
-        into: Reg,
+        into: Slot,
         a: u32,
         b: u32,
     ) -> Result<(), EmitError> {
@@ -292,7 +261,7 @@ impl Tables {
             });
             self.data[self.count][byte as usize] = u8::from(inside != negated);
         }
-        self.at[self.count] = asm.adr_forward(into);
+        self.at[self.count] = asm.data_address(into);
         self.count += 1;
         Ok(())
     }
@@ -340,79 +309,76 @@ fn emit_atom(
     op: u32,
     a: u32,
     b: u32,
-    table: Option<Reg>,
+    table: Option<Slot>,
     fail: &mut Patches,
 ) -> Result<(), EmitError> {
     match op {
         // Anything at all, so nothing to test.
         ANY_S => {}
         CHAR | CHAR_I => {
-            asm.ldrb(BYTE, SUBJECT, AT);
+            asm.load_byte(BYTE, SUBJECT, AT);
             let byte = a as u8;
             if op == CHAR_I && byte.is_ascii_alphabetic() {
                 // Either case, which over this storage is the whole of what
                 // folding means: the two non-ASCII characters that fold into
                 // ASCII cannot occur in it.
-                asm.cmp_imm32(BYTE, u32::from(byte.to_ascii_lowercase()));
-                let matched = asm.b_cond_forward(Cond::Eq);
-                asm.cmp_imm32(BYTE, u32::from(byte.to_ascii_uppercase()));
-                fail.push(asm.b_cond_forward(Cond::Ne))?;
+                asm.compare_byte(BYTE, u32::from(byte.to_ascii_lowercase()));
+                let matched = asm.branch_if(Cond::Equal);
+                asm.compare_byte(BYTE, u32::from(byte.to_ascii_uppercase()));
+                fail.push(asm.branch_if(Cond::NotEqual))?;
                 asm.bind(matched);
             } else {
-                asm.cmp_imm32(BYTE, u32::from(byte));
-                fail.push(asm.b_cond_forward(Cond::Ne))?;
+                asm.compare_byte(BYTE, u32::from(byte));
+                fail.push(asm.branch_if(Cond::NotEqual))?;
             }
         }
         // Anything but a line terminator. On ASCII storage only the two
         // single-byte terminators can occur; U+2028 and U+2029 are not
         // representable in it.
         ANY => {
-            asm.ldrb(BYTE, SUBJECT, AT);
-            asm.cmp_imm32(BYTE, u32::from(b'\n'));
-            fail.push(asm.b_cond_forward(Cond::Eq))?;
-            asm.cmp_imm32(BYTE, u32::from(b'\r'));
-            fail.push(asm.b_cond_forward(Cond::Eq))?;
+            asm.load_byte(BYTE, SUBJECT, AT);
+            asm.compare_byte(BYTE, u32::from(b'\n'));
+            fail.push(asm.branch_if(Cond::Equal))?;
+            asm.compare_byte(BYTE, u32::from(b'\r'));
+            fail.push(asm.branch_if(Cond::Equal))?;
         }
         CLASS => {
-            asm.ldrb(BYTE, SUBJECT, AT);
+            asm.load_byte(BYTE, SUBJECT, AT);
             let count = b & !NEGATED;
             let negated = b & NEGATED != 0;
             if let Some(table) = table {
                 // One load, whatever the class holds.
-                asm.ldrb(BYTE, table, BYTE);
-                asm.cmp_imm32(BYTE, 0);
-                fail.push(asm.b_cond_forward(Cond::Eq))?;
+                asm.load_byte(BYTE, table, BYTE);
+                asm.compare_byte(BYTE, 0);
+                fail.push(asm.branch_if(Cond::Equal))?;
             } else if count == 1 {
                 // A byte is inside one range exactly when subtracting the low
                 // bound leaves something no larger than the range is wide,
                 // which is one subtraction and one comparison rather than two
                 // comparisons and two branches.
                 let [lo, hi] = program.range(a as usize);
-                asm.sub_imm32(TMP2, BYTE, lo);
-                asm.cmp_imm32(TMP2, hi - lo);
-                let outside = if negated { Cond::Ls } else { Cond::Hi };
-                fail.push(asm.b_cond_forward(outside))?;
+                fail.push(asm.byte_within(BYTE, lo, hi, negated))?;
             } else {
                 // Each range jumps out when the byte is inside it. Falling past
                 // all of them means the byte is inside none.
                 let mut inside = [Patch::default(); MAX_RANGES];
                 for (slot, index) in inside.iter_mut().zip(a..a + count) {
                     let [lo, hi] = program.range(index as usize);
-                    asm.cmp_imm32(BYTE, lo);
-                    let below = asm.b_cond_forward(Cond::Lo);
-                    asm.cmp_imm32(BYTE, hi);
-                    *slot = asm.b_cond_forward(Cond::Ls);
+                    asm.compare_byte(BYTE, lo);
+                    let below = asm.branch_if(Cond::Less);
+                    asm.compare_byte(BYTE, hi);
+                    *slot = asm.branch_if(Cond::AtMost);
                     asm.bind(below);
                 }
                 if negated {
-                    let accepted = asm.b_forward();
+                    let accepted = asm.branch();
                     for patch in &inside[..count as usize] {
                         asm.bind(*patch);
                     }
-                    fail.push(asm.b_forward())?;
+                    fail.push(asm.branch())?;
                     asm.bind(accepted);
                 } else {
-                    fail.push(asm.b_forward())?;
+                    fail.push(asm.branch())?;
                     for patch in &inside[..count as usize] {
                         asm.bind(*patch);
                     }
@@ -429,20 +395,6 @@ pub const NO_MATCH: isize = -1;
 /// What the generated code returns when its budget ran out before the search
 /// was decided. The interpreter runs the same search from the start.
 pub const EXHAUSTED: isize = -2;
-
-/// Take a backward branch to `to`, spending one unit of budget, or leave
-/// through `out` when none is left.
-///
-/// Every loop in the generated code closes through here. Forward branches
-/// cannot repeat anything, so this is the whole of what bounds how long the
-/// code runs, and [`verify`] refuses a backward branch in any other form. The
-/// budget is only decremented when it is not already zero, so it never wraps.
-fn back(asm: &mut Assembler<'_>, to: Label, out: &mut Patches) -> Result<(), EmitError> {
-    out.push(asm.cbz_forward(BUDGET))?;
-    asm.sub_imm(BUDGET, BUDGET, 1);
-    asm.b_back(to);
-    Ok(())
-}
 
 /// Subjects up to this many bytes are where generated code beats the
 /// interpreter for a program that has to try every start.
@@ -535,12 +487,12 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
         if bound >= 1 << 12 {
             return Err(EmitError::TooLarge);
         }
-        asm.cmp_imm(LENGTH, bound as u32);
-        let whole = asm.b_cond_forward(Cond::Lo);
-        asm.sub_imm(TMP, LENGTH, bound as u32);
-        asm.cmp(START_REG, TMP);
-        let already = asm.b_cond_forward(Cond::Hs);
-        asm.mov(START_REG, TMP);
+        asm.compare_position(LENGTH, bound as u32);
+        let whole = asm.branch_if(Cond::Less);
+        asm.behind(TMP, LENGTH, bound as u32);
+        asm.compare(FROM, TMP);
+        let already = asm.branch_if(Cond::AtLeast);
+        asm.copy(FROM, TMP);
         asm.bind(already);
         asm.bind(whole);
     }
@@ -549,9 +501,7 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
     // start either, so passing the last start with room ends the search. That
     // is also what makes a start past the end no match, as it is to the
     // interpreter, rather than an address to read from.
-    asm.cmp_imm(LENGTH, least as u32);
-    no_match.push(asm.b_cond_forward(Cond::Lo))?;
-    asm.sub_imm(LAST, LENGTH, least as u32);
+    no_match.push(asm.fix_room(least as u32))?;
 
     // Every later start of a start-anchored program fails at the same `^`, so
     // there is one start to try, which is what the interpreter does. Trying
@@ -561,34 +511,32 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
     let one_start = derive_start_anchored(program.words(), program.instructions());
 
     let outer = asm.here();
-    asm.cmp(START_REG, LAST);
-    no_match.push(asm.b_cond_forward(Cond::Hi))?;
-    asm.mov(AT, START_REG);
+    no_match.push(asm.start_without_room())?;
+    asm.copy(AT, FROM);
 
     let mut pc = 0;
     loop {
         let [op, a, b] = program.instruction(pc);
         match op {
             SAVE => {
-                asm.str_index(AT, REGISTERS, a);
+                asm.store_position(AT, a);
                 pc += 1;
             }
             MATCH => {
-                asm.mov(X0, START_REG);
-                asm.ret();
+                asm.return_start();
                 break;
             }
             // `^` without `m`: only the subject's own beginning.
             START => {
-                asm.cmp_imm(AT, 0);
-                let elsewhere = asm.b_cond_forward(Cond::Ne);
+                asm.compare_position(AT, 0);
+                let elsewhere = asm.branch_if(Cond::NotEqual);
                 give_up(&mut next_start, &mut repeats, depth, elsewhere)?;
                 pc += 1;
             }
             // `$` without `m`: only the subject's own end.
             END => {
-                asm.cmp(AT, LENGTH);
-                let elsewhere = asm.b_cond_forward(Cond::Ne);
+                asm.compare(AT, LENGTH);
+                let elsewhere = asm.branch_if(Cond::NotEqual);
                 give_up(&mut next_start, &mut repeats, depth, elsewhere)?;
                 pc += 1;
             }
@@ -598,27 +546,26 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
                 let negative = b & 1 != 0;
                 let mut absent = Patches::new();
                 // Too near the beginning for the text to be there at all.
-                asm.cmp_imm(AT, length as u32);
-                absent.push(asm.b_cond_forward(Cond::Lo))?;
-                asm.sub_imm(TMP, AT, length as u32);
-                asm.add_reg(TMP2, SUBJECT, TMP);
+                asm.compare_position(AT, length as u32);
+                absent.push(asm.branch_if(Cond::Less))?;
+                asm.window_before(AT, length as u32);
                 // The body is stored in the order a lookbehind reads it, which
                 // is backwards: its first character is the one just before the
                 // position. So body `offset` is the byte `length - 1 - offset`
                 // into the window this compares.
                 for offset in 0..length {
-                    asm.ldrb_imm(BYTE, TMP2, (length - 1 - offset) as u32);
-                    asm.cmp_imm32(BYTE, program.instruction(body + offset)[1]);
-                    absent.push(asm.b_cond_forward(Cond::Ne))?;
+                    asm.load_window_byte(BYTE, (length - 1 - offset) as u32);
+                    asm.compare_byte(BYTE, program.instruction(body + offset)[1]);
+                    absent.push(asm.branch_if(Cond::NotEqual))?;
                 }
                 if negative {
                     // Every character matched, so the text this describes is
                     // there, which is what the negative form fails on.
-                    let present = asm.b_forward();
+                    let present = asm.branch();
                     absent.bind(&mut asm);
-                    let accepted = asm.b_forward();
+                    let accepted = asm.branch();
                     asm.bind(present);
-                    give_up(&mut next_start, &mut repeats, depth, asm.b_forward())?;
+                    give_up(&mut next_start, &mut repeats, depth, asm.branch())?;
                     asm.bind(accepted);
                 } else {
                     for index in 0..absent.count {
@@ -643,18 +590,14 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
                 // also what keeps every load in the continuation inside the
                 // subject: the upfront bound covers the minimum, and a greedy
                 // repeat can take a subject to its end.
-                asm.add_imm(floor, AT, fewest);
+                asm.ahead(floor, AT, fewest);
                 let after = least_from(program, record[4] as usize);
                 if after >= 1 << 12 {
                     return Err(EmitError::TooLarge);
                 }
-                asm.sub_imm(TMP, LENGTH, after as u32);
+                asm.behind(TMP, LENGTH, after as u32);
                 if !infinite {
-                    asm.add_imm(TMP2, AT, most);
-                    asm.cmp(TMP2, TMP);
-                    let room = asm.b_cond_forward(Cond::Hs);
-                    asm.mov(TMP, TMP2);
-                    asm.bind(room);
+                    asm.limit_to(TMP, AT, most);
                 }
 
                 // A repeated class of several ranges is tested through a
@@ -670,19 +613,19 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
                 // Consume greedily up to that limit.
                 let scan = asm.here();
                 let mut stop = Patches::new();
-                asm.cmp(AT, TMP);
-                stop.push(asm.b_cond_forward(Cond::Hs))?;
+                asm.compare(AT, TMP);
+                stop.push(asm.branch_if(Cond::AtLeast))?;
                 emit_atom(
                     &mut asm, program, body_op, body_a, body_b, scan_table, &mut stop,
                 )?;
-                asm.add_imm(AT, AT, 1);
-                back(&mut asm, scan, &mut out_of_budget)?;
+                asm.ahead(AT, AT, 1);
+                out_of_budget.push(asm.branch_back(scan))?;
                 stop.bind(&mut asm);
 
                 // Short of the minimum is failure, and retreating cannot help.
-                asm.mov(end, AT);
-                asm.cmp(end, floor);
-                let short = asm.b_cond_forward(Cond::Lo);
+                asm.copy(end, AT);
+                asm.compare(end, floor);
+                let short = asm.branch_if(Cond::Less);
                 match depth {
                     0 => next_start.push(short)?,
                     _ => repeats[depth - 1]
@@ -695,7 +638,7 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
                 // Everything after this is the continuation, re-entered from
                 // here each time this repeat gives a character back.
                 let retry = asm.here();
-                asm.mov(AT, end);
+                asm.copy(AT, end);
                 repeats[depth] = Some(Repeat {
                     retry,
                     failures: Patches::new(),
@@ -706,7 +649,7 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
             _ => {
                 let mut fail = Patches::new();
                 emit_atom(&mut asm, program, op, a, b, None, &mut fail)?;
-                asm.add_imm(AT, AT, 1);
+                asm.ahead(AT, AT, 1);
                 // A consuming atom that fails retreats the innermost repeat, or
                 // gives up on this start when there is none.
                 match depth {
@@ -730,10 +673,10 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
         repeat.failures.bind(&mut asm);
         let end = repeat_end(depth);
         let floor = repeat_floor(depth);
-        asm.cmp(end, floor);
-        let spent = asm.b_cond_forward(Cond::Ls);
-        asm.sub_imm(end, end, 1);
-        back(&mut asm, repeat.retry, &mut out_of_budget)?;
+        asm.compare(end, floor);
+        let spent = asm.branch_if(Cond::AtMost);
+        asm.behind(end, end, 1);
+        out_of_budget.push(asm.branch_back(repeat.retry))?;
         match depth {
             0 => next_start.push(spent)?,
             _ => repeats[depth - 1]
@@ -746,18 +689,16 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
 
     next_start.bind(&mut asm);
     if !one_start {
-        asm.add_imm(START_REG, START_REG, 1);
-        back(&mut asm, outer, &mut out_of_budget)?;
+        asm.ahead(FROM, FROM, 1);
+        out_of_budget.push(asm.branch_back(outer))?;
     }
 
     no_match.bind(&mut asm);
-    asm.movn(X0, 0);
-    asm.ret();
+    asm.return_code(NO_MATCH as i32);
     out_of_budget.bind(&mut asm);
-    asm.movn(X0, 1);
-    asm.ret();
+    asm.return_code(EXHAUSTED as i32);
     tables.place(&mut asm);
-    asm.finish().map_err(EmitError::from)
+    asm.done().map_err(EmitError::from)
 }
 
 #[cfg(test)]

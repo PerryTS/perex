@@ -10,6 +10,8 @@
 //! Every encoding below was checked against the system assembler rather than
 //! written from memory, and the tests assert those exact words.
 #![allow(dead_code)]
+use super::machine;
+use super::machine::{EncodeError, Kind, Label, Patch};
 
 /// A general-purpose register. `X0`-`X30`, and 31 which reads as the zero
 /// register or the stack pointer depending on the instruction.
@@ -40,44 +42,6 @@ pub(crate) enum Cond {
     Hi = 8,
     /// Unsigned lower or same.
     Ls = 9,
-}
-
-/// A position in the emitted code that a branch can be pointed at.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Label(usize);
-
-/// What an unbound reference will become once its target is known.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum Kind {
-    #[default]
-    CondBranch,
-    Branch,
-    /// A PC-relative address rather than a jump, whose offset counts bytes.
-    Address,
-}
-
-/// A reference that has been emitted but whose target is not known yet. The
-/// default is one that was never emitted, which [`Assembler::bind`] ignores, so
-/// a generator can carry a fixed array of them.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Patch {
-    at: usize,
-    kind: Kind,
-    live: bool,
-}
-
-/// Why an encoding could not be produced. Every one of these is a bug in the
-/// code generator rather than anything a pattern can cause, but the encoder
-/// reports instead of wrapping so that a bug cannot silently emit a different
-/// instruction than it meant to.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EncodeError {
-    /// The caller's buffer could not hold the code.
-    Capacity,
-    /// An immediate did not fit the field the instruction has for it.
-    Immediate,
-    /// A branch was further from its target than its field can reach.
-    Range,
 }
 
 /// Emits AArch64 instructions into a caller-owned byte buffer.
@@ -386,6 +350,144 @@ impl<'a> Assembler<'a> {
 fn fits_signed(value: isize, bits: u32) -> bool {
     let limit = 1isize << (bits - 1);
     value >= -limit && value < limit
+}
+
+/// The abstract slots the generator names, in this target's registers. There
+/// are more registers than slots here, so two are kept back: one for a window
+/// into the subject, and one for the last start with room for a match.
+fn slot(slot: machine::Slot) -> Reg {
+    Reg(slot.0)
+}
+/// Scratch this encoder uses for operations the generator states as results
+/// rather than as instructions.
+const WINDOW: Reg = Reg(15);
+/// The last start with room for everything a match must consume, fixed for the
+/// whole search.
+const LAST: Reg = Reg(16);
+
+fn condition(cond: machine::Cond) -> Cond {
+    match cond {
+        machine::Cond::Equal => Cond::Eq,
+        machine::Cond::NotEqual => Cond::Ne,
+        machine::Cond::Less => Cond::Lo,
+        machine::Cond::AtLeast => Cond::Hs,
+        machine::Cond::Greater => Cond::Hi,
+        machine::Cond::AtMost => Cond::Ls,
+    }
+}
+
+impl machine::Machine for Assembler<'_> {
+    fn here(&self) -> Label {
+        Assembler::here(self)
+    }
+    fn position(&self) -> usize {
+        Assembler::position(self)
+    }
+    fn done(&mut self) -> Result<usize, EncodeError> {
+        match self.failed {
+            Some(error) => Err(error),
+            None => Ok(self.at),
+        }
+    }
+
+    fn return_start(&mut self) {
+        self.mov(X0, slot(machine::FROM));
+        self.ret();
+    }
+    fn return_code(&mut self, code: i32) {
+        // `MOVN` writes the bitwise complement, so the codes this returns —
+        // -1 and -2 — are the complements of 0 and 1.
+        self.movn(X0, (!code) as u16);
+        self.ret();
+    }
+
+    fn copy(&mut self, dst: machine::Slot, src: machine::Slot) {
+        self.mov(slot(dst), slot(src));
+    }
+    fn ahead(&mut self, dst: machine::Slot, src: machine::Slot, offset: u32) {
+        self.add_imm(slot(dst), slot(src), offset);
+    }
+    fn behind(&mut self, dst: machine::Slot, src: machine::Slot, offset: u32) {
+        self.sub_imm(slot(dst), slot(src), offset);
+    }
+
+    fn compare(&mut self, left: machine::Slot, right: machine::Slot) {
+        Assembler::cmp(self, slot(left), slot(right));
+    }
+    fn compare_position(&mut self, left: machine::Slot, right: u32) {
+        self.cmp_imm(slot(left), right);
+    }
+    fn compare_byte(&mut self, left: machine::Slot, right: u32) {
+        self.cmp_imm32(slot(left), right);
+    }
+    fn byte_within(&mut self, byte: machine::Slot, lo: u32, hi: u32, inside: bool) -> Patch {
+        // A byte is inside one range exactly when subtracting the low bound
+        // leaves something no larger than the range is wide, which is one
+        // subtraction and one comparison rather than two of each.
+        self.sub_imm32(WINDOW, slot(byte), lo);
+        self.cmp_imm32(WINDOW, hi - lo);
+        self.b_cond_forward(if inside { Cond::Ls } else { Cond::Hi })
+    }
+
+    fn load_byte(&mut self, dst: machine::Slot, base: machine::Slot, index: machine::Slot) {
+        self.ldrb(slot(dst), slot(base), slot(index));
+    }
+    fn window_before(&mut self, position: machine::Slot, distance: u32) {
+        self.sub_imm(WINDOW, slot(position), distance);
+        self.add_reg(WINDOW, slot(machine::SUBJECT), WINDOW);
+    }
+    fn load_window_byte(&mut self, dst: machine::Slot, offset: u32) {
+        self.ldrb_imm(slot(dst), WINDOW, offset);
+    }
+    fn store_position(&mut self, value: machine::Slot, index: u32) {
+        self.str_index(slot(value), slot(machine::REGISTERS), index);
+    }
+
+    fn fix_room(&mut self, least: u32) -> Patch {
+        self.cmp_imm(slot(machine::LENGTH), least);
+        let short = self.b_cond_forward(Cond::Lo);
+        self.sub_imm(LAST, slot(machine::LENGTH), least);
+        short
+    }
+    fn start_without_room(&mut self) -> Patch {
+        Assembler::cmp(self, slot(machine::FROM), LAST);
+        self.b_cond_forward(Cond::Hi)
+    }
+
+    fn limit_to(&mut self, bound: machine::Slot, from: machine::Slot, offset: u32) {
+        self.add_imm(WINDOW, slot(from), offset);
+        Assembler::cmp(self, WINDOW, slot(bound));
+        let already = self.b_cond_forward(Cond::Hs);
+        self.mov(slot(bound), WINDOW);
+        Assembler::bind(self, already);
+    }
+
+    fn branch_if(&mut self, cond: machine::Cond) -> Patch {
+        self.b_cond_forward(condition(cond))
+    }
+    fn branch(&mut self) -> Patch {
+        self.b_forward()
+    }
+    fn branch_back(&mut self, to: Label) -> Patch {
+        // Every loop closes through this shape, so the budget is decremented
+        // only when it is not already zero and never wraps, and between two
+        // backward branches execution only moves forward. `verify` refuses a
+        // backward branch in any other form.
+        let out = self.cbz_forward(slot(machine::BUDGET));
+        self.sub_imm(slot(machine::BUDGET), slot(machine::BUDGET), 1);
+        self.b_back(to);
+        out
+    }
+    fn bind(&mut self, patch: Patch) {
+        Assembler::bind(self, patch);
+    }
+
+    fn data_address(&mut self, dst: machine::Slot) -> Patch {
+        self.adr_forward(slot(dst))
+    }
+    fn data(&mut self, bytes: &[u8]) {
+        Assembler::data(self, bytes);
+    }
 }
 
 #[cfg(test)]
