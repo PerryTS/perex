@@ -327,9 +327,11 @@ That table takes the better of the two per case. What a host gets is whichever
 the rule below picks, without running both, and the section after it says what
 that costs.
 
-**One target.** Everything here is AArch64. CI runs x86-64, so CI cannot execute
-any of it, and by this project's own rules a code generator CI cannot test is
-not yet evidence.
+**One verified target.** The generator emits both AArch64 and x86-64, and both
+are held to the interpreter over the corpus by emulators that decode the bytes.
+Only AArch64 is *verified*, though, so only AArch64 is returned to a host. CI
+executes both through those emulators on whatever it runs on; what it cannot
+yet do is execute either natively, which needs the host half as well.
 
 ## Choosing the path
 
@@ -435,7 +437,14 @@ Eight of the eleven take between four and forty-five times less time.
    code is returned.
 5. **Done.** A rule for choosing between the two paths, measured rather than
    guessed, with what it gives up recorded beside what it takes.
-6. The same encoder for x86-64, so CI can execute any of this.
+6. The same encoder for x86-64, so CI can execute any of this. **The generator
+   is done**: `native::x64` encodes the System V convention Linux and macOS
+   use, the instruction selection is shared with AArch64 through
+   `native::machine`, and the corpus — every supported pattern, every subject,
+   every start — is run through an emulator for that target and compared with
+   the interpreter, with the budget property checked there too. What remains is
+   the verifier for it, and until that exists `emit_search` emits AArch64 only:
+   this crate does not hand a host code it cannot check.
 7. Generated code that skips starts as the interpreter does, which is what the
    rule's give-ups are made of.
 
