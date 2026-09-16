@@ -392,11 +392,13 @@ start:
 | 2048 | 9.62x | **1.39x** | 2.34x | **0.21x** |
 | 524288 | 15.09x | **1.88x** | 2.51x | **0.21x** |
 
-`a+!` no longer crosses at all: the interpreter walks the run its repeat leaves
-behind, where the scan steps over it. `needle` crosses around a thousand bytes
-instead of sixty-four, and its worst case is 1.9x rather than 15x. A folded
-literal has no single byte to scan for, and a class does not either, so those
-are unchanged — which is what the two lengths in the rule below are.
+Those figures are generated code run to a decision, without the allowance the
+rule below adds. `a+!` no longer crosses at all: the interpreter walks the run
+its repeat leaves behind, where the scan steps over it. `needle` crosses around
+a thousand bytes instead of sixty-four, and its worst case is 1.9x rather than
+15x — which the allowance then flattens to 1.05x. A folded literal has no single
+byte to scan for, and a class does not either, so those are unchanged, and the
+rule below treats them apart from these.
 
 ## Choosing the path
 
@@ -410,10 +412,11 @@ and the subject's length, never the subject's contents and never how a search
 is going: both paths answer identically, so a wrong choice costs time and not
 correctness.
 
-Two things it asks. First, whether the generated code walks the subject at all:
-a program anchored at the beginning has one start, and one whose match must end
-at the subject's end starts near that end, and neither cares how long the
-subject is. Second, for everything else, whether the subject is short enough
+Two things it asks. First, whether the generated code walks the subject at all,
+or walks it eight bytes to a branch: a program anchored at the beginning has one
+start, one whose match must end at the subject's end starts near that end, and
+one that scans covers eight bytes per branch — none of the three cares how long
+the subject is. Second, for everything else, whether the subject is short enough
 that entering a search costs more than the walk.
 
 A program whose generated code scans keeps the tier at **any** length, because
