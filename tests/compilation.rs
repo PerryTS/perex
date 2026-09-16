@@ -1,10 +1,10 @@
-//! Which programs the compilation tier could emit code for. See
-//! `docs/compilation.md`; nothing is generated yet, and this fixes the contract
-//! of the analysis that decides what would be.
+//! Which programs the compilation tier could emit code for, and when a host
+//! should run what it emits. See `docs/compilation.md`.
 use perex::{
     Budget,
     compiler::{Node, Range, compile},
     input::Input,
+    native::emit,
 };
 
 fn compilable(pattern: &str, flags: &str) -> bool {
@@ -146,4 +146,67 @@ fn refusal_is_not_rejection() {
             "/{pattern}/{flags} still compiles"
         );
     }
+}
+
+/// Choosing the path is the program's decision and the subject's length, never
+/// the subject's contents: both paths answer identically, so the choice is
+/// only ever about which is faster.
+#[test]
+fn the_path_rule_follows_the_program_and_the_length_alone() {
+    let short = 32;
+    // A program that has to try every start keeps the tier while the subject
+    // is short enough for the flat cost of a search to dominate its walk.
+    for (pattern, flags) in [
+        ("needle", ""),
+        ("[0-9]+[A-Z]+", ""),
+        ("a+!", ""),
+        ("NeEdLe", "i"),
+    ] {
+        with_program(pattern, flags, |program| {
+            assert!(emit::supported(program), "/{pattern}/{flags} is emitted");
+            assert!(emit::preferred(program, 0));
+            assert!(emit::preferred(program, short));
+            assert!(!emit::preferred(program, short + 1));
+            assert!(!emit::preferred(program, 1 << 20));
+        });
+    }
+    // One that does not walk the subject keeps it at any length: an anchored
+    // start is one start, and an end bound is a start near the end.
+    for (pattern, flags) in [
+        ("^needle", ""),
+        ("^(a)(b)$", ""),
+        ("needle$", ""),
+        ("x[0-9]$", ""),
+    ] {
+        with_program(pattern, flags, |program| {
+            assert!(emit::preferred(program, 0));
+            assert!(emit::preferred(program, 1 << 20));
+        });
+    }
+    // A program the tier cannot emit is never preferred, however short.
+    for (pattern, flags) in [("a|b", ""), ("(a)\\1", ""), ("a+?", ""), ("\\p{L}", "u")] {
+        with_program(pattern, flags, |program| {
+            assert!(!emit::supported(program));
+            assert!(!emit::preferred(program, 0));
+            assert!(!emit::preferred(program, short));
+        });
+    }
+}
+
+fn with_program(pattern: &str, flags: &str, check: impl FnOnce(perex::program::Program<'_>)) {
+    let source = Input::utf8(pattern);
+    let mut nodes = vec![Node::default(); source.len_utf16() * 3 + 32];
+    let mut ranges = vec![Range::default(); source.len_utf16() * 12 + 32];
+    let mut words = vec![0u32; source.len_utf16() * 48 + 128];
+    let mut budget = Budget::new(10_000_000);
+    let program = compile(
+        source,
+        flags,
+        &mut nodes,
+        &mut ranges,
+        &mut words,
+        &mut budget,
+    )
+    .expect("pattern compiles");
+    check(program);
 }

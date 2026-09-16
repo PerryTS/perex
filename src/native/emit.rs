@@ -19,7 +19,7 @@ use super::a64::{Assembler, Cond, EncodeError, Label, Patch, Reg, X0, X1, X2, X3
 use super::verify::{Facts, VerifyError, verify};
 use crate::program::{
     ANY, ANY_S, ASSERT, ASSERT_END, ATOM_REPEAT, CHAR, CHAR_I, CLASS, END, MATCH, NEGATED,
-    PROPERTY, Program, SAVE, START, Y, consuming,
+    PROPERTY, Program, SAVE, START, Y, consuming, derive_start_anchored,
 };
 
 /// Where the arguments arrive. The first five follow the C calling convention
@@ -444,6 +444,39 @@ fn back(asm: &mut Assembler<'_>, to: Label, out: &mut Patches) -> Result<(), Emi
     Ok(())
 }
 
+/// Subjects up to this many bytes are where generated code beats the
+/// interpreter for a program that has to try every start.
+///
+/// Generated code tries starts one at a time; the interpreter skips them in
+/// bulk, searching raw bytes for what a match must contain. So the tier wins
+/// where the flat cost of entering a search dominates and loses where the
+/// scan does, and the crossing is a length. Measured over subjects that match
+/// nothing, which is the case that tries every start: `[0-9]+[A-Z]+` and `a+!`
+/// cross at 24 to 32 bytes, `needle` at 64, a folded literal past 128, and a
+/// two-capture pattern between 48 and 64. Thirty-two is the shortest of those
+/// rounded to a power of two, so at worst a host gives up a small win on the
+/// two shapes that cross earliest — 1.06x and 1.13x on the measured pair —
+/// rather than taking a large loss on any of them. See `docs/compilation.md`.
+const SHORT_SUBJECT: usize = 32;
+
+/// Whether a host holding generated code for this program should run it for a
+/// subject of this many bytes, or hand the search to the interpreter.
+///
+/// The decision is the program's and the length's, never the subject's
+/// contents or how a search is going: both paths answer identically, so this
+/// only chooses which one is faster, and a wrong choice costs time rather than
+/// correctness. It is false for a program the tier cannot emit at all.
+///
+/// A program that does not try every start — one anchored at the subject's
+/// beginning, or one whose match must end at its end — keeps the tier at any
+/// length, because what generated code loses on a long subject is the walk.
+pub fn preferred(program: Program<'_>, bytes: usize) -> bool {
+    supported(program)
+        && (bytes <= SHORT_SUBJECT
+            || program.end_bound().is_some()
+            || derive_start_anchored(program.words(), program.instructions()))
+}
+
 /// Emit a whole search for `program` into `code`, returning its byte length.
 ///
 /// The generated code is called as
@@ -519,6 +552,13 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
     asm.cmp_imm(LENGTH, least as u32);
     no_match.push(asm.b_cond_forward(Cond::Lo))?;
     asm.sub_imm(LAST, LENGTH, least as u32);
+
+    // Every later start of a start-anchored program fails at the same `^`, so
+    // there is one start to try, which is what the interpreter does. Trying
+    // them all is what made generated code four orders of magnitude slower
+    // than the interpreter over a long subject. A sticky program has one start
+    // too, but `supported` refuses those before this.
+    let one_start = derive_start_anchored(program.words(), program.instructions());
 
     let outer = asm.here();
     asm.cmp(START_REG, LAST);
@@ -705,8 +745,10 @@ fn generate(program: Program<'_>, code: &mut [u8]) -> Result<usize, EmitError> {
     }
 
     next_start.bind(&mut asm);
-    asm.add_imm(START_REG, START_REG, 1);
-    back(&mut asm, outer, &mut out_of_budget)?;
+    if !one_start {
+        asm.add_imm(START_REG, START_REG, 1);
+        back(&mut asm, outer, &mut out_of_budget)?;
+    }
 
     no_match.bind(&mut asm);
     asm.movn(X0, 0);

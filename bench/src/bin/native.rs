@@ -10,7 +10,7 @@
 use perex::compiler::{compile, Node, Range};
 use perex::executor::{find, Frame, Scratch, Undo};
 use perex::input::Input;
-use perex::native::emit::{emit_search, supported, EXHAUSTED, NO_MATCH};
+use perex::native::emit::{emit_search, preferred, supported, EXHAUSTED, NO_MATCH};
 use perex::native::verify::Facts;
 use perex::span::Span;
 use perex::Budget;
@@ -160,9 +160,97 @@ fn time(iters: usize, mut run: impl FnMut() -> isize) -> f64 {
     best
 }
 
+/// Where the two paths cross, by subject length.
+///
+/// The tier wins on short subjects, where the flat cost of entering a search
+/// dominates, and loses on long ones, where the interpreter skips starts in
+/// bulk and generated code tries every one. A host has to choose without
+/// running both, so the rule it chooses by has to come from a measurement of
+/// where that crossing is, for each way the interpreter has of skipping.
+fn crossover() {
+    // A subject that matches nothing of any pattern here, so every case pays
+    // for every start, which is the case the rule has to be right about.
+    let filler = "qvxjz wkpbf hgtdm ".repeat(32768);
+    let lengths = [0usize, 8, 16, 24, 32, 48, 64, 96, 128, 512, 2048, 32768, 524288];
+    println!("{:<22}{:>9}{:>12}{:>12}{:>10}", "pattern", "length", "interp ns", "native ns", "ratio");
+    println!("{}", "-".repeat(65));
+    for (pattern, flags) in [
+        // A leading literal run, which the interpreter searches for over raw
+        // bytes rather than trying starts.
+        ("needle", ""),
+        ("NeEdLe", "i"),
+        // A required class, found by the admission scan.
+        ("[0-9]+[A-Z]+", ""),
+        (r"(\w+)@(\w+)\.com", ""),
+        // A repeat whose required trailing literal bounds the starts.
+        ("a+!", ""),
+        // One start, whatever the subject's length.
+        ("^needle", ""),
+        // An end bound: the interpreter starts near the end and so does the
+        // generated code.
+        ("needle$", ""),
+        // Nothing to skip by: both paths try every start.
+        ("[a-z]x", ""),
+        // A match at the first start, so neither path scans at all.
+        (r"\w+", ""),
+    ] {
+        let source = Input::utf8(pattern);
+        let mut nodes = vec![Node::default(); source.len_utf16() * 3 + 32];
+        let mut ranges = vec![Range::default(); source.len_utf16() * 12 + 32];
+        let mut words = vec![0u32; source.len_utf16() * 48 + 128];
+        let mut budget = Budget::new(10_000_000);
+        let program = compile(source, flags, &mut nodes, &mut ranges, &mut words, &mut budget)
+            .expect("pattern compiles");
+        if !supported(program) {
+            println!("{:<22}{:>9}   falls back to the interpreter", pattern, "-");
+            continue;
+        }
+        let mut code = vec![0u8; 65536];
+        let mut facts = vec![Facts::default(); code.len() / 4];
+        let length = emit_search(program, &mut code, &mut facts).expect("code is generated");
+        let executable = Executable::new(&code[..length]);
+        let entry = executable.entry();
+        let count = program.register_count();
+        for size in lengths {
+            let text = &filler[..size];
+            let subject = Input::utf8(text);
+            let bytes = text.as_bytes();
+            let iters = (4_000_000 / (size + 20)).clamp(200, 200_000);
+            let mut registers = vec![0usize; count];
+            let mut frames = vec![Frame::default(); 4096];
+            let mut undo = vec![Undo::default(); 16384];
+            let mut captures = vec![None::<Span>; program.capture_count()];
+            let interpreted = time(iters, || {
+                let mut budget = Budget::new(1_000_000_000);
+                find(program, subject, 0,
+                     Scratch { registers: &mut registers, frames: &mut frames, undo: &mut undo },
+                     &mut captures, &mut budget).map(isize::from).unwrap_or(-1)
+            });
+            let mut native = vec![usize::MAX; count.max(2)];
+            let compiled = time(iters, || {
+                match entry(bytes.as_ptr(), bytes.len(), 0, native.as_mut_ptr(), ALLOWANCE) {
+                    EXHAUSTED => {
+                        let mut budget = Budget::new(1_000_000_000);
+                        find(program, subject, 0,
+                             Scratch { registers: &mut registers, frames: &mut frames, undo: &mut undo },
+                             &mut captures, &mut budget).map(isize::from).unwrap_or(-1)
+                    }
+                    answer => answer,
+                }
+            });
+            println!("{:<22}{:>9}{:>12.1}{:>12.1}{:>9.2}x", pattern, size, interpreted, compiled,
+                     compiled / interpreted);
+        }
+    }
+}
+
 fn main() {
-    println!("{:<24}{:>12}{:>12}{:>10}   answers", "case", "interp ns", "native ns", "ratio");
-    println!("{}", "-".repeat(72));
+    if std::env::args().any(|arg| arg == "--crossover") {
+        return crossover();
+    }
+    println!("{:<24}{:>12}{:>12}{:>10}{:>12}   answers", "case", "interp ns", "native ns",
+             "ratio", "host ns");
+    println!("{}", "-".repeat(84));
     for case in cases() {
         let source = Input::utf8(case.pattern);
         let mut nodes = vec![Node::default(); source.len_utf16() * 3 + 32];
@@ -172,8 +260,8 @@ fn main() {
         let program = compile(source, case.flags, &mut nodes, &mut ranges, &mut words, &mut budget)
             .expect("pattern compiles");
         if !supported(program) {
-            println!("{:<24}{:>12}{:>12}{:>10}   falls back to the interpreter",
-                     case.id, "-", "-", "-");
+            println!("{:<24}{:>12}{:>12}{:>10}{:>12}   falls back to the interpreter",
+                     case.id, "-", "-", "-", "-");
             continue;
         }
         let mut code = vec![0u8; 65536];
@@ -254,8 +342,14 @@ fn main() {
                 answer => answer,
             }
         });
-        println!("{:<24}{:>12.1}{:>12.1}{:>9.2}x   {}{}", case.id, interpreted, compiled,
-                 compiled / interpreted, if agree { "agree" } else { "DIFFER" },
+        // What a host actually gets: the path the rule picks, without running
+        // both. Reporting the better of the two would describe a host that
+        // cannot exist.
+        let takes_native = preferred(program, bytes.len());
+        println!("{:<24}{:>12.1}{:>12.1}{:>9.2}x{:>12.1}   {}{}", case.id, interpreted, compiled,
+                 compiled / interpreted,
+                 if takes_native { compiled } else { interpreted },
+                 if agree { "agree" } else { "DIFFER" },
                  if exhausted > 0 { ", allowance ran out" } else { "" });
     }
 }

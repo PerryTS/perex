@@ -321,22 +321,100 @@ cases is at or better than V8**, on both of its entry points. The worst ratio is
 ten times on the search portion, and the measured figure ranges from four times
 on the worst case to more than forty on the shortest.
 
-Two things that number depends on, and neither is done.
-
-**The path has to be chosen, and nothing chooses it yet.** The last row is the
-warning: over 256 KiB the generated code is nineteen times *slower* than the
-interpreter, because it tries every start position where the interpreter's
-admission scan decides a position on two characters at a time and skips almost
-all of them. The tier wins where the subject is short and the flat cost
-dominates, which is exactly where the gap was, and loses badly elsewhere. The
-table above takes the better of the two per case; a host has to make that
-decision without running both, and this document does not yet say how. Until it
-does, the result above is what the tier *can* deliver rather than what a host
-would get.
+That table takes the better of the two per case. What a host gets is whichever
+the rule below picks, without running both, and the section after it says what
+that costs.
 
 **One target.** Everything here is AArch64. CI runs x86-64, so CI cannot execute
 any of it, and by this project's own rules a code generator CI cannot test is
 not yet evidence.
+
+## Choosing the path
+
+The last row of the table above is the warning: over 256 KiB generated code is
+nineteen times *slower* than the interpreter, because it tries every start
+where the interpreter's admission scan reads raw bytes and skips almost all of
+them. So a host has to choose, and it has to choose without running both.
+
+`native::emit::preferred(program, bytes)` is that choice. It is the program's
+and the subject's length, never the subject's contents and never how a search
+is going: both paths answer identically, so a wrong choice costs time and not
+correctness.
+
+Two things it asks. First, whether the generated code walks the subject at all:
+a program anchored at the beginning has one start, and one whose match must end
+at the subject's end starts near that end, and neither cares how long the
+subject is. Second, for everything else, whether the subject is short enough
+that entering a search costs more than the walk.
+
+That length was measured rather than guessed, over subjects that match nothing,
+which is the case that tries every start. Ratios are generated code over the
+interpreter, so below 1.00 the tier wins:
+
+| bytes | `needle` | `NeEdLe`/i | `[0-9]+[A-Z]+` | `a+!` | `(\w+)@(\w+)\.com` |
+|---:|---:|---:|---:|---:|---:|
+| 8 | 0.10x | 0.08x | 0.31x | 0.32x | 0.02x |
+| 16 | 0.24x | 0.16x | 0.58x | 0.56x | 0.09x |
+| 24 | 0.36x | 0.25x | 0.85x | 0.83x | 0.12x |
+| 32 | 0.47x | 0.31x | **1.13x** | **1.06x** | 0.12x |
+| 64 | 0.95x | 0.58x | 2.87x | 1.35x | 4.90x |
+| 128 | 1.51x | 0.80x | 4.54x | 1.53x | 6.62x |
+| 2048 | 9.62x | 5.12x | 8.41x | 2.34x | 11.67x |
+| 524288 | 15.09x | 6.55x | 9.59x | 2.51x | 5.90x |
+
+Thirty-two bytes is the shortest crossing rounded to a power of two. At that
+length two of the five shapes are already 1.06x and 1.13x, which is the price
+of one number rather than five; one byte further and the worst of them is
+4.54x, which is why the number is not larger.
+
+Measuring this found something the ratios could not have hidden. A
+start-anchored program's generated code tried every start and failed each at
+the same `^`, where the interpreter tries one: 16,665x slower over 512 KiB.
+Generated code now stops after the first start when the program is
+start-anchored, by the same derivation the interpreter uses, and the same case
+is 0.05x — twenty times faster than the interpreter rather than four orders of
+magnitude slower.
+
+### What the rule gives up
+
+A length cannot see what a subject holds, and three of the measured cases are
+faster in generated code for reasons only the subject shows:
+
+| Case | Interpreter | Generated | The rule picks |
+|---|---:|---:|---|
+| `a+!`, `[a-z]+!`, `\w+!`, `[^0-9]+!` over sixty | 99.8–159.1 ns | 29.3–30.6 ns | interpreter |
+| `(?<=0123456789)abc` over 256 KiB | 115.8 ns | 29.1 ns | interpreter |
+| `[0-9]+[A-Z]+` over 256 KiB | 1.44 ms | 910 µs | interpreter |
+
+The first two match early, so generated code never walks far; the third is a
+case the interpreter is slow on. A host that knew would take between 1.6x and
+5.3x more. Both are content, and the rule refuses to look at content, because
+the alternative is a decision that changes with the subject — which is how a
+fallback stops being an optimization and starts being a second engine.
+
+Closing that is not a better rule; it is generated code that skips starts the
+way the interpreter does. That is worth doing and is not done.
+
+### What a host gets
+
+The same cases as the table above, with the path the rule picks:
+
+| Case | Interpreter | Generated | Host takes | Against the interpreter |
+|---|---:|---:|---:|---:|
+| `/a/` against `"a"` | 50.1 ns | 1.1 ns | generated | **0.02x** |
+| Sixteen-character literal | 56.9 ns | 3.5 ns | generated | **0.06x** |
+| Captures, 25 characters | 432.1 ns | 29.3 ns | generated | **0.07x** |
+| Short classes | 339.4 ns | 41.4 ns | generated | **0.12x** |
+| Short literal | 54.0 ns | 11.8 ns | generated | **0.22x** |
+| Folded literal | 66.6 ns | 13.6 ns | generated | **0.20x** |
+| End-anchored hit, 256 KiB | 56.8 ns | 2.4 ns | generated | **0.04x** |
+| `/z/` against `""` | 22.1 ns | 1.3 ns | generated | **0.06x** |
+| `\w+!` over sixty | 159.1 ns | 30.2 ns | interpreter | 1.00x |
+| Literal lookbehind, 256 KiB | 115.8 ns | 29.1 ns | interpreter | 1.00x |
+| `/needle/` over 256 KiB | 11.1 µs | 220 µs | interpreter | 1.00x |
+
+No case is worse than the interpreter, which is the property the rule is for.
+Eight of the eleven take between four and forty-five times less time.
 
 ## Staging
 
@@ -353,9 +431,11 @@ not yet evidence.
 4. **Done.** A work budget in the generated code, and a verifier that proves the
    memory, control-flow, calling-convention and budget properties above before
    code is returned.
-5. A rule for choosing between the two paths, which the measurement shows is
-   required and which nothing implements.
+5. **Done.** A rule for choosing between the two paths, measured rather than
+   guessed, with what it gives up recorded beside what it takes.
 6. The same encoder for x86-64, so CI can execute any of this.
+7. Generated code that skips starts as the interpreter does, which is what the
+   rule's give-ups are made of.
 
 Each stage is independently useful and independently abandonable. Stage 1 costs
 nothing and tells us how much of the benchmark the tier could even apply to,
@@ -365,8 +445,11 @@ which is worth knowing before anyone writes an encoder.
 
 Stage 1 is covered by `tests/compilation.rs`, which fixes the subset's contract
 in both directions, including that a program the analysis refuses still compiles
-and is still searched. `examples/compilable` reports the count over the
-benchmark patterns.
+and is still searched, and stage 5 by the same file: the path rule takes the
+tier while a subject is short, keeps it at any length for a program that does
+not walk the subject, and never takes it for a program the tier cannot emit.
+`examples/compilable` reports the count over the benchmark patterns, and
+`bench --bin perex-native --crossover` is the sweep the length came from.
 
 The generated code is covered by the unit tests in `src/native/`:
 
