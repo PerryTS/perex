@@ -72,6 +72,20 @@
       "url": "https://www.unicode.org/Public/17.0.0/ucd/emoji/emoji-data.txt",
       "sha256": "2cb2bb9455cda83e8481541ecf5b6dfda66a3bb89efa3fa7c5297eccf607b72b",
       "bytes": 107324
+    },
+    {
+      "path": "emoji/emoji-sequences.txt",
+      "url": "https://www.unicode.org/Public/emoji/latest/emoji-sequences.txt",
+      "sha256": "12cc8267dc33cbd11ed32bcf6fc5dc2ad9c7a77bae1bdfba2f41b1b9b3ead8dd",
+      "bytes": 194868,
+      "version_line": "# Version: 17.0"
+    },
+    {
+      "path": "emoji/emoji-zwj-sequences.txt",
+      "url": "https://www.unicode.org/Public/emoji/latest/emoji-zwj-sequences.txt",
+      "sha256": "5b25441daed2322b068c5e70cda522946a4f0274df864445a1965a92e5fc5cad",
+      "bytes": 277215,
+      "version_line": "# Version: 17.0"
     }
   ],
   "retrieved_utc": "2026-09-10"

@@ -3,9 +3,8 @@
 The `v` flag is not `u` with extra operators. It reserves punctuation, requires
 more escaping, nests classes, adds members that are strings rather than code
 points, and complements a set *after* closing it under case folding instead of
-testing each case equivalent. Treating it as `u` would give wrong answers, so
-the parts that are not implemented report an explicit unsupported outcome
-rather than reusing the `u` path.
+testing each case equivalent. Treating it as `u` would give wrong answers, so each of those is
+implemented on its own terms rather than by reusing the `u` path.
 
 ## What is implemented
 
@@ -23,6 +22,7 @@ escaping and reserved-punctuation rules the grammar requires.
 - `[[a-z]--[aeiou]]`, `[a--b--c]`, `[\p{L}&&\p{ASCII}]`, `[a&&b&&c]`
 - `[[^a]]`, `[[^a]b]`, `[^[a-z]--[aeiou]]`
 - `[\q{abc|de}]`, `[\q{ab}xy]`, `[\q{}]`, and the operators over them
+- `\p{RGI_Emoji}` and the other six properties of strings, in a class or alone
 
 Members are appended to the same range scratch a `u` class uses, so the program
 representation, class normalization and the evaluator's membership loop are
@@ -149,27 +149,66 @@ disagree with a trial. No program word is added; only a previously invalid
 value of an existing word becomes meaningful, and `Program::from_words` rejects
 anything above 2.
 
-## What is not implemented
+## Properties of strings
 
-Tracked in [issue #1](https://github.com/PerryTS/perex/issues/1). These report `CompileError::Unsupported { feature: "Unicode sets" }` at the
-offset where they appear. They are never answered as no-match, and never
-reported as syntax errors.
+Seven property names stand for sets whose members are sequences:
+`\p{Basic_Emoji}`, `\p{Emoji_Keycap_Sequence}`, `\p{RGI_Emoji_Flag_Sequence}`,
+`\p{RGI_Emoji_Modifier_Sequence}`, `\p{RGI_Emoji_Tag_Sequence}`,
+`\p{RGI_Emoji_ZWJ_Sequence}` and `\p{RGI_Emoji}`, which is the union of the
+other six. Only `v` accepts them, and only unnegated: `\P{RGI_Emoji}`,
+`[^\p{RGI_Emoji}]` and any of them under `u` are syntax errors, because a set
+that may hold strings cannot be complemented.
 
-- **Properties of strings**: `\p{RGI_Emoji}`, `\p{Basic_Emoji}`,
-  `\p{Emoji_Keycap_Sequence}`, `\p{RGI_Emoji_Modifier_Sequence}`,
-  `\p{RGI_Emoji_Flag_Sequence}`, `\p{RGI_Emoji_Tag_Sequence}`,
-  `\p{RGI_Emoji_ZWJ_Sequence}`. Their members are sequences the pinned Unicode
-  data does not carry: the emoji sequence files are not among the inputs
-  `third_party/unicode/17.0.0/receipt.json` records, and a set of some thousands
-  of sequences does not fit the parse scratch a caller sizes from the pattern,
-  so this needs generated data and a program reference to it rather than the
-  string machinery above. Their names are known, so an unnegated one under `v`
-  reports the gap; `\P` of one, or any of them under `u`, stays a syntax error,
-  which is what the grammar requires.
+Their members of one code point are not data of their own. `Basic_Emoji`'s are
+exactly `Emoji_Presentation` without the regional indicators — the generator
+checks that identity against the pinned Unicode files and fails if a future
+version breaks it — so the code point part of such a class is
+`[\p{Emoji_Presentation}--\p{Regional_Indicator}]`, built from the property
+references and the subtraction encoding above.
 
-A gap is only ever declared for a pattern the grammar accepts. Declaring one
-for an invalid pattern would hide a missing syntax error, so `tools/check-sets.mjs`
-fails if that happens.
+What needs data is the members of two or more code points: 2,760 of them,
+11,196 code points, generated into `src/sequence_data.rs` from
+`emoji-sequences.txt` and `emoji-zwj-sequences.txt`. They are grouped by length,
+longest group first, and ordered within a group by first code point.
+
+A program stores a set id and a group, never a member:
+
+```text
+\p{Emoji_Keycap_Sequence}   23 program words   (12 members)
+\p{RGI_Emoji}               45 program words   (2,760 members)
+[\p{RGI_Emoji}\q{ab}]      129 program words
+```
+
+One instruction matches one group of equal-length members, so those lengths
+order against the other members of the class exactly as string members do. When
+nothing else of the class falls between them — a class that draws from one
+property and lists no strings of its own — one instruction covers every group
+instead, which is why the third line above is the long one: `ab` is two code
+points, so it has to be tried between the members of three and of two.
+
+An instruction tries its members in the shared order, which is the
+specification's order, longest first, and pushes one frame when a member
+matches, so that a failure later in the pattern falls back to the next member.
+A subject character that begins no member of the set at all ends the
+instruction on a bitmap test; otherwise the first code point selects a run of
+candidates within each group without scanning it. Under `i`, and backward,
+whole groups are compared under folding instead — folding matters for exactly
+one member, `Basic_Emoji`'s circled M.
+
+Scanning text that holds no member costs what those tests cost. Over 90,000
+ASCII characters, `\p{RGI_Emoji}` charges 13 work units and about 94 ns per
+character, and `\p{Emoji_Keycap_Sequence}`, which has no code point members,
+charges 5 and about 32 ns; the difference is the
+`[\p{Emoji_Presentation}--\p{Regional_Indicator}]` alternative, not the
+members. Measured with `examples/engine_cost.rs` on one machine, as a cost
+driver rather than an adoption gate.
+
+An operator over such a set filters its members rather than copying them: the
+compiler asks the shared table which members the other operand has, and writes
+one bit per member of each group beside the instruction, in a program section of
+its own. `[\p{Emoji_Keycap_Sequence}--\q{9\uFE0F\u20E3}]` is one word longer
+than the property alone. Nothing is materialized at any point, and the members
+stay shared between every program that names them.
 
 ## Checks
 
@@ -199,14 +238,27 @@ different lengths, the fallback to a shorter member when what follows the class
 fails, a member of one code point under `i`, the empty member, astral members,
 quantifiers and lookbehind over a member, and each operator over strings.
 
-`tests/unicode_sets.rs` asserts the three outcomes stay separated: what compiles,
-what is an explicit gap, and what is a syntax error.
+`tools/check-sequences.mjs` is the evidence for the properties of strings. It
+derives their members from the pinned Unicode files rather than from the
+generated tables, so a generator mistake is a difference rather than a shared
+assumption, and compares complete answers for every member against every set —
+anchored and inside longer text — plus the members of one code point, a
+regional indicator that is not one, and the shapes around a property: unions,
+both operators against a string and against another property, quantifiers, a
+lookbehind, and `i`, `g` and `u`. At 38,880 cases: 0 differences, 0 unsupported,
+both plain and under `--quantum 1 --relocate --grow`.
+
+`tests/unicode_sets.rs` answers the properties of strings against members of
+one, two and eleven units, the longest-first rule where a member's first
+character is itself a member, the cased member under `i`, each operator over a
+set, and the program sizes above. It asserts the outcomes stay separated: what
+compiles and what is a syntax error.
 
 ## Effect on the corpus
 
 Across the patterns harvested from Test262 (see [conformance](conformance.md)),
 the union grammar took the unsupported count from 161 patterns to 106, the
-operators and nested complements took it to 74, and string members took it to
-47: 48,248 cases compared, 0 differences, 3,390 patterns rejected by both
-engines and none by only one. Every one of the 47 that remain names a property
-of strings.
+operators and nested complements took it to 74, string members took it to 47,
+and the properties of strings took it to none: 48,718 cases compared, 0
+differences, 3,460 patterns rejected by both engines and none by only one. No
+pattern of that corpus is reported unsupported any more.

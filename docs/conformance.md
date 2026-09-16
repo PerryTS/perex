@@ -43,11 +43,11 @@ threshold. That gives 48,720 cases.
 
 | | |
 |---|---|
-| Cases compared | 48,248 |
+| Cases compared | 48,718 |
 | **Differences** | **0** |
-| Syntax rejections, both engines | 3,390 |
+| Syntax rejections, both engines | 3,460 |
 | Syntax disagreements | **0** |
-| Unsupported (Unicode sets) | 470 cases, 47 distinct patterns |
+| Unsupported | **0** |
 | Oracle could not finish | 2 cases |
 | Unstable oracle answers | 0 |
 
@@ -55,17 +55,15 @@ Measured on Node v26.5.1 with `--work 64000000`; CI re-measures on the pinned
 Node 26.8.1.
 
 Syntax agreement is exact: of every harvested pattern, the two engines reject
-the same 3,390 cases and accept the rest, with no pattern accepted by one and
+the same 3,460 cases and accept the rest, with no pattern accepted by one and
 rejected by the other.
 
-The one gap is **Unicode sets**: 47 distinct patterns, which Perex reports as
-an explicit unsupported feature rather than answering wrongly. Every one of
-them names a property of strings — `\p{RGI_Emoji}`, `\p{Basic_Emoji}`,
-`\p{Emoji_Keycap_Sequence}` and the rest — alone, in a union, or as an operand
-of `--` or `&&`; six of those also use a string disjunction beside one. The
-union grammar, the set operators, nested complements and string members
-`\q{…}` are implemented; see [sets](sets.md) and
-[issue #1](https://github.com/PerryTS/perex/issues/1).
+No pattern of this corpus is reported unsupported. The `v` flag's last two
+gaps — string members `\q{…}` and the properties of strings — closed with the
+47 patterns that named a property of strings; see [sets](sets.md). What a
+passing run still does not claim is everything in the Scope section above: this
+is pattern syntax and matching, not `RegExp.prototype`, `lastIndex` or the
+`Symbol.*` protocols.
 
 ## Cost, not correctness
 

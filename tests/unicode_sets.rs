@@ -155,6 +155,129 @@ fn unicode_sets_string_members_match_the_sequences_they_spell() {
     }
 }
 
+/// A property of strings matches the sequences the shared table holds, longest
+/// member first, and the operators over one decide member by member.
+#[test]
+fn unicode_sets_properties_of_strings_match_their_members() {
+    for (source, flags, subject, expected) in [
+        // A member of one code point, one of two, and one of eleven units.
+        (r"^\p{Basic_Emoji}$", "v", "\u{231a}", Some((0, 1))),
+        (r"^\p{Basic_Emoji}$", "v", "\u{a9}\u{fe0f}", Some((0, 2))),
+        (
+            r"^\p{RGI_Emoji}$",
+            "v",
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}",
+            Some((0, 11)),
+        ),
+        // Longest first: the family is one member, though its first character
+        // is a member on its own.
+        (
+            r"\p{RGI_Emoji}",
+            "v",
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}",
+            Some((0, 11)),
+        ),
+        (r"\p{RGI_Emoji}", "v", "\u{1f468}x", Some((0, 2))),
+        // The regional indicators are members of the flag sequences, not of
+        // the code point members `Basic_Emoji` holds.
+        (r"^\p{Basic_Emoji}$", "v", "\u{1f1e6}", None),
+        (
+            r"^\p{RGI_Emoji_Flag_Sequence}$",
+            "v",
+            "\u{1f1e9}\u{1f1ea}",
+            Some((0, 4)),
+        ),
+        (
+            r"^\p{Emoji_Keycap_Sequence}$",
+            "v",
+            "9\u{fe0f}\u{20e3}",
+            Some((0, 3)),
+        ),
+        // One member is cased, so `i` closes the set under folding.
+        (r"^\p{Basic_Emoji}$", "v", "\u{24c2}\u{fe0f}", Some((0, 2))),
+        (r"^\p{Basic_Emoji}$", "v", "\u{24dc}\u{fe0f}", None),
+        (r"^\p{Basic_Emoji}$", "iv", "\u{24dc}\u{fe0f}", Some((0, 2))),
+        // Operators decide member by member, against another set or a string.
+        (r"^[\p{RGI_Emoji}--\p{Basic_Emoji}]$", "v", "\u{231a}", None),
+        (
+            r"^[\p{RGI_Emoji}--\p{Basic_Emoji}]$",
+            "v",
+            "\u{1f44d}\u{1f3fd}",
+            Some((0, 4)),
+        ),
+        (
+            r"^[\p{RGI_Emoji}&&\p{Basic_Emoji}]$",
+            "v",
+            "\u{231a}",
+            Some((0, 1)),
+        ),
+        (
+            r"^[\p{Emoji_Keycap_Sequence}--\q{9\u{fe0f}\u{20e3}}]$",
+            "v",
+            "9\u{fe0f}\u{20e3}",
+            None,
+        ),
+        (
+            r"^[\p{Emoji_Keycap_Sequence}--\q{9\u{fe0f}\u{20e3}}]$",
+            "v",
+            "8\u{fe0f}\u{20e3}",
+            Some((0, 3)),
+        ),
+        (
+            r"^[\p{Emoji_Keycap_Sequence}&&\q{9\u{fe0f}\u{20e3}}]$",
+            "v",
+            "9\u{fe0f}\u{20e3}",
+            Some((0, 3)),
+        ),
+        // Beside other members, quantified, and inside a lookbehind.
+        (
+            r"^[\p{RGI_Emoji}\q{ab}]+$",
+            "v",
+            "ab\u{1f44d}\u{1f3fd}",
+            Some((0, 6)),
+        ),
+        (r"^[\p{Basic_Emoji}\d]+$", "v", "5\u{231a}", Some((0, 2))),
+        (r"^\p{RGI_Emoji}{2}$", "v", "\u{231a}\u{231a}", Some((0, 2))),
+        (
+            r"(?<=\p{RGI_Emoji})x",
+            "v",
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}x",
+            Some((11, 12)),
+        ),
+    ] {
+        assert_eq!(
+            first(source, flags, subject),
+            expected.map(|(a, b)| Span::new(a, b).unwrap()),
+            "/{source}/{flags} over {subject:?}"
+        );
+    }
+}
+
+/// Members are shared data, not program storage: a property of strings costs
+/// one instruction per length its members have, whatever they are.
+#[test]
+fn unicode_sets_properties_of_strings_copy_no_members_into_the_program() {
+    // Twelve members of one length, and 2,760 members of eight lengths: one
+    // instruction each, because nothing else of either class falls between
+    // the lengths its members have.
+    assert_eq!(
+        program(r"\p{Emoji_Keycap_Sequence}", "v").unwrap().len(),
+        23
+    );
+    assert_eq!(program(r"\p{RGI_Emoji}", "v").unwrap().len(), 45);
+    // A string member of its own falls between those lengths, so each group
+    // stays an alternative of its own and orders against it.
+    assert_eq!(program(r"[\p{RGI_Emoji}\q{ab}]", "v").unwrap().len(), 129);
+    // An operator writes one bit per member of each group it filters, which is
+    // one word for the twelve keycap sequences.
+    assert_eq!(
+        program(r"[\p{Emoji_Keycap_Sequence}--\q{9\u{fe0f}\u{20e3}}]", "v")
+            .unwrap()
+            .len(),
+        24
+    );
+}
+
 /// What the grammar refuses around string members: `\q` that spells no
 /// disjunction, a disjunction where a single character belongs, and a
 /// complement of a set whose syntax may hold strings — which the grammar
@@ -295,23 +418,16 @@ fn unicode_sets_admission_keeps_syntax_errors_and_remaining_omissions_explicit()
             "{source} must be compiled or rejected, never reported unsupported"
         );
     }
-    // Properties of strings stay an explicit gap rather than an approximation:
-    // their members are sequences the pinned Unicode data does not carry.
+    // Nothing of the `v` grammar is reported unsupported any more, properties
+    // of strings included.
     for source in [
         r"\p{RGI_Emoji}",
         r"[\p{Basic_Emoji}]",
         r"[\p{RGI_Emoji}--\q{ab}]",
+        r"[\p{Emoji_Keycap_Sequence}\d]",
+        r"[\p{RGI_Emoji}&&\p{Basic_Emoji}]",
     ] {
-        assert!(
-            matches!(
-                program(source, "iv"),
-                Err(CompileError::Unsupported {
-                    feature: "Unicode sets",
-                    ..
-                })
-            ),
-            "{source}"
-        );
+        assert!(program(source, "iv").is_ok(), "{source}");
     }
     // A pattern the grammar rejects must stay a syntax error, not a gap.
     for source in [
@@ -345,5 +461,18 @@ fn unicode_sets_admission_keeps_syntax_errors_and_remaining_omissions_explicit()
             !matches!(program(source, "v"), Err(CompileError::Unsupported { .. })),
             "{source} must not be reported unsupported"
         );
+    }
+}
+
+#[test]
+fn report_sizes() {
+    for p in [
+        r"\p{Emoji_Keycap_Sequence}",
+        r"\p{RGI_Emoji}",
+        r"[\p{Emoji_Keycap_Sequence}--\q{9\u{fe0f}\u{20e3}}]",
+        r"[\p{RGI_Emoji}--\q{ab}]",
+        r"[\p{RGI_Emoji}\q{ab}]",
+    ] {
+        println!("{p} -> {} words", program(p, "v").unwrap().len());
     }
 }

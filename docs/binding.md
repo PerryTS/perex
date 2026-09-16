@@ -1,6 +1,6 @@
 # Validation bound to immutable owners
 
-`BoundProgram` and `BoundSubject` validate original storage once and retain its owner plus fixed-size layout metadata. They retain no subject/program slice or movable address. `with_view` obtains a fresh scoped slice from that same owner and performs only length/representation checks, plus the program's nine-word header check. It does not scan the program tables or recount the subject. `BoundResources` combines independent bindings for `Search`, allowing one program binding to serve multiple subject bindings.
+`BoundProgram` and `BoundSubject` validate original storage once and retain its owner plus fixed-size layout metadata. They retain no subject/program slice or movable address. `with_view` obtains a fresh scoped slice from that same owner and performs only length/representation checks, plus the program's eleven-word header check. It does not scan the program tables or recount the subject. `BoundResources` combines independent bindings for `Search`, allowing one program binding to serve multiple subject bindings.
 
 This is the embedding boundary. It does not by itself establish a host's root, sharing or constructor invariants; the host must, as Perry's runtime adapter does. A cached string length or an equal-sized allocation is not a validation certificate: the two constructors in [binding what the host already validated](#binding-what-the-host-already-validated) accept one only because the host asserts it, and say so.
 

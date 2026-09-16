@@ -3,7 +3,7 @@ use crate::{
     Budget, casefold,
     input::{Cursor, Input, Mark, Position},
     program::*,
-    properties,
+    properties, sequences,
     span::Span,
 };
 mod admission;
@@ -503,6 +503,18 @@ impl Vm<'_, '_, '_, '_> {
         Ok(())
     }
     fn push(&mut self, pc: usize, kind: u8) -> Result<(), ExecError> {
+        self.push_at(pc, kind, self.cursor.mark(), 0)
+    }
+    /// A frame resuming somewhere other than where the cursor now is: a
+    /// property of strings pushes the position its member started at, and how
+    /// far through that set's members it had gone.
+    fn push_at(
+        &mut self,
+        pc: usize,
+        kind: u8,
+        position: Mark,
+        limit: usize,
+    ) -> Result<(), ExecError> {
         let pc = u32::try_from(pc).map_err(|_| ExecError::InvalidProgram)?;
         *self
             .scratch
@@ -510,10 +522,10 @@ impl Vm<'_, '_, '_, '_> {
             .get_mut(self.state.frames)
             .ok_or(ExecError::Frames)? = Frame {
             pc,
-            position: self.cursor.mark(),
+            position,
             undo: self.state.undo,
             assertion: self.state.assertion,
-            limit: 0,
+            limit,
             kind,
             reverse: self.state.reverse,
         };
@@ -640,6 +652,169 @@ impl Vm<'_, '_, '_, '_> {
             context,
         };
     }
+    /// Start a property of strings at the cursor. Members are tried longest
+    /// group first; within a group an exact comparison needs only the members
+    /// whose first code point is the subject's, which the shared order finds
+    /// without scanning. Under folding, and backward, the whole group is tried.
+    fn begin_sequence(&mut self, set: u32, group: Option<usize>, filter: u32, fold: bool) {
+        let start = self.cursor.mark();
+        // A character that begins no member of the set at all ends the
+        // instruction on one test, without searching any group of it.
+        let admitted = fold || self.state.reverse || {
+            let first = self.read();
+            self.restore(start);
+            first.is_some_and(|c| sequences::begins(set, c))
+        };
+        let every = group.is_none() && admitted;
+        let group = group.unwrap_or(0);
+        let (at, end) = if admitted {
+            self.sequence_candidates(set, group, start, fold)
+        } else {
+            (0, 0)
+        };
+        self.state.phase = Phase::Sequence {
+            set,
+            group: group as u32,
+            at: at as u32,
+            end: end as u32,
+            filter,
+            start,
+            fold,
+            every,
+        };
+    }
+
+    /// The members of one group that can match at `start`: those beginning
+    /// with the subject's character, or the whole group where no such
+    /// comparison is exact.
+    fn sequence_candidates(
+        &mut self,
+        set: u32,
+        group: usize,
+        start: Mark,
+        fold: bool,
+    ) -> (usize, usize) {
+        if fold || self.state.reverse {
+            return sequences::group(set, group);
+        }
+        let first = self.read();
+        self.restore(start);
+        match first {
+            // A character that begins no member of the set at all ends the
+            // instruction without searching its groups.
+            Some(c) if sequences::begins(set, c) => sequences::run(set, group, c),
+            _ => (0, 0),
+        }
+    }
+
+    /// Try members until one matches, the instruction runs out of them, or the
+    /// quantum does.
+    fn sequence_step(&mut self, available: usize) -> Result<(), ExecError> {
+        let Phase::Sequence {
+            set,
+            mut group,
+            mut at,
+            mut end,
+            filter,
+            start,
+            fold,
+            every,
+        } = self.state.phase
+        else {
+            return Err(ExecError::InvalidProgram);
+        };
+        let mut tried = 0;
+        loop {
+            while at < end {
+                self.charge(1)?;
+                let index = at;
+                at += 1;
+                let bit = if every {
+                    index as usize
+                } else {
+                    (index - sequences::group(set, group as usize).0 as u32) as usize
+                };
+                if !self.program.admits(filter, bit) {
+                    continue;
+                }
+                let member = sequences::member(set, index as usize);
+                self.charge(member.len())?;
+                if self.sequence_matches(member, start, fold) {
+                    // What follows may still fail, and a shorter member may
+                    // match where this one did; the frame resumes there.
+                    if let Err(error) = self.push_at(self.state.pc - 1, 5, start, at as usize) {
+                        // The member matched, so the cursor is past it. A
+                        // request for more scratch resumes at this same
+                        // member, from the position it starts at.
+                        self.restore(start);
+                        at = index;
+                        self.state.phase = Phase::Sequence {
+                            set,
+                            group,
+                            at,
+                            end,
+                            filter,
+                            start,
+                            fold,
+                            every,
+                        };
+                        return Err(error);
+                    }
+                    self.state.phase = Phase::Trial;
+                    return Ok(());
+                }
+                tried += 1;
+                if tried >= available.max(1) {
+                    break;
+                }
+            }
+            // One instruction covering every group continues with the next
+            // one, whose members are shorter than the ones just tried.
+            if at >= end && every && (group as usize + 1) < sequences::groups(set) {
+                self.charge(1)?;
+                group += 1;
+                (at, end) = {
+                    let (lo, hi) = self.sequence_candidates(set, group as usize, start, fold);
+                    (lo as u32, hi as u32)
+                };
+                continue;
+            }
+            break;
+        }
+        self.state.phase = if at < end {
+            Phase::Sequence {
+                set,
+                group,
+                at,
+                end,
+                filter,
+                start,
+                fold,
+                every,
+            }
+        } else {
+            Phase::Fail
+        };
+        Ok(())
+    }
+
+    /// Whether this member is the text at `start`, leaving the cursor after it
+    /// when it is and where it was when it is not.
+    fn sequence_matches(&mut self, member: &[u32], start: Mark, fold: bool) -> bool {
+        self.restore(start);
+        let (unicode, reverse) = (self.program.unicode(), self.state.reverse);
+        for i in 0..member.len() {
+            let expected = member[if reverse { member.len() - 1 - i } else { i }];
+            let found = read(&mut self.cursor, unicode, reverse);
+            if !found.is_some_and(|c| c == expected || (fold && casefold::equal(c, expected, true)))
+            {
+                self.restore(start);
+                return false;
+            }
+        }
+        true
+    }
+
     fn class_result(&mut self, found: bool, negated: bool, context: ClassUse) {
         let success = found != negated;
         self.state.phase = match context {
@@ -988,6 +1163,7 @@ impl Vm<'_, '_, '_, '_> {
                 Phase::Initialize(index) => self.initialize(index, available)?,
                 Phase::Trial | Phase::Execute { .. } => self.trial(available)?,
                 Phase::Class { .. } => self.class_step(available)?,
+                Phase::Sequence { .. } => self.sequence_step(available)?,
                 Phase::AtomScan => self.atom_scan(false, available)?,
                 Phase::AtomExtend => self.atom_scan(true, available)?,
                 Phase::AtomResult { matched, extend } => self.atom_result(matched, extend)?,
@@ -1112,6 +1288,10 @@ impl Vm<'_, '_, '_, '_> {
                                     AfterRollback::AtomExtend
                                 }
                             }
+                            5 => AfterRollback::Sequence(
+                                u32::try_from(frame.limit)
+                                    .map_err(|_| ExecError::InvalidProgram)?,
+                            ),
                             _ => return Err(ExecError::InvalidProgram),
                         };
                         self.state.phase = Phase::Rollback {
@@ -1148,6 +1328,41 @@ impl Vm<'_, '_, '_, '_> {
                             AfterRollback::Fail => Phase::Fail,
                             AfterRollback::AtomRetreat => Phase::AtomRetreat,
                             AfterRollback::AtomExtend => Phase::AtomExtend,
+                            AfterRollback::Sequence(at) => {
+                                // The frame named the instruction itself, so
+                                // the set, its group and its filter come from
+                                // the program rather than from saved state.
+                                let pc = self.state.pc;
+                                if pc >= self.program.instructions() {
+                                    return Err(ExecError::InvalidProgram);
+                                }
+                                let [op, a, filter] = self.program.instruction(pc);
+                                if !matches!(op, SEQUENCE | SEQUENCE_I) {
+                                    return Err(ExecError::InvalidProgram);
+                                }
+                                self.state.pc = pc + 1;
+                                let (set, group) = sequence_group(a);
+                                let every = group.is_none();
+                                // Which group the member belongs to is the
+                                // member's own, not where the instruction
+                                // began; the run it sits in is the same one
+                                // the instruction computed.
+                                let group =
+                                    group.unwrap_or_else(|| sequences::group_of(set, at as usize));
+                                let fold = op == SEQUENCE_I;
+                                let start = self.cursor.mark();
+                                let (_, end) = self.sequence_candidates(set, group, start, fold);
+                                Phase::Sequence {
+                                    set,
+                                    group: group as u32,
+                                    at,
+                                    end: end as u32,
+                                    filter,
+                                    start,
+                                    fold,
+                                    every,
+                                }
+                            }
                         };
                     }
                 }
@@ -1250,6 +1465,16 @@ impl Vm<'_, '_, '_, '_> {
                     });
                 }
                 success = false;
+            }
+            SEQUENCE | SEQUENCE_I => {
+                let (set, group) = sequence_group(a);
+                self.begin_sequence(set, group, b, op == SEQUENCE_I);
+                self.sequence_step(available)?;
+                return Ok(match self.state.phase {
+                    Phase::Trial => Step::Next,
+                    Phase::Fail => Step::Fail,
+                    _ => Step::Phase,
+                });
             }
             SAVE => self.store(a as usize, self.cursor.position())?,
             SPLIT => {

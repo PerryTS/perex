@@ -35,6 +35,8 @@ pub(super) enum AfterRollback {
     Fail,
     AtomRetreat,
     AtomExtend,
+    /// Resume a property of strings at the member after the one that matched.
+    Sequence(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +112,20 @@ pub(super) enum Phase {
         sorted: bool,
         values: [u32; 4],
         context: ClassUse,
+    },
+    /// A property of strings, tried member by member from `at` up to `end`,
+    /// each against the subject at `start`. `every` continues into the set's
+    /// remaining groups, shorter members after longer ones, when the
+    /// instruction covers them all.
+    Sequence {
+        set: u32,
+        group: u32,
+        at: u32,
+        end: u32,
+        filter: u32,
+        start: Mark,
+        fold: bool,
+        every: bool,
     },
     AtomScan,
     AtomExtend,

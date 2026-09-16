@@ -57,7 +57,6 @@ long admission subjects, surrogate inputs and invalid modifier lists. It has
 no exception list. CI runs it alongside the existing full-answer checks.
 
 The original `scoped-modifiers` fixture now agrees with Node; only that entry is
-removed from the unsupported list. Unicode `v` sets/string properties and the
-existing reviewed reference differences remain unfinished. This feature does
+removed from the unsupported list. The reviewed reference differences remain. This feature does
 not establish full ECMAScript conformance, actual Perry GC integration or the
 required all-case CPU/RSS improvement.

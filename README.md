@@ -4,7 +4,7 @@ An independent ECMAScript regex engine for [Perry](https://github.com/PerryTS/pe
 
 Perex is Perry's only regular-expression engine: its runtime's `RegExp`, string methods and glob matching, and its CLI's own patterns, all run on it. One evaluator implements matching, numbered and named captures, repetition, scoped flags, assertions and backreferences over caller-owned storage and the original subject bytes. A search can pause at any instruction, release every borrow, and resume against storage a moving collector has relocated.
 
-Against every pattern harvested from Test262 — 47,998 compared cases — Perex and V8 make the same syntax decision and produce the same complete answer on every one. The remaining gap is the `v` flag's properties of strings, which Perex reports as unsupported rather than approximating; see [conformance](docs/conformance.md). The crate has no dependencies and uses no standard library.
+Against every pattern harvested from Test262 — 48,718 compared cases — Perex and V8 make the same syntax decision and produce the same complete answer on every one, with nothing reported unsupported; see [conformance](docs/conformance.md). The crate has no dependencies and uses no standard library.
 
 Against V8, on the twenty-five authored cases in [`bench/`](bench/), Perex is at or better than V8 on every one when the faster of its two execution paths is taken — but taking it is the open part: nothing yet chooses between the interpreter and the [compilation tier](docs/compilation.md), and the tier is AArch64-only and loses badly on long subjects. [`docs/performance.md`](docs/performance.md) records the figures, the method, and every measurement that refuted an idea, which is the standard this project holds its own claims to.
 
@@ -133,6 +133,8 @@ node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/
 node tools/check-modifiers.mjs target/release/examples/engine_probe
 node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets
 node tools/check-sets.mjs target/release/examples/engine_probe artifacts/sets --allow-reviewed-reference-disagreements
+node tools/check-sequences.mjs target/release/examples/engine_probe artifacts/sequences
+node tools/check-sequences.mjs target/release/examples/engine_probe artifacts/sequences-q1 --quantum 1 --relocate --grow
 node tools/check-candidate.mjs target/release/examples/engine_probe artifacts/candidate
 node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate
 node tools/check-end-candidate.mjs target/release/examples/engine_probe artifacts/end-candidate-q1 --quantum 1 --relocate --grow
@@ -171,7 +173,7 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 
 [Bounded end-anchored starts](docs/candidate.md) skip the whole prefix a match anchored at the subject's end cannot begin in, which removed a 256 KiB scan from 305,825 work units to 24.
 
-[Unicode sets](docs/sets.md) implements the `v` grammar: union, ranges, nesting, the set operators, nested complements, string members, its escaping and reserved-punctuation rules, and its complement-after-folding rule. Properties of strings remain an explicit gap rather than an approximation.
+[Unicode sets](docs/sets.md) implements the `v` grammar: union, ranges, nesting, the set operators, nested complements, string members, the properties of strings, its escaping and reserved-punctuation rules, and its complement-after-folding rule. A property of strings is a shared table of sequences and a program reference to it, never members copied into a program.
 
 [Test262 pattern conformance](docs/conformance.md) compares every pattern harvested from the suite's regular-expression tests against Node, for syntax acceptance and complete match answers. The one remaining gap is Unicode-sets class syntax.
 

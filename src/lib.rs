@@ -23,6 +23,7 @@ pub mod executor;
 pub mod native;
 pub mod program;
 mod properties;
+mod sequences;
 
 /// Work allowance shared across an entire compile or search operation. It is
 /// never reset when trying another start position or entering an assertion.

@@ -1,9 +1,9 @@
 //! Versioned, relocatable programs in caller-owned u32 storage.
 use crate::{Budget, properties};
 
-pub(crate) const HEADER: usize = 10;
+pub(crate) const HEADER: usize = 11;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 12;
+pub(crate) const VERSION: u32 = 13;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -77,6 +77,22 @@ pub(crate) const BACKREF_I: u32 = 25;
 pub(crate) const NAMED_BACKREF_I: u32 = 26;
 pub(crate) const CLASS_SORTED: u32 = 27;
 pub(crate) const CLASS_SORTED_I: u32 = 28;
+/// A property of strings, whose members are sequences of code points, so this
+/// consumes more than one. Operand `a` is the shared set id and the group of
+/// equal-length members within it, `set | group << 8`, or `set | EVERY_GROUP`
+/// when nothing of the class falls between those lengths and one instruction
+/// covers them all. Operand `b` is zero, or one more than the first word of a
+/// filter — one bit per member, in the order the instruction tries them — that
+/// an operator around it left.
+pub(crate) const SEQUENCE: u32 = 29;
+pub(crate) const SEQUENCE_I: u32 = 30;
+/// Operand `a`'s group when the instruction covers every group of its set.
+pub(crate) const EVERY_GROUP: u32 = 255 << 8;
+/// The set and the group of equal-length members an instruction addresses.
+/// `None` is every group of that set, longest first.
+pub(crate) fn sequence_group(a: u32) -> (u32, Option<usize>) {
+    (a & 255, (a >> 8 != 255).then_some((a >> 8) as usize))
+}
 // Compiler node flag only; the emitted opcode carries the sorted-class choice.
 pub(crate) const SORTED_CLASS: u32 = 1 << 8;
 
@@ -90,6 +106,7 @@ pub(crate) fn consuming(op: u32) -> bool {
 pub(crate) fn modified(op: u32, flags: u32) -> u32 {
     match op {
         CHAR if flags & I != 0 => CHAR_I,
+        SEQUENCE if flags & I != 0 => SEQUENCE_I,
         CLASS if flags & SORTED_CLASS != 0 => {
             if flags & I != 0 {
                 CLASS_SORTED_I
@@ -378,6 +395,8 @@ impl<'a> Program<'a> {
             .checked_add((words[5] as usize).checked_mul(2).ok_or(bad)?)
             .ok_or(bad)?
             .checked_add((words[6] as usize).checked_mul(8).ok_or(bad)?)
+            .ok_or(bad)?
+            .checked_add(words[10] as usize)
             .ok_or(bad)?;
         if size > words.len()
             || words[3]
@@ -504,6 +523,32 @@ impl<'a> Program<'a> {
                 NAMED_BACKREF | NAMED_BACKREF_I => (a as usize) < p.name_count() && b == 0,
                 ASSERT => a < words[4] && b < 4,
                 REPEAT_INIT | REPEAT_CHOICE | REPEAT_BODY | REPEAT_NEXT => a < words[6] && b == 0,
+                SEQUENCE | SEQUENCE_I => {
+                    // The group exists, and its filter is a whole number of
+                    // words covering exactly the members it tries, inside the
+                    // section.
+                    let (set, group) = sequence_group(a);
+                    let members = (a >> 16 == 0
+                        && crate::sequences::valid(set)
+                        && group.is_none_or(|group| group < crate::sequences::groups(set)))
+                    .then(|| {
+                        match group {
+                            None => crate::sequences::count(set),
+                            Some(group) => {
+                                let (start, end) = crate::sequences::group(set, group);
+                                end - start
+                            }
+                        }
+                        .div_ceil(32) as u32
+                    });
+                    match (p.unicode(), members, b) {
+                        (true, Some(_), 0) => true,
+                        (true, Some(needed), first) => first
+                            .checked_add(needed)
+                            .is_some_and(|end| end <= words[10] + 1),
+                        _ => false,
+                    }
+                }
                 ATOM_REPEAT => {
                     a < words[6]
                         && b == 0
@@ -623,8 +668,16 @@ impl<'a> Program<'a> {
             .take_while(|&at| matches!(op, CHAR | CHAR_I) && self.instruction(at)[0] == op)
             .count()
     }
-    fn names_start(self) -> usize {
+    fn filters_start(self) -> usize {
         HEADER + self.instructions() * 3 + self.words[5] as usize * 2 + self.words[6] as usize * 8
+    }
+    fn names_start(self) -> usize {
+        self.filters_start() + self.words[10] as usize
+    }
+    /// One word of the filter section, which an instruction addresses by its
+    /// first word. Members the operators removed have a zero bit.
+    pub(crate) fn filter(self, at: usize) -> u32 {
+        self.words[self.filters_start() + at]
     }
     pub fn name_count(self) -> usize {
         if self.words[2] & NAMES == 0 {
@@ -769,5 +822,9 @@ impl<'a> Program<'a> {
     pub(crate) fn repeat(self, i: usize) -> [u32; 8] {
         let at = HEADER + self.instructions() * 3 + self.words[5] as usize * 2 + i * 8;
         self.words[at..at + 8].try_into().unwrap()
+    }
+    /// Whether the group's `index`th member survived the operators around it.
+    pub(crate) fn admits(self, filter: u32, index: usize) -> bool {
+        filter == 0 || self.filter(filter as usize - 1 + index / 32) & (1 << (index % 32)) != 0
     }
 }

@@ -12,7 +12,16 @@
     "name_bytes": 3707,
     "shared_range_sets": 329,
     "verified_category_values": 1114112,
-    "table_payload_bytes": 153803
+    "table_payload_bytes": 221187,
+    "sequences": {
+      "sets": 7,
+      "sequences": 2760,
+      "cased_members": 1,
+      "point_bytes": 44784,
+      "index_bytes": 22080,
+      "group_bytes": 240,
+      "set_bytes": 280
+    }
   },
   "properties": [
     {

@@ -23,7 +23,7 @@ because word 7 already carries that claim.
 ASCII bytes cannot occur inside a multibyte UTF-8/WTF-8 encoding, so a run of
 ASCII characters is also a claim about original bytes.
 
-Program format 12 has ten header words. Word 9's low byte holds the run's
+Program format 13 has eleven header words. Word 9's low byte holds the run's
 character count, or zero when disabled; its top bit is the separate
 forward-admission claim described in [admission](admission.md). The word costs
 four used program bytes, and the two claims share it rather than adding another.

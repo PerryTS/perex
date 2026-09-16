@@ -48,6 +48,36 @@ impl Prepared<'_> {
         Ok(Program { words: output })
     }
 
+    /// The filter an operator left on one group of a property of strings: one
+    /// bit per member, in the group's order, set when that member survived.
+    /// The members are read from the shared table and compared against the
+    /// operands recorded beside the group, never copied into the program.
+    fn write_filter(
+        &mut self,
+        output: &mut [u32],
+        base: usize,
+        node: Node,
+    ) -> Result<(), CompileError> {
+        if node.b == 0 {
+            return Ok(());
+        }
+        let (set, group) = sequence_group(node.a);
+        let (start, end) = match group {
+            None => (0, crate::sequences::count(set)),
+            Some(group) => crate::sequences::group(set, group),
+        };
+        let at = base + node.b as usize - 1;
+        output[at..at + (end - start).div_ceil(32)].fill(0);
+        for (bit, index) in (start..end).enumerate() {
+            self.step()?;
+            let member = crate::sequences::member(set, index);
+            if super::sets::passes(self.nodes, self.budget, node.c, member, node.flags & I != 0)? {
+                output[at + bit / 32] |= 1 << (bit % 32);
+            }
+        }
+        Ok(())
+    }
+
     fn emit_into(mut self, output: &mut [u32]) -> Result<(), CompileError> {
         let (root, count, bits, base_size) = (self.root, self.count, self.flags, self.base_size);
         let parser = &mut self;
@@ -55,15 +85,23 @@ impl Prepared<'_> {
         // Emitter walks the topologically ordered arena backwards. It does not use
         // the native stack for a long sequence or expand counted repetitions.
         parser.nodes[root as usize].start = 1;
+        let filters =
+            HEADER + count as usize * 3 + parser.range_used * 2 + parser.repeats as usize * 8;
         let mut repeat_id = 0;
         let write = |out: &mut [u32], pc: u32, op: u32, a: u32, b: u32| {
             let at = HEADER + pc as usize * 3;
             out[at..at + 3].copy_from_slice(&[op, a, b]);
         };
+        // Address zero belongs to the leading `SAVE`, so a node still holding
+        // it is one no alternative reaches: a member an operator removed, or a
+        // set kept only to compare against. It becomes no instruction.
         for i in (0..parser.used).rev() {
             parser.step()?;
             let n = parser.nodes[i];
             let pc = n.start;
+            if pc == 0 {
+                continue;
+            }
             let mut child = |id: u32, start: u32, reverse: bool| {
                 parser.nodes[id as usize].start = start;
                 parser.nodes[id as usize].reverse = reverse;
@@ -131,6 +169,11 @@ impl Prepared<'_> {
                     ]);
                     repeat_id += 1;
                 }
+                SEQSET if n.len != 0 => {
+                    write(output, pc, modified(SEQUENCE, n.flags), n.a, n.b);
+                    parser.write_filter(output, filters, n)?;
+                }
+                SEQSET | STRING | FILTER => {}
                 op => write(output, pc, modified(op, n.flags), n.a, n.b),
             }
         }
@@ -156,6 +199,7 @@ impl Prepared<'_> {
             0,
             0,
             0,
+            parser.filter_words as u32,
         ]);
         // Preserve the existing atom instruction and its admission-hint address.
         // The entry selects a bounded retry record in the same evaluator; keeping

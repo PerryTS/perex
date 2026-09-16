@@ -35,7 +35,7 @@ Program format 10 has nine header words, retaining the first-character descripto
 no ASCII start is possible, or `2 | (lo << 8) | (hi << 16)` for an inclusive
 interval with `0 <= lo <= hi <= 127`. Reserved bits, malformed bounds and old
 format versions are rejected. The additional word costs four used program bytes.
-Bindings check the full nine-word header when reacquiring a view. AOT and runtime
+Bindings check the full eleven-word header when reacquiring a view. AOT and runtime
 programs must use this same format and its version checks.
 
 The validator checks the descriptor's representation, not a proof that it follows

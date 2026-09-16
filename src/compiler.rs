@@ -3,7 +3,7 @@ use crate::{
     Budget,
     input::{Cursor, Input},
     program::*,
-    properties,
+    properties, sequences,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,22 +64,11 @@ pub struct Prepared<'s> {
     count: u32,
     base_size: usize,
     size: usize,
+    filter_words: usize,
     /// Whether the selected admission condition is consumed at or after the
     /// match start. Set by `admission`; meaningless before it runs.
     forward: bool,
 }
-
-/// Properties of strings, which only `v` accepts and only unnegated. Their
-/// members are sequences rather than code points.
-const STRING_PROPERTIES: [&str; 7] = [
-    "Basic_Emoji",
-    "Emoji_Keycap_Sequence",
-    "RGI_Emoji",
-    "RGI_Emoji_Flag_Sequence",
-    "RGI_Emoji_Modifier_Sequence",
-    "RGI_Emoji_Tag_Sequence",
-    "RGI_Emoji_ZWJ_Sequence",
-];
 
 const EMPTY: u32 = 32;
 const SEQ: u32 = 33;
@@ -94,6 +83,15 @@ const NAME_DECL: u32 = 39;
 /// never emitted — by the time a class body is instructions, every string is
 /// either a sequence of its characters or inert.
 const STRING: u32 = 40;
+/// One length group of a property of strings while its class is parsed: `a` is
+/// the set and group the instruction will carry, `b` its filter's first word
+/// plus one, `c` the operators it must still be filtered by, and `start` the
+/// next such node of the same set while the class is being read.
+const SEQSET: u32 = 41;
+/// One operator applied to a property of strings: `a` is 1 to keep only the
+/// members the source also has and 0 to remove them, `b` the source's strings,
+/// `flags` the source's own sets, and `c` the next operator.
+const FILTER: u32 = 42;
 mod admission;
 mod candidate;
 mod classes;
@@ -121,6 +119,10 @@ struct Parser<'a, 's> {
     repeats: u32,
     budget: &'s mut Budget,
     depth: usize,
+    /// Words the filters of parsed properties of strings need, and the set a
+    /// property escape has just named.
+    filter_words: usize,
+    pending_set: Option<u32>,
 }
 impl Parser<'_, '_> {
     fn error(&self) -> CompileError {
@@ -555,20 +557,18 @@ impl Parser<'_, '_> {
         };
         let Some(id) = properties::resolve(&name[..name_len], value) else {
             // A property of strings is valid only under `v`, and only
-            // unnegated. Matching one needs the evaluator to consume more than
-            // one character, so report the gap rather than a false syntax
-            // error; every other unknown name is still a syntax error.
+            // unnegated. Its members are sequences, so it is not a term of the
+            // class table; the member that parsed it takes it from here.
             if self.unicode_sets
                 && !negative
                 && value.is_none()
-                && STRING_PROPERTIES
-                    .iter()
-                    .any(|known| known.as_bytes() == &name[..name_len])
+                && let Some(set) = sequences::resolve(&name[..name_len])
             {
-                return Err(CompileError::Unsupported {
-                    feature: "Unicode sets",
-                    utf16_offset: self.cursor.position(),
-                });
+                if !self.eat(b'}')? {
+                    return Err(self.error());
+                }
+                self.pending_set = Some(set);
+                return Ok(());
             }
             return Err(self.error());
         };
@@ -709,6 +709,9 @@ impl Parser<'_, '_> {
         }
         let start = self.range_used;
         if self.builtin(c)? {
+            if let Some(set) = self.pending_set.take() {
+                return self.sequence_class(set);
+            }
             return self.leaf(CLASS, start as u32, (self.range_used - start) as u32);
         }
         let point = self.escaped_point(c, false)?;
@@ -905,6 +908,8 @@ fn prepare_with<'s, T>(
         repeats: 0,
         budget,
         depth: 0,
+        filter_words: 0,
+        pending_set: None,
     };
     let root = parser.disjunction()?;
     if parser.peek().is_some() {
@@ -932,6 +937,7 @@ fn prepare_with<'s, T>(
         )
         .and_then(|n| n.checked_add(parser.range_used.checked_mul(2)?))
         .and_then(|n| n.checked_add((parser.repeats as usize).checked_mul(8)?))
+        .and_then(|n| n.checked_add(parser.filter_words))
         .ok_or(CompileError::SizeLimit)?;
     let size = base_size
         .checked_add(parser.names_words()?)
@@ -961,6 +967,7 @@ fn prepare_with<'s, T>(
         count,
         base_size,
         size,
+        filter_words: parser.filter_words,
         forward: false,
     })
 }

@@ -1,6 +1,6 @@
 # Shared Unicode character properties
 
-Perex implements Unicode-mode `\p{...}` and `\P{...}` for general categories, the 53 ECMAScript binary character properties, Script and Script_Extensions, including their exact permitted aliases. Property terms can occur alone or in mixed/negated character classes. The implementation uses the existing compiler, class instructions and evaluator. Unicode sets and string properties under `v` remain separate unfinished grammar work.
+Perex implements Unicode-mode `\p{...}` and `\P{...}` for general categories, the 53 ECMAScript binary character properties, Script and Script_Extensions, including their exact permitted aliases. Property terms can occur alone or in mixed/negated character classes. The implementation uses the existing compiler, class instructions and evaluator. The `v` flag's properties of strings, whose members are sequences rather than code points, use shared data of their own; see [sets](sets.md).
 
 `tools/unicode-properties.json` records the required binary names/aliases as factual interface data, with the selected ECMA-262 source revision, URL and table hash. UCD 17.0.0 data and source receipts live in `third_party/unicode/17.0.0`, under the Unicode License V3. `tools/generate-properties.py --check` checks source hashes and regenerates exact tables/catalog without host Unicode-library dependencies. The general-category partition is reconstructed for all 1,114,112 code point values. Script_Extensions overrides the default Script membership on the specified ranges; simply adding extension scripts to the old membership would incorrectly retain Common/Inherited values.
 
@@ -13,11 +13,14 @@ The property tables represent 443 properties: 38 general categories/groups, 53 b
 | Shared interval boundaries | 118,056 |
 | Alias indexes | 4,832 |
 | Alias text | 3,707 |
-| Total property payload | 153,803 |
+| Sequence code points (properties of strings) | 44,784 |
+| Sequence index and groups | 22,320 |
+| Sequence set descriptors | 140 |
+| Total property payload | 221,019 |
 
-These bytes are immutable native data shared by every compiled program, with no initialization, writable cache or allocation. The number excludes code/slice descriptors and is not a measured RSS delta. Unused pages need not be accessed by an ASCII query. Unicode case-equivalence tables remain a separately recorded 9,392-byte payload.
+The last three rows are the 2,760 members of two or more code points that the seven properties of strings hold; their members of one code point need no table, being `Emoji_Presentation` without the regional indicators. These bytes are immutable native data shared by every compiled program, with no initialization, writable cache or allocation. The number excludes code/slice descriptors and is not a measured RSS delta. Unused pages need not be accessed by an ASCII query. Unicode case-equivalence tables remain a separately recorded 9,392-byte payload.
 
-Program format 3 permits a class-table record to be either a literal interval or a property ID plus a Boolean complement bit. An isolated `\p{...}` program is 84 bytes irrespective of the property's number of Unicode intervals. Property IDs, flags and Unicode mode are validated when the program is borrowed; changing Unicode data/IDs requires explicit format compatibility handling. Programs can move independently of the shared tables, and never copy a property table into their own storage.
+Program format 3 permits a class-table record to be either a literal interval or a property ID plus a Boolean complement bit. An isolated `\p{...}` program is 88 bytes irrespective of the property's number of Unicode intervals, and an isolated `\p{RGI_Emoji}` program is 432 bytes irrespective of its 2,760 members. Property IDs, flags and Unicode mode are validated when the program is borrowed; changing Unicode data/IDs requires explicit format compatibility handling. Programs can move independently of the shared tables, and never copy a property table into their own storage.
 
 Membership queries read the cursor's current scalar value. They do not allocate, fold, normalize, copy or convert the subject. In `u` ignore-case mode the evaluator tests original property/complement membership across case equivalents. Complementing after folding would give the wrong answer for patterns such as `\P{Lowercase_Letter}`. `v` has different set-order rules and is not silently treated as `u`.
 
