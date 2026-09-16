@@ -98,6 +98,8 @@ jobs:
             --allow-reviewed-reference-disagreements
           node tools/check-sets.mjs target/release/examples/engine_probe artifacts/sets-q1 \
             --allow-reviewed-reference-disagreements --quantum 1 --relocate --grow
+      - name: Generated code, executed natively
+        run: cargo run --locked --release --manifest-path bench/Cargo.toml --bin perex-native -- --check
       - name: Properties of strings
         run: |
           node tools/check-sequences.mjs target/release/examples/engine_probe artifacts/sequences

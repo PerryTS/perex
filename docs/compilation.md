@@ -354,9 +354,11 @@ that costs.
 **Both targets, one analysis.** The generator emits AArch64 and x86-64, an
 emulator for each runs the corpus against the interpreter, and the same
 verifier proves both before either is returned. CI executes both through those
-emulators on whatever it runs on; what it cannot do yet is execute either
-natively, which needs the host half — mapping, protecting and calling — that
-`bench --bin perex-native` stands in for and a runtime would own.
+emulators on whatever it runs on, and now executes one of them *natively* as
+well: `bench --bin perex-native --check` maps what the generator emits, calls
+it, and compares every answer with the interpreter at every start, on whichever
+architecture the runner is. That driver is the host half — mapping, protecting
+and calling — which a runtime would own.
 
 ## Choosing the path
 

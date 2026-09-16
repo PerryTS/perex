@@ -255,6 +255,10 @@ fn main() {
     if std::env::args().any(|arg| arg == "--crossover") {
         return crossover();
     }
+    // Answers only, with no timing: what a machine that runs the tests should
+    // check, which is that generated code executed natively agrees with the
+    // interpreter on this architecture.
+    let checking = std::env::args().any(|arg| arg == "--check");
     println!("{:<24}{:>12}{:>12}{:>10}{:>12}   answers", "case", "interp ns", "native ns",
              "ratio", "host ns");
     println!("{}", "-".repeat(84));
@@ -322,6 +326,22 @@ fn main() {
                 }
             }
             if !agree { break; }
+        }
+
+        if checking {
+            println!(
+                "{:<24}{:>12}{:>12}{:>10}{:>12}   {}",
+                case.id,
+                "-",
+                "-",
+                "-",
+                "-",
+                if agree { "agree" } else { "DIFFER" }
+            );
+            if !agree {
+                std::process::exit(1);
+            }
+            continue;
         }
 
         let mut registers = vec![0usize; count];

@@ -55,7 +55,12 @@ allowance of 2^20 backward branches, and the interpreter when that runs out. See
 `docs/compilation.md`.
 
 ```sh
-cargo run --release --bin perex-native
+cargo run --release --bin perex-native            # answers, then times both paths
+cargo run --release --bin perex-native -- --check  # answers only, which CI runs
+cargo run --release --bin perex-native -- --crossover
 ```
 
-AArch64 only so far.
+It emits for the machine it runs on, AArch64 or x86-64, and `--check` is the
+mode CI runs: generated code executed natively, compared with the interpreter at
+every start, with no timing. `--crossover` sweeps subject length to find where
+the two paths cross, which is where the path rule's number comes from.
