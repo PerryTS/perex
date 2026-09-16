@@ -353,7 +353,7 @@ it was six and nineteen.
 
 None of the sixteen matches moved ahead. The nearest is the short literal, where
 `is_match` is 1.09 times V8's `test` and `find` 1.19 times its `exec`. The rest
-are between 1.3 and 6.8 times `exec` for `find`, and between 2.1 and 6.6 times
+are between 1.3 and 4.5 times `exec` for `find`, and between 2.1 and 6.6 times
 `test` for `is_match`. That is the shape the floor above describes: a start that
 matches costs a round through admission, one through the candidate scan and
 trial, and one through the answer, each doing bounds-checked work, where V8
