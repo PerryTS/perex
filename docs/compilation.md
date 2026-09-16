@@ -175,6 +175,30 @@ what keeps the pausability argument above simple.
 An earlier draft of this contract returned the work consumed. Nothing needed it:
 a host charges the allowance it passed, which is an upper bound.
 
+## Two targets
+
+x86-64 has fifteen usable registers where AArch64 has thirty-one, and six of
+them are the caller's to get back. That shapes the split between what the
+generator selects and what a target encodes:
+
+- The generator names thirteen **slots** and states operations as results — a
+  byte inside a range, a byte at a distance before a position, the last start
+  with room for a match, a bound taken as a minimum, a backward branch that
+  spends budget. Each backend reaches those its own way, so neither spends a
+  register emulating the other's instruction set.
+- Thirteen slots is what x86-64 holds in registers after keeping two back, which
+  is why open repeats are capped at two. A third would have to live in memory,
+  in the generated code and in everything that verifies it.
+- x86-64 saves `RBX`, `RBP` and `R12`-`R15` on entry and restores them before
+  each return. The verifier follows that rather than assuming it: what was
+  pushed is what may be popped, the stack is where it started at every return,
+  and every preserved register holds what it held. A branch that jumps over the
+  restores is refused.
+- Instructions vary in length there, so the analysis works in byte offsets and
+  needs one `Facts` per byte rather than per instruction. A branch into the
+  middle of an instruction is followed, and what the processor would decode from
+  there is what is checked.
+
 ## Verifying generated code
 
 Tests show the generated code is right on the inputs they try. Executing it
@@ -327,11 +351,12 @@ That table takes the better of the two per case. What a host gets is whichever
 the rule below picks, without running both, and the section after it says what
 that costs.
 
-**One verified target.** The generator emits both AArch64 and x86-64, and both
-are held to the interpreter over the corpus by emulators that decode the bytes.
-Only AArch64 is *verified*, though, so only AArch64 is returned to a host. CI
-executes both through those emulators on whatever it runs on; what it cannot
-yet do is execute either natively, which needs the host half as well.
+**Both targets, one analysis.** The generator emits AArch64 and x86-64, an
+emulator for each runs the corpus against the interpreter, and the same
+verifier proves both before either is returned. CI executes both through those
+emulators on whatever it runs on; what it cannot do yet is execute either
+natively, which needs the host half — mapping, protecting and calling — that
+`bench --bin perex-native` stands in for and a runtime would own.
 
 ## Choosing the path
 
@@ -437,14 +462,11 @@ Eight of the eleven take between four and forty-five times less time.
    code is returned.
 5. **Done.** A rule for choosing between the two paths, measured rather than
    guessed, with what it gives up recorded beside what it takes.
-6. The same encoder for x86-64, so CI can execute any of this. **The generator
-   is done**: `native::x64` encodes the System V convention Linux and macOS
-   use, the instruction selection is shared with AArch64 through
-   `native::machine`, and the corpus — every supported pattern, every subject,
-   every start — is run through an emulator for that target and compared with
-   the interpreter, with the budget property checked there too. What remains is
-   the verifier for it, and until that exists `emit_search` emits AArch64 only:
-   this crate does not hand a host code it cannot check.
+6. **Done.** The same encoder, generator and verifier for x86-64.
+   `native::x64` encodes the System V convention Linux and macOS use, the
+   instruction selection is shared with AArch64 through `native::machine`, and
+   one analysis verifies both. `emit_search` takes the target and returns
+   verified code for either.
 7. Generated code that skips starts as the interpreter does, which is what the
    rule's give-ups are made of.
 
@@ -479,7 +501,19 @@ The generated code is covered by the unit tests in `src/native/`:
   the registers or of a non-position, a preserved register, a narrow comparison,
   a branch out of the code, falling off the end, a bad return value, and each
   way of evading the budget — and requires the specific refusal, alongside the
-  safe version of each where there is one.
+  safe version of each where there is one. `verify::tests::x86_64` does the
+  same for that target, including a return that gives back fewer registers than
+  it saved and a branch that jumps over the restores.
+- `emit::tests::x86_64_code_agrees_with_the_interpreter` and
+  `x86_64_code_is_verifiable` run the same corpus through the x86-64 generator:
+  every pattern, subject and start against the interpreter's answer and
+  captures, through an emulator that decodes the bytes, refuses anything outside
+  the subset, and faults on a load outside the subject, a store outside the
+  caller's registers, a preserved register written or a stack left unbalanced.
+  `x86_64_code_the_verifier_accepts_keeps_its_promises` mutates that code the
+  way its AArch64 twin does, and it earned its place: the first version of the
+  save-and-restore check was positional, and this found a mutant that jumped
+  over the restores to a return that still had pops in front of it.
 - `emit::tests::code_the_verifier_accepts_keeps_its_promises` checks the
   verifier against execution rather than against its own reasoning. It flips one
   or two random bits in every generated program, a hundred times each, and runs

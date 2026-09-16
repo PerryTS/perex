@@ -11,7 +11,13 @@ use perex::compiler::{compile, Node, Range};
 use perex::executor::{find, Frame, Scratch, Undo};
 use perex::input::Input;
 use perex::native::emit::{emit_search, preferred, supported, EXHAUSTED, NO_MATCH};
-use perex::native::verify::Facts;
+use perex::native::verify::{Facts, Target};
+
+/// The instruction set this machine runs, which is the one to emit for.
+#[cfg(target_arch = "aarch64")]
+const TARGET: Target = Target::A64;
+#[cfg(target_arch = "x86_64")]
+const TARGET: Target = Target::X64;
 use perex::span::Span;
 use perex::Budget;
 
@@ -206,8 +212,9 @@ fn crossover() {
             continue;
         }
         let mut code = vec![0u8; 65536];
-        let mut facts = vec![Facts::default(); code.len() / 4];
-        let length = emit_search(program, &mut code, &mut facts).expect("code is generated");
+        let mut facts = vec![Facts::default(); code.len() / TARGET.stride()];
+        let length =
+            emit_search(TARGET, program, &mut code, &mut facts).expect("code is generated");
         let executable = Executable::new(&code[..length]);
         let entry = executable.entry();
         let count = program.register_count();
@@ -265,8 +272,9 @@ fn main() {
             continue;
         }
         let mut code = vec![0u8; 65536];
-        let mut facts = vec![Facts::default(); code.len() / 4];
-        let length = emit_search(program, &mut code, &mut facts).expect("code is generated");
+        let mut facts = vec![Facts::default(); code.len() / TARGET.stride()];
+        let length =
+            emit_search(TARGET, program, &mut code, &mut facts).expect("code is generated");
         let executable = Executable::new(&code[..length]);
         let entry = executable.entry();
 

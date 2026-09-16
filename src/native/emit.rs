@@ -20,7 +20,7 @@ use super::machine::{
     AT, BYTE, Cond, EncodeError, FROM, LENGTH, Label, MAX_REPEATS, Machine, Patch, SUBJECT, Slot,
     TABLE, TMP, repeat_end, repeat_floor,
 };
-use super::verify::{Facts, VerifyError, verify};
+use super::verify::{Facts, Target, VerifyError, verify};
 use crate::program::{
     ANY, ANY_S, ASSERT, ASSERT_END, ATOM_REPEAT, CHAR, CHAR_I, CLASS, END, MATCH, NEGATED,
     PROPERTY, Program, SAVE, START, Y, consuming, derive_start_anchored,
@@ -431,7 +431,8 @@ pub fn preferred(program: Program<'_>, bytes: usize) -> bool {
 
 /// Emit a whole search for `program` into `code`, returning its byte length.
 ///
-/// The generated code is called as
+/// The target says which instruction set to write and which calling convention
+/// to write it for. The generated code is called as
 /// `extern "C" fn(subject: *const u8, length: usize, start: usize,
 /// registers: *mut usize, budget: usize) -> isize`, and returns the position a
 /// match began at, [`NO_MATCH`], or [`EXHAUSTED`] once it has taken `budget`
@@ -440,20 +441,29 @@ pub fn preferred(program: Program<'_>, bytes: usize) -> bool {
 /// calls nothing.
 ///
 /// Before returning, the code is checked by [`verify`], which needs one
-/// [`Facts`] for every four bytes emitted. Code that fails is cleared and
-/// reported rather than returned.
+/// [`Facts`] for every [`Target::stride`] bytes emitted — one per instruction
+/// on AArch64, one per byte on x86-64, whose instructions vary in length. Code
+/// that fails is cleared and reported rather than returned.
 pub fn emit_search(
+    target: Target,
     program: Program<'_>,
     code: &mut [u8],
     facts: &mut [Facts],
 ) -> Result<usize, EmitError> {
-    let length = {
-        let mut asm = Assembler::new(code);
-        generate(program, &mut asm)?
+    let length = match target {
+        Target::A64 => {
+            let mut asm = Assembler::new(code);
+            generate(program, &mut asm)?
+        }
+        Target::X64 => {
+            let mut asm = crate::native::x64::Assembler::new(code);
+            generate(program, &mut asm)?
+        }
     };
-    if let Err(error) = verify(&code[..length], program.register_count(), facts) {
-        // Zero is permanently undefined on this architecture, so a host that
-        // maps the buffer regardless faults instead of running unchecked code.
+    if let Err(error) = verify(target, &code[..length], program.register_count(), facts) {
+        // Zero is a permanently undefined instruction on AArch64 and `add
+        // [rax], al` on x86-64, which faults on the null page: a host that maps
+        // the buffer regardless faults rather than running unchecked code.
         code[..length].fill(0);
         return Err(EmitError::Unverified(error));
     }
@@ -1010,7 +1020,7 @@ mod tests {
         )
         .expect("pattern compiles");
         let mut facts = [Facts::default(); 1024];
-        let length = emit_search(program, code, &mut facts)?;
+        let length = emit_search(Target::A64, program, code, &mut facts)?;
         Ok((length, program.register_count()))
     }
 
@@ -1288,6 +1298,20 @@ mod tests {
         }
     }
 
+    /// Every program the tier emits for x86-64 passes the verifier for that
+    /// target, which is what says the two are talking about the same code.
+    #[test]
+    fn x86_64_code_is_verifiable() {
+        extern crate std;
+        let mut code = [0u8; 8192];
+        let mut facts = std::vec![Facts::default(); 8192];
+        for &(pattern, flags) in PATTERNS {
+            let (length, count) = generate_x64_for(pattern, flags, &mut code).expect("generated");
+            verify(Target::X64, &code[..length], count, &mut facts)
+                .unwrap_or_else(|error| panic!("/{pattern}/{flags}: {error:?}"));
+        }
+    }
+
     /// The same corpus, generated for x86-64 and run through the emulator for
     /// that target. Two code generators are only worth having if they answer
     /// alike, so both are held to the interpreter rather than to each other.
@@ -1419,6 +1443,85 @@ mod tests {
         assert!(exhausted > 0, "no budget was small enough to run out");
     }
 
+    /// The same check on the other target: whatever a mutant of verified
+    /// x86-64 code computes, it stays inside the memory it was proved to touch,
+    /// leaves the preserved registers as it found them, and finishes.
+    ///
+    /// x86-64 instructions vary in length, so a flipped bit can also change
+    /// where the next one begins. A mutant whose stream no longer decodes, or
+    /// whose branches no longer land on a start, is refused rather than run.
+    #[test]
+    fn x86_64_code_the_verifier_accepts_keeps_its_promises() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut random = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let subjects = ["", "a", "abc", "aaaa", "user@example", "0123456789abc"];
+        extern crate std;
+        let mut code = [0u8; 8192];
+        let mut facts = std::vec![Facts::default(); 8192];
+        let (mut accepted, mut refused, mut different) = (0usize, 0usize, 0usize);
+        for &(pattern, flags) in PATTERNS {
+            let (length, count) = generate_x64_for(pattern, flags, &mut code).expect("generated");
+            for _ in 0..MUTANTS {
+                let mut mutant = code;
+                for _ in 0..1 + random() % 2 {
+                    let bit = random() as usize % (length * 8);
+                    mutant[bit / 8] ^= 1 << (bit % 8);
+                }
+                let mutant = &mutant[..length];
+                if verify(Target::X64, mutant, count, &mut facts).is_err() {
+                    refused += 1;
+                    continue;
+                }
+                accepted += 1;
+                let mut differs = false;
+                for subject in subjects {
+                    for start in [0, 1, subject.len() as u64, u64::MAX] {
+                        for budget in [0, 5, 200] {
+                            let context = || Case {
+                                pattern,
+                                flags,
+                                subject,
+                                start,
+                                budget,
+                            };
+                            let run = execute_x64(mutant, count, subject, start, budget)
+                                .unwrap_or_else(|fault| panic!("{}: {fault}", context()));
+                            let original =
+                                execute_x64(&code[..length], count, subject, start, budget)
+                                    .expect("the original runs");
+                            differs |= run.answer != original.answer;
+                            assert!(
+                                run.answer == NO_MATCH as i64
+                                    || run.answer == EXHAUSTED as i64
+                                    || (0..=subject.len() as i64).contains(&run.answer),
+                                "mutated, {}: returned {}",
+                                context(),
+                                run.answer
+                            );
+                            for &value in &run.registers[..count] {
+                                assert!(
+                                    value == u64::MAX || value <= subject.len() as u64,
+                                    "{}: stored {value}",
+                                    context()
+                                );
+                            }
+                        }
+                    }
+                }
+                different += usize::from(differs);
+            }
+        }
+        assert!(
+            refused > 0 && accepted > 0 && different > 0,
+            "{accepted} accepted, {refused} refused, {different} different"
+        );
+    }
+
     #[test]
     fn a_budget_stops_what_backtracking_would_not() {
         let mut code = [0u8; 4096];
@@ -1466,7 +1569,7 @@ mod tests {
                     mutant[bit / 8] ^= 1 << (bit % 8);
                 }
                 let mutant = &mutant[..length];
-                if verify(mutant, count, &mut facts).is_err() {
+                if verify(Target::A64, mutant, count, &mut facts).is_err() {
                     refused += 1;
                     continue;
                 }
@@ -1552,7 +1655,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                emit_search(program, &mut code, &mut facts),
+                emit_search(Target::A64, program, &mut code, &mut facts),
                 Err(EmitError::Unsupported),
                 "/{pattern}/{flags}"
             );

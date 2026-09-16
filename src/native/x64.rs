@@ -446,13 +446,15 @@ impl machine::Machine for Assembler<'_> {
     }
 
     fn return_start(&mut self) {
-        self.leave();
+        // The answer first, so that restoring what the convention preserves is
+        // the last thing before the return and can be checked as one shape.
         self.mov(SCRATCH, slot(machine::FROM));
+        self.leave();
         self.ret();
     }
     fn return_code(&mut self, code: i32) {
-        self.leave();
         self.mov_imm(SCRATCH, code);
+        self.leave();
         self.ret();
     }
 
