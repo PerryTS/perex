@@ -168,7 +168,235 @@ pub struct Search<'r, R: Resources, B: ScratchOwner> {
     state: State,
     budget: Budget,
 }
+/// Where a search stands, as [`Search::position`] reports it.
+fn position_of(state: &State, layout: (u8, usize, usize)) -> Position {
+    let mark = match state.phase {
+        Phase::Finished(true) => state.current,
+        _ if state.started => state.start,
+        _ if !state.near.is_none() => state.near,
+        _ => state.current,
+    };
+    Position { mark, layout }
+}
+
+/// How [`Search::run`] ended.
+// The paused variant is a whole `Search` and the finished one a fraction of
+// it. Boxing the large one would need an allocator this crate does not have,
+// and the enum is written once, where the caller holds it.
+#[allow(clippy::large_enum_variant)]
+pub enum Run<'r, R: Resources, B: ScratchOwner> {
+    /// The search was decided within the quantum it was given.
+    Finished(Finished<B>),
+    /// It needs more work, or more scratch. It continues as any search does:
+    /// [`Search::advance`], or [`Search::rebuffer`] after a capacity request.
+    Paused(Search<'r, R, B>),
+}
+
+/// A search [`Search::run`] decided in one call: its answer, where it stands,
+/// the work it left, and the scratch holding its captures.
+pub struct Finished<B: ScratchOwner> {
+    buffers: B,
+    position: Position,
+    remaining: usize,
+    captures: usize,
+    matched: bool,
+    boolean: bool,
+}
+
+impl<B: ScratchOwner> Finished<B> {
+    pub fn matched(&self) -> bool {
+        self.matched
+    }
+
+    /// What [`Search::position`] reports for the same search.
+    pub fn position(&self) -> Position {
+        self.position
+    }
+
+    pub fn remaining_work(&self) -> usize {
+        self.remaining
+    }
+
+    pub fn capture_count(&self) -> usize {
+        self.captures
+    }
+
+    /// One capture of the match, as [`Search::capture`] reads it.
+    pub fn capture(&mut self, index: usize) -> Result<Option<Span>, ExecError> {
+        self.require_match()?;
+        if index >= self.captures {
+            return Err(ExecError::Captures);
+        }
+        let scratch = self.buffers.scratch();
+        let lo = *scratch
+            .registers
+            .get(index * 2)
+            .ok_or(ExecError::ChangedResources)?;
+        let hi = *scratch
+            .registers
+            .get(index * 2 + 1)
+            .ok_or(ExecError::ChangedResources)?;
+        Ok(if lo == UNSET || hi == UNSET {
+            None
+        } else {
+            Span::new(lo, hi)
+        })
+    }
+
+    /// Every capture of the match, as [`Search::copy_captures`] copies them.
+    pub fn copy_captures(&mut self, output: &mut [Option<Span>]) -> Result<(), ExecError> {
+        if output.len() < self.captures {
+            return Err(ExecError::Captures);
+        }
+        self.require_match()?;
+        copy_match_registers(self.buffers.scratch().registers, output, self.captures)
+    }
+
+    pub fn into_buffers(self) -> B {
+        self.buffers
+    }
+
+    fn require_match(&self) -> Result<(), ExecError> {
+        if self.boolean {
+            return Err(ExecError::Captures);
+        }
+        if !self.matched {
+            return Err(ExecError::NotMatched);
+        }
+        Ok(())
+    }
+}
+
 impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
+    /// Start a search and run it for up to `quantum` work in the same call.
+    ///
+    /// [`Search::new`] acquires the views to learn the operation's shape and
+    /// [`Search::advance`] acquires them again to run; a host that starts a
+    /// search per call and usually sees it decided in its first quantum pays
+    /// for both, and for moving a search it then drops. This acquires them
+    /// once, and builds a [`Search`] only when the search pauses or asks for
+    /// more scratch. The answer, captures, position and work charged are what
+    /// `Search::new_near` — or `Search::new`, without `near` — followed by
+    /// `advance(quantum)` would produce, and a paused search continues exactly
+    /// as that one would.
+    pub fn run(
+        resources: &'r R,
+        start_utf16: usize,
+        near: Option<Position>,
+        buffers: B,
+        budget: Budget,
+        quantum: usize,
+    ) -> Result<Run<'r, R, B>, SearchError<R::Error>> {
+        Self::run_with(
+            resources,
+            start_utf16,
+            near,
+            buffers,
+            budget,
+            quantum,
+            false,
+        )
+    }
+
+    /// [`Search::run`] for a search that answers only whether a match exists,
+    /// as [`Search::without_captures`] makes one.
+    pub fn run_without_captures(
+        resources: &'r R,
+        start_utf16: usize,
+        near: Option<Position>,
+        buffers: B,
+        budget: Budget,
+        quantum: usize,
+    ) -> Result<Run<'r, R, B>, SearchError<R::Error>> {
+        Self::run_with(resources, start_utf16, near, buffers, budget, quantum, true)
+    }
+
+    fn run_with(
+        resources: &'r R,
+        start_utf16: usize,
+        near: Option<Position>,
+        mut buffers: B,
+        mut budget: Budget,
+        quantum: usize,
+        boolean: bool,
+    ) -> Result<Run<'r, R, B>, SearchError<R::Error>> {
+        // The length is not known until the views are held; a start past the
+        // end is settled there, as `State::new` would have settled it.
+        let mut state = State::new(start_utf16, usize::MAX);
+        state.boolean = boolean;
+        // The shape a paused search checks its views against is only built if
+        // the search pauses; a decided one needs two of its numbers.
+        let mut shape = None;
+        let mut captures = 0;
+        let mut layout = (0, 0, 0);
+        let result = resources
+            .with_views(|program, input| {
+                captures = program.capture_count();
+                layout = input.shape();
+                let mut scratch = buffers.scratch();
+                if scratch.registers.len() < program.register_count() {
+                    return Err(ExecError::Registers);
+                }
+                if let Some(near) = near {
+                    if near.layout != layout {
+                        return Err(ExecError::ChangedResources);
+                    }
+                    state.near = near.mark;
+                }
+                if start_utf16 > input.len_utf16() {
+                    state.phase = Phase::Finished(false);
+                }
+                if quantum == 0 {
+                    shape = Some(Shape::new(program, input));
+                    return Ok(Progress::Pending);
+                }
+                let mut vm = Vm {
+                    program,
+                    input,
+                    cursor: input.cursor(),
+                    scratch: &mut scratch,
+                    state: &mut state,
+                    budget,
+                };
+                let result = vm.run(quantum);
+                vm.state.current = vm.cursor.mark();
+                budget = vm.budget;
+                if matches!(
+                    result,
+                    Ok(Progress::Pending) | Err(ExecError::Frames | ExecError::Undo)
+                ) {
+                    shape = Some(Shape::new(program, input));
+                }
+                result
+            })
+            .map_err(SearchError::Resource)?;
+        let paused = match result {
+            Ok(Progress::Pending) => None,
+            Ok(progress) => {
+                return Ok(Run::Finished(Finished {
+                    position: position_of(&state, layout),
+                    remaining: budget.remaining(),
+                    captures,
+                    matched: progress == Progress::Matched,
+                    boolean,
+                    buffers,
+                }));
+            }
+            Err(error @ (ExecError::Frames | ExecError::Undo)) => Some(error),
+            Err(error) => return Err(SearchError::Execution(error)),
+        };
+        state.blocked = paused;
+        Ok(Run::Paused(Search {
+            resources,
+            buffers,
+            // Built in the views whenever the search did not decide, including
+            // a zero quantum, which returns before running.
+            shape: shape.ok_or(SearchError::Execution(ExecError::InvalidProgram))?,
+            state,
+            budget,
+        }))
+    }
+
     pub fn new(
         resources: &'r R,
         start_utf16: usize,
@@ -260,16 +488,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
     /// therefore seeks one unit from here rather than from wherever the failed
     /// attempt's scanning left the cursor.
     pub fn position(&self) -> Position {
-        let mark = match self.state.phase {
-            Phase::Finished(true) => self.state.current,
-            _ if self.state.started => self.state.start,
-            _ if !self.state.near.is_none() => self.state.near,
-            _ => self.state.current,
-        };
-        Position {
-            mark,
-            layout: self.shape.input,
-        }
+        position_of(&self.state, self.shape.input)
     }
 
     pub fn remaining_work(&self) -> usize {

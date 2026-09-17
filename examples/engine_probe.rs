@@ -66,12 +66,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut relocate = false;
             let mut grow = false;
             let mut near = false;
+            let mut run = false;
             for arg in args.by_ref() {
                 match arg.as_str() {
                     "--relocate" if !relocate => relocate = true,
                     "--grow" if !grow => grow = true,
                     "--near" if !near => near = true,
-                    _ => return Err("expected unique --relocate, --grow or --near".into()),
+                    "--run" if !run => run = true,
+                    _ => {
+                        return Err("expected unique --relocate, --grow, --near or --run".into());
+                    }
                 }
             }
             Some(resumable::Options {
@@ -79,10 +83,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 relocate,
                 grow,
                 near,
+                run,
             })
         }
         _ => {
-            return Err("expected [--work N] [--quantum N [--relocate] [--grow] [--near]]".into());
+            return Err(
+                "expected [--work N] [--quantum N [--relocate] [--grow] [--near] [--run]]".into(),
+            );
         }
     };
     if args.next().is_some() {

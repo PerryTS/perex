@@ -6,7 +6,7 @@ use perex::{
         BoundProgram, BoundResources, BoundSubject, ImmutableProgram, ImmutableSubject, Subject,
     },
     executor::{
-        ExecError, Frame, Progress, Scratch, ScratchOwner, ScratchRequirements, Search,
+        ExecError, Frame, Progress, Run, Scratch, ScratchOwner, ScratchRequirements, Search,
         SearchError, Undo,
     },
     program::Program,
@@ -22,6 +22,9 @@ pub struct Options {
     /// Start each search from a position elsewhere in the subject, which must
     /// never change an answer.
     pub near: bool,
+    /// Start with `Search::run`, which decides in one call what it can and
+    /// hands back a search to continue otherwise.
+    pub run: bool,
 }
 struct Owner {
     storage: RefCell<(Vec<u32>, Vec<u8>)>,
@@ -167,11 +170,32 @@ pub fn find(
         }
         position
     });
-    let mut search = match near {
-        Some(near) => Search::new_near(&resources, start, near, buffers, *budget),
-        None => Search::new(&resources, start, buffers, *budget),
-    }
-    .map_err(error)?;
+    let mut search = if options.run {
+        match Search::run(&resources, start, near, buffers, *budget, options.quantum)
+            .map_err(error)?
+        {
+            Run::Finished(mut finished) => {
+                *budget = Budget::new(finished.remaining_work());
+                if !finished.matched() {
+                    return Ok(false);
+                }
+                finished.copy_captures(captures)?;
+                return Ok(true);
+            }
+            Run::Paused(search) => {
+                if options.relocate {
+                    owner.relocate();
+                }
+                search
+            }
+        }
+    } else {
+        match near {
+            Some(near) => Search::new_near(&resources, start, near, buffers, *budget),
+            None => Search::new(&resources, start, buffers, *budget),
+        }
+        .map_err(error)?
+    };
     let result = loop {
         match search.advance(options.quantum).map_err(error) {
             Ok(Progress::Pending) => {

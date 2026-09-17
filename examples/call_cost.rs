@@ -13,14 +13,18 @@
 //! iteration counts and divide the difference by the difference in calls, which
 //! removes compilation and setup.
 //!
+//! `run` and `run-captures` do what `search` and `captures` do through
+//! `Search::run`, which acquires the views once and builds a `Search` only if
+//! the search pauses, so the two pairs price that difference.
+//!
 //! ```text
-//! call_cost bind|construct|search|captures PATTERN FLAGS SUBJECT ITERATIONS [START]
+//! call_cost bind|construct|search|captures|run|run-captures PATTERN FLAGS SUBJECT ITERATIONS [START]
 //! ```
 use perex::{
     Budget,
     binding::{BoundProgram, BoundResources, BoundSubject},
     compiler::{Node, Range, compile},
-    executor::{Frame, Progress, Scratch, Search},
+    executor::{Frame, Progress, Run, Scratch, Search},
     input::Input,
     span::Span,
 };
@@ -32,6 +36,8 @@ enum Stage {
     Construct,
     Search,
     Captures,
+    Run,
+    RunCaptures,
 }
 
 /// The allowance and quantum Perry's runtime passes, so a call does the same
@@ -42,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if !(6..=7).contains(&args.len()) {
         return Err(
-            "usage: call_cost bind|construct|search|captures PATTERN FLAGS SUBJECT ITERATIONS [START]"
+            "usage: call_cost bind|construct|search|captures|run|run-captures PATTERN FLAGS SUBJECT ITERATIONS [START]"
                 .into(),
         );
     }
@@ -51,6 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "construct" => Stage::Construct,
         "search" => Stage::Search,
         "captures" => Stage::Captures,
+        "run" => Stage::Run,
+        "run-captures" => Stage::RunCaptures,
         other => return Err(format!("unknown stage {other}").into()),
     };
     let (pattern, flags, subject) = (&args[2], &args[3], args[4].as_bytes());
@@ -102,6 +110,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frames: &mut frames,
             undo: &mut undo,
         };
+        if stage >= Stage::Run {
+            let mut search = match Search::run(
+                &resources,
+                start,
+                None,
+                scratch,
+                Budget::new(usize::MAX),
+                QUANTUM,
+            )
+            .map_err(|_| "search refused")?
+            {
+                Run::Finished(mut finished) => {
+                    if finished.matched() {
+                        matched += 1;
+                        if stage == Stage::RunCaptures {
+                            finished
+                                .copy_captures(&mut captures)
+                                .map_err(|e| format!("{e:?}"))?;
+                            black_box(&captures);
+                        }
+                    }
+                    continue;
+                }
+                Run::Paused(search) => search,
+            };
+            let progress = loop {
+                match search.advance(QUANTUM) {
+                    Ok(Progress::Pending) => {}
+                    Ok(progress) => break progress,
+                    Err(_) => return Err("search failed".into()),
+                }
+            };
+            if progress == Progress::Matched {
+                matched += 1;
+                if stage == Stage::RunCaptures {
+                    search
+                        .copy_captures(&mut captures)
+                        .map_err(|e| format!("{e:?}"))?;
+                    black_box(&captures);
+                }
+            }
+            continue;
+        }
         let mut search = Search::new(&resources, start, scratch, Budget::new(usize::MAX))
             .map_err(|_| "search refused")?;
         if stage == Stage::Construct {

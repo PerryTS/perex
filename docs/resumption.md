@@ -136,7 +136,43 @@ text occurs early and costs the distance where it first occurs late. And binding
 a byte subject validates the whole string, which is the host's to do once per
 operation rather than once per search.
 
-## Scratch ownership and growth
+### Deciding a search in one call
+
+`Search::new` acquires both owners to learn the operation's shape, and
+`Search::advance` acquires them again to run. A host that starts a search per
+call, as a JavaScript `test` or `exec` does, usually sees it decided within its
+first quantum, so it pays for both acquisitions and for moving a `Search` it
+then drops — 360 bytes of state, shape and scratch handles.
+
+`Search::run(resources, start, near, buffers, budget, quantum)` acquires them
+once and runs the first quantum in the same borrow. If that decides the search,
+it returns `Run::Finished`, which holds the answer, the position, the work left
+and the scratch, and reads captures as a `Search` would; no `Search` is built.
+Otherwise it returns `Run::Paused` with a `Search` that continues exactly as
+`Search::new_near` — or `Search::new` without `near` — followed by `advance`
+would have: the same pending update after a capacity request, the same answer,
+captures, position and charged work. `Search::run_without_captures` does the
+same for a search built with `without_captures`.
+
+Instructions per call, from `examples/call_cost` at one and two million calls,
+with per-call constant-work bindings and quantum 4096, the shape of Perry's lent
+path:
+
+| Case | `Search::new` + `advance` | `Search::run` | Reading captures, before | after |
+|---|---:|---:|---:|---:|
+| `/a/` against `"a"` | 1,496 | 1,284 | 1,575 | 1,333 |
+| `/z/` against `"a"` | 775 | 572 | 782 | 572 |
+| `/needle/`, 29 characters | 1,688 | 1,465 | 1,756 | 1,517 |
+| `/[a-z]+!/`, 61 characters | 2,672 | 2,445 | 2,742 | 2,500 |
+| `(\w+)@(\w+)\.com`, 25 characters | 7,700 | 7,477 | 7,804 | 7,559 |
+
+Between 200 and 245 instructions a call, whatever the pattern: it is the call's
+fixed cost, not its matching. That is a measurement of this crate's driver.
+The last change of this kind — borrowing the operation's state instead of
+moving it — gained here and cost Perry 20 to 66 instructions per call once
+compiled into Perry's runtime, so the number that decides is Perry's.
+
+
 
 `Search` exclusively owns a `ScratchOwner`. Existing borrowed `Scratch` implements that trait, and an embedder can instead supply an owner of allocated buffers. Acquiring a scratch view must not allocate, collect, call host code or change live entries. The core allocates nothing and never grows storage implicitly.
 
@@ -153,6 +189,25 @@ The owned-scratch witness begins with no frames or undo entries and grows only a
 The scratch-reuse witness consumes completed, pending, cancelled, work-limited and capacity-blocked operations. It destroys and poisons the previous program/subject owner while keeping the exact scratch allocations, then matches unrelated resources with those allocations. Reclaiming scratch must acquire no additional resource view.
 
 The development `scratch_cost` driver compares fixed buffers, fresh zero-frame/undo buffers, reuse, and reuse with a 64 KiB payload retention cap. Growth uses powers of two up to the same fixed caps (16,384 frames and 131,072 undo entries), with allocation and cleanup outside resource views. `verify` checks every iteration's complete captures and work against synchronous `find`. Timing modes report explicitly owned scratch payload, all buffer allocations/frees, replacement overlap, transferred live metadata and retained payload; these counters exclude allocator metadata, engine state on the stack, program/capture storage and process RSS. Compilation scratch, program capacity and capture capacity are reported separately. External process measurements are still required, and no convenience allocation policy is installed in the core or Perry.
+
+`tests/run.rs` holds `Search::run` to `Search::new` or `Search::new_near`
+followed by `advance`: the answer, every capture, the position and the work left,
+over eighteen patterns and nine subjects from three starts, with and without a
+near position, at quanta of 1, 17 and 4096, with scratch small enough that
+capacity requests happen and storage moved and poisoned at every pause. Both
+halves are required to occur hundreds of times, not only the decided one. The
+boolean form must answer as a boolean search and refuse captures, and a run must
+refuse what a new search refuses: short registers, a position from another
+subject, and a zero quantum doing work. Ten injected faults are each caught: a
+pending search reported as decided, `near` ignored, the boolean form not applied,
+a capacity request returned as an error, registers unchecked, a foreign position
+accepted, a start past the end not settled, the position reported for the wrong
+layout, a paused search built without its shape, and the work left not carried
+out of the views. `engine_probe --run` starts every resumable search this way,
+and CI runs the engine differential through it at quantum 17 and the candidate
+and classes harnesses at 1 and at 4096 with a near position; a planted fault
+that swaps a decided match for no match makes the candidate harness report
+20,580 differences with `--run` and none without it.
 
 `tests/position.rs` checks a borrowed owner against an owning one: the same
 answer, captures and remaining work from every start of every subject in its
