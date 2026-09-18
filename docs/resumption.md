@@ -167,10 +167,34 @@ path:
 | `(\w+)@(\w+)\.com`, 25 characters | 7,700 | 7,477 | 7,804 | 7,559 |
 
 Between 200 and 245 instructions a call, whatever the pattern: it is the call's
-fixed cost, not its matching. That is a measurement of this crate's driver.
-The last change of this kind — borrowing the operation's state instead of
-moving it — gained here and cost Perry 20 to 66 instructions per call once
-compiled into Perry's runtime, so the number that decides is Perry's.
+fixed cost, not its matching. That is a measurement of this crate's driver, and
+the last change of this kind — borrowing the operation's state instead of moving
+it — gained here and cost Perry 20 to 66 instructions per call once compiled
+into its runtime, so the number that decides is the host's.
+
+Perry's is larger. Measured in Perry at its merge train 214 (`c8cf45056`),
+release build, three arms from one commit, nine interleaved rounds, the minimum
+per cell, with a control binary's instructions subtracted so the figure is the
+regex call alone:
+
+| Perry call | `Search::new` + `advance` | `Search::run` | |
+|---|---:|---:|---:|
+| `.test()`, hoisted pattern | 4,382.2 | 4,063.7 | −7.3% |
+| `.test()`, literal pattern | 5,698.2 | 5,379.7 | −5.6% |
+| `exec`, two groups | 7,566.9 | 7,237.9 | −4.3% |
+
+318 to 329 instructions a call, more than this crate's driver shows, because a
+host acquires its views through its own owners: Perry's are a garbage-collected
+program and a heap string, and the acquisition this removes was theirs as well
+as ours. Wall clock on a loaded host moved 12.1, 8.2 and 5.8 per cent on the
+same runs, and all four reproducers answer identically on every arm. Perry took
+`Run::Finished` as the answer in both its host paths and fell into its existing
+advance loop on `Run::Paused`, where a capacity request lands in its scratch-
+growth branch unchanged. Measured by the `secret-tests-a0` session, whose
+reproducers are start-anchored, so they do not reach the short-remainder start
+scan in `docs/candidate.md`; the same arms without the adoption are within 0.1
+instructions of perex 0.1.7, which is what "nothing lands for free on this
+workload" looks like rather than a result about that change.
 
 
 
