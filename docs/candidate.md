@@ -130,6 +130,13 @@ interleaved per round, best of twenty-one; V8 adjacent in time:
 | Eight-character literal | 56.5 ns | 53.3 ns | 13.4 ns | 27.4 ns |
 | Short literal, 29 characters | 56.0 ns | 52.2 ns | 39.0 ns | 45.2 ns |
 
+Through a host's bound resources the same change is 352 instructions a call:
+`examples/call_cost`'s `search` stage, which binds the program and subject per
+call as a host does and searches at a quantum of 4096, takes 1,104 instructions
+for `/qq_[0-9]+/` over `"record_12345"` before this and 752 after, at one and
+two million calls. A hit whose first byte is already a candidate pays about
+1 per cent more instead, from the checks that decide that.
+
 The three misses go from behind V8 at both entry points to ahead of both. The
 short literal hits lose one round and gain between 2 and 7 percent. Of the rest
 of the twenty-five cases in `bench/`, none moved by more than 1.1 percent except

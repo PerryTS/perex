@@ -190,11 +190,17 @@ as ours. Wall clock on a loaded host moved 12.1, 8.2 and 5.8 per cent on the
 same runs, and all four reproducers answer identically on every arm. Perry took
 `Run::Finished` as the answer in both its host paths and fell into its existing
 advance loop on `Run::Paused`, where a capacity request lands in its scratch-
-growth branch unchanged. Measured by the `secret-tests-a0` session, whose
-reproducers are start-anchored, so they do not reach the short-remainder start
-scan in `docs/candidate.md`; the same arms without the adoption are within 0.1
-instructions of perex 0.1.7, which is what "nothing lands for free on this
-workload" looks like rather than a result about that change.
+growth branch unchanged. Measured by the `secret-tests-a0` session.
+
+That session also ran a third arm — this crate's main with no adoption, to see
+what the release alone was worth to Perry — and reported it as exactly zero.
+It is withdrawn: its two arms were byte-for-byte the same binary, so the
+comparison could not have shown a difference whatever the answer was. It is
+recorded rather than deleted because the failure is the instructive kind, and
+the one this project's own rules warn about: a comparison that cannot fail
+proves nothing, and an exit code is not evidence that two arms differ. The
+adoption arm stands, because its source uses `Run`, which exists only on main,
+and its binary differs from the other two.
 
 
 
