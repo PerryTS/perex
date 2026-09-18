@@ -173,6 +173,104 @@ it — gained here and cost Perry 20 to 66 instructions per call once compiled
 into its runtime, so the number that decides is the host's.
 
 Perry's is larger. Measured in Perry at its merge train 214 (`c8cf45056`),
+release build, both arms on the same Perry commit and the same commit of this
+crate, so the patch adopting `Search::run` is the only difference between them.
+Instructions per call, five interleaved rounds, the minimum per cell, with a
+control binary's instructions subtracted so the figure is the regex call alone:
+
+| Perry call | `Search::new` + `advance` | `Search::run` | |
+|---|---:|---:|---:|
+| `.test()`, hoisted pattern | 4,382.2 | 4,063.7 | −7.3% |
+| `.test()`, literal pattern | 5,698.2 | 5,379.7 | −5.6% |
+| `exec`, two groups | 7,566.9 | 7,237.9 | −4.3% |
+| `.test()`, unanchored miss | 2,438.6 | 2,133.7 | −12.5% |
+| `.test()`, unanchored hit | 5,813.2 | 5,481.2 | −5.7% |
+| 200,000-character subject | 1,439,715 | 1,439,003 | −0.0% |
+
+305 to 332 instructions a call whatever the pattern, and nothing on a subject
+long enough that matching dominates: it is the call's fixed cost, and more of it
+than this crate's driver shows, because a host acquires its views through its
+own owners — Perry's are a garbage-collected program and a heap string, so the
+acquisition this removes was theirs as well as ours. All reproducers answer
+identically on both arms. Perry took `Run::Finished` as the answer in both its
+host paths and fell into its existing advance loop on `Run::Paused`, where a
+capacity request lands in its scratch-growth branch unchanged. Measured by the
+`secret-tests-a0` session.
+
+What the same session could not measure, and what this document briefly claimed
+it had: what the rest of 0.1.9 is worth to Perry. That needed a third arm built
+against the previous release, and the arm never existed — the build failed
+because Perry's seven-day publish-age soak refuses a release that new, and the
+script's `cargo … | tail` reported the exit status of `tail`, so a silent
+failure relinked the previous arm's binary. Two arms, one artifact, and a
+comparison that could not fail. The engine each surviving arm contains was then
+settled from the linker's dependency file rather than by inference. It is
+recorded rather than deleted because the failure is the instructive kind, and
+the one this project's own rules warn about: an exit code is not evidence that
+two arms differ, and a comparison that cannot fail proves nothing. What a
+release is worth to that host stays unmeasured, which is not the same as zero.
+
+A host can also lend its scratch instead of giving it up: `&mut O` is a
+`ScratchOwner` wherever `O` is one, so a search holds a pointer to the host's
+buffers rather than a copy. A host that keeps its scratch across calls — a pool,
+a per-thread buffer — then builds and moves nothing per search, and the borrow
+is what stops a nested search from sharing live scratch with the one it
+interrupted; a compile-fail example in the trait's documentation fixes that.
+Perry measured a 336-byte structure move per call into `Search` from building
+its buffers each time (Perry issue #10166), which is what this removes. It makes
+no measurable difference in a Rust microbenchmark, where the move is within one
+frame and the compiler elides it; the cost is in a host that constructs the
+owner per call.
+
+A host that resumes after an empty match must advance the way the specification
+does: one code point under the `u` flag, one unit otherwise. Advancing a single
+unit inside a surrogate pair does not make progress, because a `u` search
+normalizes its start back to the pair, and the same empty match is found again.
+
+Two costs remain per search and are not changed by this. A program with a
+required-text condition, on a subject of 64 units or more, runs admission from
+the subject's beginning to that text's first occurrence; that is cheap where the
+text occurs early and costs the distance where it first occurs late. And binding
+a byte subject validates the whole string, which is the host's to do once per
+operation rather than once per search.
+
+### Deciding a search in one call
+
+`Search::new` acquires both owners to learn the operation's shape, and
+`Search::advance` acquires them again to run. A host that starts a search per
+call, as a JavaScript `test` or `exec` does, usually sees it decided within its
+first quantum, so it pays for both acquisitions and for moving a `Search` it
+then drops — 360 bytes of state, shape and scratch handles.
+
+`Search::run(resources, start, near, buffers, budget, quantum)` acquires them
+once and runs the first quantum in the same borrow. If that decides the search,
+it returns `Run::Finished`, which holds the answer, the position, the work left
+and the scratch, and reads captures as a `Search` would; no `Search` is built.
+Otherwise it returns `Run::Paused` with a `Search` that continues exactly as
+`Search::new_near` — or `Search::new` without `near` — followed by `advance`
+would have: the same pending update after a capacity request, the same answer,
+captures, position and charged work. `Search::run_without_captures` does the
+same for a search built with `without_captures`.
+
+Instructions per call, from `examples/call_cost` at one and two million calls,
+with per-call constant-work bindings and quantum 4096, the shape of Perry's lent
+path:
+
+| Case | `Search::new` + `advance` | `Search::run` | Reading captures, before | after |
+|---|---:|---:|---:|---:|
+| `/a/` against `"a"` | 1,496 | 1,284 | 1,575 | 1,333 |
+| `/z/` against `"a"` | 775 | 572 | 782 | 572 |
+| `/needle/`, 29 characters | 1,688 | 1,465 | 1,756 | 1,517 |
+| `/[a-z]+!/`, 61 characters | 2,672 | 2,445 | 2,742 | 2,500 |
+| `(\w+)@(\w+)\.com`, 25 characters | 7,700 | 7,477 | 7,804 | 7,559 |
+
+Between 200 and 245 instructions a call, whatever the pattern: it is the call's
+fixed cost, not its matching. That is a measurement of this crate's driver, and
+the last change of this kind — borrowing the operation's state instead of moving
+it — gained here and cost Perry 20 to 66 instructions per call once compiled
+into its runtime, so the number that decides is the host's.
+
+Perry's is larger. Measured in Perry at its merge train 214 (`c8cf45056`),
 release build, three arms from one commit, nine interleaved rounds, the minimum
 per cell, with a control binary's instructions subtracted so the figure is the
 regex call alone:
