@@ -43,7 +43,9 @@ Against `find` on the same engine, in one process, interleaved, best of 21, with
 | End-anchored hit, 256 KiB | 58.4 ns | 50.6 ns | 13.8 ns |
 | `/z/` against `"a"` | 12.3 ns | 11.4 ns | 15.2 ns |
 
-Matches gain up to 17 percent, the shortest the most: 3 percent on the short class case, and under 1 percent where a long scan dominates. No case is slower, and `find` itself is unchanged within noise. None of the matches it applies to moves ahead of V8's `test`; `/a/` against `"a"` is still 2.3 times it. The `Search` form saves the same checking round but not the copy, which a resumable search already leaves to the host; it was not timed separately.
+Matches gain up to 17 percent, the shortest the most: 3 percent on the short class case, and under 1 percent where a long scan dominates. No case is slower, and `find` itself is unchanged within noise.
+
+In instructions, from `examples/call_cost` at one and two million calls, the check a boolean search leaves out costs 88 instructions a call for `/a/` against `"a"` (1,284 against 1,196) and 137 for `(\w+)@(\w+)\.com` over 25 characters, which has three captures (7,488 against 7,351). That is the whole of what a host gains by asking for a boolean answer when it already discards the captures; the copy it also avoids is on top, and is 79 instructions for `/a/`. None of the matches it applies to moves ahead of V8's `test`; `/a/` against `"a"` is still 2.3 times it. The `Search` form saves the same checking round but not the copy, which a resumable search already leaves to the host; it was not timed separately.
 
 [Consuming-atom repetitions](repetition.md) scan and retry with one frame per active repeat instead of a frame and register history per character. Capturing, compound and nullable repeated bodies retain the general instructions in the same evaluator. The optimization does not bound storage for arbitrary patterns or establish an application CPU/RSS improvement.
 

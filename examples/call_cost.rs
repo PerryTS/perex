@@ -15,10 +15,12 @@
 //!
 //! `run` and `run-captures` do what `search` and `captures` do through
 //! `Search::run`, which acquires the views once and builds a `Search` only if
-//! the search pauses, so the two pairs price that difference.
+//! the search pauses, so the two pairs price that difference. `run-boolean`
+//! answers without captures, so `run` minus `run-boolean` is what the capture
+//! check costs a call that produces captures and does not read them.
 //!
 //! ```text
-//! call_cost bind|construct|search|captures|run|run-captures PATTERN FLAGS SUBJECT ITERATIONS [START]
+//! call_cost bind|construct|search|captures|run|run-boolean|run-captures PATTERN FLAGS SUBJECT ITERATIONS [START]
 //! ```
 use perex::{
     Budget,
@@ -37,6 +39,7 @@ enum Stage {
     Search,
     Captures,
     Run,
+    RunBoolean,
     RunCaptures,
 }
 
@@ -48,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if !(6..=7).contains(&args.len()) {
         return Err(
-            "usage: call_cost bind|construct|search|captures|run|run-captures PATTERN FLAGS SUBJECT ITERATIONS [START]"
+            "usage: call_cost bind|construct|search|captures|run|run-boolean|run-captures PATTERN FLAGS SUBJECT ITERATIONS [START]"
                 .into(),
         );
     }
@@ -58,6 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "search" => Stage::Search,
         "captures" => Stage::Captures,
         "run" => Stage::Run,
+        "run-boolean" => Stage::RunBoolean,
         "run-captures" => Stage::RunCaptures,
         other => return Err(format!("unknown stage {other}").into()),
     };
@@ -111,7 +115,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             undo: &mut undo,
         };
         if stage >= Stage::Run {
-            let mut search = match Search::run(
+            let started = if stage == Stage::RunBoolean {
+                Search::run_without_captures
+            } else {
+                Search::run
+            };
+            let mut search = match started(
                 &resources,
                 start,
                 None,
