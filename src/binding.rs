@@ -172,6 +172,14 @@ impl<S: ImmutableSubject> BoundSubject<S> {
     /// to guarantee, as immutability already is. Storage that breaks that can
     /// produce wrong answers or a panic, never unsafety. A failed check returns
     /// the storage with [`SubjectError::ChangedLayout`].
+    ///
+    /// One shape of that guarantee is worth naming, because a host can hold a
+    /// length that its own code trusts and this one must not. Equal byte and
+    /// unit counts mean ASCII only for bytes that are generalized UTF-8; a
+    /// counter that charges a truncated lead its nominal units reports one unit
+    /// for the single byte `0xC3`, which is not ASCII and is not well formed.
+    /// A host whose count can come from anywhere but a successful decode should
+    /// pass such storage to [`BoundSubject::new`] instead, which decodes it.
     pub fn new_counted(
         storage: S,
         utf16_len: usize,
