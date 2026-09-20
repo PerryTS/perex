@@ -172,7 +172,7 @@ pub fn find(
     });
     let mut search = if options.run {
         match Search::run(&resources, start, near, buffers, *budget, options.quantum)
-            .map_err(error)?
+            .map_err(|failed| error(failed.error))?
         {
             Run::Finished(mut finished) => {
                 *budget = Budget::new(finished.remaining_work());

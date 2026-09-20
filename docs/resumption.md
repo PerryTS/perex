@@ -154,6 +154,15 @@ would have: the same pending update after a capacity request, the same answer,
 captures, position and charged work. `Search::run_without_captures` does the
 same for a search built with `without_captures`.
 
+A search that fails gives its caller back what a failed `Search` would have
+left readable: `RunError` carries the error, the work the search did not spend,
+and the scratch owner it was given. That matters because the two-step path
+leaves a failed search in hand — a host reads `remaining_work` from it to keep
+its own accounting exact, and takes its buffers back with `into_buffers` — and
+a search that never became one has nowhere else to put them. A host that drops
+both on a failure under-counts the work that failure cost it, silently, and
+only while its budget is large enough that nothing reads the number.
+
 Instructions per call, from `examples/call_cost` at one and two million calls,
 with per-call constant-work bindings and quantum 4096, the shape of Perry's lent
 path:
@@ -317,6 +326,15 @@ The owned-scratch witness begins with no frames or undo entries and grows only a
 The scratch-reuse witness consumes completed, pending, cancelled, work-limited and capacity-blocked operations. It destroys and poisons the previous program/subject owner while keeping the exact scratch allocations, then matches unrelated resources with those allocations. Reclaiming scratch must acquire no additional resource view.
 
 The development `scratch_cost` driver compares fixed buffers, fresh zero-frame/undo buffers, reuse, and reuse with a 64 KiB payload retention cap. Growth uses powers of two up to the same fixed caps (16,384 frames and 131,072 undo entries), with allocation and cleanup outside resource views. `verify` checks every iteration's complete captures and work against synchronous `find`. Timing modes report explicitly owned scratch payload, all buffer allocations/frees, replacement overlap, transferred live metadata and retained payload; these counters exclude allocator metadata, engine state on the stack, program/capture storage and process RSS. Compilation scratch, program capacity and capture capacity are reported separately. External process measurements are still required, and no convenience allocation policy is installed in the core or Perry.
+
+A failed run is held to the same standard in `tests/run.rs`: over four
+allowances too small for an exponential backtracking case, the work it reports
+must equal what the two-step path leaves on its search after the identical
+failure, and the scratch owner must come back with its capacities intact. The
+refusals before any work — short registers, a position from another subject —
+return the owner too, with the whole allowance unspent. Two further injected
+faults are caught: reporting the work the search started with, and returning a
+capacity request as a failure.
 
 `tests/run.rs` holds `Search::run` to `Search::new` or `Search::new_near`
 followed by `advance`: the answer, every capture, the position and the work left,

@@ -179,6 +179,19 @@ fn position_of(state: &State, layout: (u8, usize, usize)) -> Position {
     Position { mark, layout }
 }
 
+/// A search that failed, with what it leaves its caller: the error, the work
+/// it did not spend, and the scratch owner it was given.
+///
+/// [`Search::new`] followed by [`Search::advance`] leaves a failed search in
+/// hand, so a host can still read its remaining work and reclaim its buffers.
+/// A search that never became one returns them here instead of dropping them.
+#[derive(Debug)]
+pub struct RunError<E, B> {
+    pub error: SearchError<E>,
+    pub remaining_work: usize,
+    pub buffers: B,
+}
+
 /// How [`Search::run`] ended.
 // The paused variant is a whole `Search` and the finished one a fraction of
 // it. Boxing the large one would need an allocator this crate does not have,
@@ -279,6 +292,10 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
     /// `Search::new_near` — or `Search::new`, without `near` — followed by
     /// `advance(quantum)` would produce, and a paused search continues exactly
     /// as that one would.
+    // The error carries the caller's scratch owner back, which is the point of
+    // it; boxing it to satisfy the lint would need an allocator this crate does
+    // not have, as `rebuffer` records for the same reason.
+    #[allow(clippy::result_large_err)]
     pub fn run(
         resources: &'r R,
         start_utf16: usize,
@@ -286,7 +303,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
         buffers: B,
         budget: Budget,
         quantum: usize,
-    ) -> Result<Run<'r, R, B>, SearchError<R::Error>> {
+    ) -> Result<Run<'r, R, B>, RunError<R::Error, B>> {
         Self::run_with(
             resources,
             start_utf16,
@@ -300,6 +317,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
 
     /// [`Search::run`] for a search that answers only whether a match exists,
     /// as [`Search::without_captures`] makes one.
+    #[allow(clippy::result_large_err)]
     pub fn run_without_captures(
         resources: &'r R,
         start_utf16: usize,
@@ -307,10 +325,11 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
         buffers: B,
         budget: Budget,
         quantum: usize,
-    ) -> Result<Run<'r, R, B>, SearchError<R::Error>> {
+    ) -> Result<Run<'r, R, B>, RunError<R::Error, B>> {
         Self::run_with(resources, start_utf16, near, buffers, budget, quantum, true)
     }
 
+    #[allow(clippy::result_large_err)]
     fn run_with(
         resources: &'r R,
         start_utf16: usize,
@@ -319,7 +338,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
         mut budget: Budget,
         quantum: usize,
         boolean: bool,
-    ) -> Result<Run<'r, R, B>, SearchError<R::Error>> {
+    ) -> Result<Run<'r, R, B>, RunError<R::Error, B>> {
         // The length is not known until the views are held; a start past the
         // end is settled there, as `State::new` would have settled it.
         let mut state = State::new(start_utf16, usize::MAX);
@@ -329,47 +348,56 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
         let mut shape = None;
         let mut captures = 0;
         let mut layout = (0, 0, 0);
-        let result = resources
-            .with_views(|program, input| {
-                captures = program.capture_count();
-                layout = input.shape();
-                let mut scratch = buffers.scratch();
-                if scratch.registers.len() < program.register_count() {
-                    return Err(ExecError::Registers);
+        let result = resources.with_views(|program, input| {
+            captures = program.capture_count();
+            layout = input.shape();
+            let mut scratch = buffers.scratch();
+            if scratch.registers.len() < program.register_count() {
+                return Err(ExecError::Registers);
+            }
+            if let Some(near) = near {
+                if near.layout != layout {
+                    return Err(ExecError::ChangedResources);
                 }
-                if let Some(near) = near {
-                    if near.layout != layout {
-                        return Err(ExecError::ChangedResources);
-                    }
-                    state.near = near.mark;
-                }
-                if start_utf16 > input.len_utf16() {
-                    state.phase = Phase::Finished(false);
-                }
-                if quantum == 0 {
-                    shape = Some(Shape::new(program, input));
-                    return Ok(Progress::Pending);
-                }
-                let mut vm = Vm {
-                    program,
-                    input,
-                    cursor: input.cursor(),
-                    scratch: &mut scratch,
-                    state: &mut state,
-                    budget,
-                };
-                let result = vm.run(quantum);
-                vm.state.current = vm.cursor.mark();
-                budget = vm.budget;
-                if matches!(
-                    result,
-                    Ok(Progress::Pending) | Err(ExecError::Frames | ExecError::Undo)
-                ) {
-                    shape = Some(Shape::new(program, input));
-                }
-                result
-            })
-            .map_err(SearchError::Resource)?;
+                state.near = near.mark;
+            }
+            if start_utf16 > input.len_utf16() {
+                state.phase = Phase::Finished(false);
+            }
+            if quantum == 0 {
+                shape = Some(Shape::new(program, input));
+                return Ok(Progress::Pending);
+            }
+            let mut vm = Vm {
+                program,
+                input,
+                cursor: input.cursor(),
+                scratch: &mut scratch,
+                state: &mut state,
+                budget,
+            };
+            let result = vm.run(quantum);
+            vm.state.current = vm.cursor.mark();
+            budget = vm.budget;
+            if matches!(
+                result,
+                Ok(Progress::Pending) | Err(ExecError::Frames | ExecError::Undo)
+            ) {
+                shape = Some(Shape::new(program, input));
+            }
+            result
+        });
+        let result = match result {
+            Ok(result) => result,
+            // The views were never acquired, so no work was charged.
+            Err(error) => {
+                return Err(RunError {
+                    error: SearchError::Resource(error),
+                    remaining_work: budget.remaining(),
+                    buffers,
+                });
+            }
+        };
         let paused = match result {
             Ok(Progress::Pending) => None,
             Ok(progress) => {
@@ -383,15 +411,28 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
                 }));
             }
             Err(error @ (ExecError::Frames | ExecError::Undo)) => Some(error),
-            Err(error) => return Err(SearchError::Execution(error)),
+            Err(error) => {
+                return Err(RunError {
+                    error: SearchError::Execution(error),
+                    remaining_work: budget.remaining(),
+                    buffers,
+                });
+            }
         };
         state.blocked = paused;
+        // The shape is built in the views whenever the search did not decide,
+        // including a zero quantum, which returns before running.
+        let Some(shape) = shape else {
+            return Err(RunError {
+                error: SearchError::Execution(ExecError::InvalidProgram),
+                remaining_work: budget.remaining(),
+                buffers,
+            });
+        };
         Ok(Run::Paused(Search {
             resources,
             buffers,
-            // Built in the views whenever the search did not decide, including
-            // a zero quantum, which returns before running.
-            shape: shape.ok_or(SearchError::Execution(ExecError::InvalidProgram))?,
+            shape,
             state,
             budget,
         }))

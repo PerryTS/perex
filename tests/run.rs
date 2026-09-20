@@ -63,6 +63,7 @@ impl ImmutableSubject for Owner {
     }
 }
 
+#[derive(Debug)]
 struct Buffers {
     registers: Vec<usize>,
     frames: Vec<Frame>,
@@ -234,7 +235,7 @@ fn a_run_answers_as_a_new_search_advanced_by_the_same_quantum() {
                             Budget::new(WORK),
                             quantum,
                         )
-                        .unwrap();
+                        .unwrap_or_else(|e| panic!("{:?}", e.error));
                         let answer = match run {
                             Run::Finished(mut finished) => {
                                 decided += 1;
@@ -301,7 +302,7 @@ fn a_boolean_run_answers_without_captures() {
                     Budget::new(WORK),
                     quantum,
                 )
-                .unwrap();
+                .unwrap_or_else(|e| panic!("{:?}", e.error));
                 let (outcome, remaining) = match run {
                     Run::Finished(mut finished) => {
                         assert_eq!(finished.capture(0), Err(ExecError::Captures), "{context}");
@@ -338,23 +339,35 @@ fn a_run_refuses_what_a_new_search_refuses() {
     };
     let mut short = Buffers::new(8, 8);
     short.registers.truncate(3);
+    // A refused run hands the scratch owner back with the work it did not
+    // spend, where a failed `Search` would have been left in hand.
+    let refused = Search::run(&resources, 0, None, short, Budget::new(WORK), 4096)
+        .err()
+        .expect("short registers must be refused");
     assert!(matches!(
-        Search::run(&resources, 0, None, short, Budget::new(WORK), 4096),
-        Err(SearchError::Execution(ExecError::Registers))
+        refused.error,
+        SearchError::Execution(ExecError::Registers)
     ));
+    assert_eq!(refused.remaining_work, WORK);
+    assert_eq!(refused.buffers.registers.len(), 3);
     let other = Owner::new("a", "", "a much longer subject");
     let elsewhere = position(&other, 3);
+    let refused = Search::run(
+        &resources,
+        0,
+        Some(elsewhere),
+        Buffers::new(8, 8),
+        Budget::new(WORK),
+        4096,
+    )
+    .err()
+    .expect("a position from another subject must be refused");
     assert!(matches!(
-        Search::run(
-            &resources,
-            0,
-            Some(elsewhere),
-            Buffers::new(8, 8),
-            Budget::new(WORK),
-            4096
-        ),
-        Err(SearchError::Execution(ExecError::ChangedResources))
+        refused.error,
+        SearchError::Execution(ExecError::ChangedResources)
     ));
+    assert_eq!(refused.remaining_work, WORK);
+    assert_eq!(refused.buffers.frames.len(), 8);
     // A zero quantum does no work and hands the search back.
     match Search::run(
         &resources,
@@ -409,5 +422,62 @@ fn a_run_refuses_what_a_new_search_refuses() {
             assert_eq!(&buffers.registers[..6], &[1, 3, 1, 2, 2, 3]);
         }
         Run::Paused(_) => panic!("a short search paused"),
+    }
+}
+
+#[test]
+fn a_failed_run_reports_its_work_and_returns_its_scratch() {
+    // Exponential backtracking against an allowance it cannot finish in, so
+    // the failure happens inside the run rather than before it.
+    let owner = Owner::new("(a+)+b", "", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaac");
+    let program = BoundProgram::new(&owner, &mut Budget::new(WORK)).unwrap();
+    let bound = BoundSubject::new(&owner).unwrap();
+    let resources = BoundResources {
+        program: &program,
+        subject: &bound,
+    };
+    for allowance in [1, 2, 64, 5_000] {
+        let context = format!("allowance {allowance}");
+        // What the two-step path leaves in hand after the same failure.
+        let mut reference = Search::new(
+            &resources,
+            0,
+            Buffers::new(1024, 4096),
+            Budget::new(allowance),
+        )
+        .unwrap();
+        let expected = loop {
+            match reference.advance(usize::MAX) {
+                Ok(Progress::Pending) => owner.relocate(),
+                Ok(progress) => panic!("{context}: decided as {progress:?}"),
+                Err(SearchError::Execution(error)) => break error,
+                Err(SearchError::Resource(error)) => panic!("{error:?}"),
+            }
+        };
+        assert_eq!(expected, ExecError::WorkLimit, "{context}");
+        let remaining = reference.remaining_work();
+        let returned = reference.into_buffers();
+        assert_eq!(returned.frames.len(), 1024, "{context}");
+
+        let failed = Search::run(
+            &resources,
+            0,
+            None,
+            Buffers::new(1024, 4096),
+            Budget::new(allowance),
+            usize::MAX,
+        )
+        .err()
+        .unwrap_or_else(|| panic!("{context}: a run that cannot finish must fail"));
+        assert!(
+            matches!(failed.error, SearchError::Execution(ExecError::WorkLimit)),
+            "{context}: {:?}",
+            failed.error
+        );
+        // The work it did not spend, and the buffers it was given, both come
+        // back — which is what the two-step path leaves readable on its search.
+        assert_eq!(failed.remaining_work, remaining, "{context}");
+        assert_eq!(failed.buffers.frames.len(), 1024, "{context}");
+        assert_eq!(failed.buffers.undo.len(), 4096, "{context}");
     }
 }
