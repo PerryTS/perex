@@ -359,3 +359,63 @@ matches costs a round through admission, one through the candidate scan and
 trial, and one through the answer, each doing bounds-checked work, where V8
 runs native code. The three changes removed what could be removed without
 removing a round a paused search needs, and what is left is those rounds.
+
+## Package-shaped searches, 2026-09-27
+
+Perry's package benchmarks attributed about a sixth of Perry's excess over
+Node across eleven npm packages to regular expressions, three quarters of it in
+this matcher. The patterns doing the work were not long scans but short
+subjects with counted, folded and lazy repeats: uuid's `validate`
+(`[0-9a-f]{8}-…` under `i`), jws's `JWS_REGEX` (`[a-zA-Z0-9\-_]+?\.` twice),
+dotenv's line pattern (`\s*` everywhere, `[^#\r\n]+`), date-fns and dayjs
+format tokens. Each of those spent its time in phase round trips per character
+that no scan could shortcut:
+
+- a folded class ran the resumable class phase for every character, and so
+  could not use the inline scan or the byte run ([casefold](casefold.md));
+- a counted repeat's owed characters, a bounded allowance and a lazy minimum
+  were decided one per round trip ([repetition](repetition.md));
+- a lazy repeat committed, ran its continuation, failed, rolled back and
+  extended, six round trips per character ([repetition](repetition.md));
+- `\s` has ten ranges, two more than the inline class test took;
+- every plain class instruction built and tore down the class phase
+  ([classes](classes.md)).
+
+Instructions per search (`perf stat -e instructions:u`, user space, the
+difference between 11,000 and 1,000 searches divided by 10,000, so setup
+cancels), one warm `find` from position 0 with reused scratch, both arms built
+from the same driver against this crate at `3fcc37e` (0.1.10) and with these
+changes, on one otherwise idle AMD EPYC 9254 host:
+
+| Case | Pattern | 0.1.10 | Now | Change |
+|---|---|---:|---:|---:|
+| uuid | `^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\|0{8}-…\|f{8}-…)$/i` | 20,211 | 5,891 | −70.9% |
+| uuid, unfolded | the same without `i` | 15,202 | 5,680 | −62.6% |
+| jws | `^[a-zA-Z0-9\-_]+?\.[a-zA-Z0-9\-_]+?\.([a-zA-Z0-9\-_]+)?$` on a 155-character token | 89,373 | 13,491 | −84.9% |
+| dotenv | dotenv's line pattern, `mg`, first line of a 36-line document | 38,569 | 36,719 | −4.8% |
+| split piece | `%..\|.` on `hello%20world` | 1,342 | 1,346 | +0.3% |
+| cron | `^l-\d{1,2}$/i` | 2,828 | 2,054 | −27.4% |
+| digits | `^\d+$` on seven digits | 2,345 | 2,059 | −12.2% |
+| short literal | `needle` in 29 characters | 1,386 | 1,389 | +0.2% |
+| captures | `(\w+)@(\w+)\.com` | 7,950 | 6,881 | −13.4% |
+| class repeat | `[a-z]+[0-9]+` | 10,621 | 10,116 | −4.8% |
+| word run | `\w+!` over 60 characters | 3,185 | 2,869 | −9.9% |
+| folded literal | `needle/i` | 1,754 | 1,758 | +0.2% |
+| alternation | `cat\|dog\|bird` after 200 characters | 4,673 | 4,678 | +0.1% |
+| lookbehind | `(?<=\$)\d+` | 2,346 | 2,058 | −12.3% |
+| lazy any | `<(.+?)>` | 7,653 | 2,592 | −66.1% |
+| trim | `^\s+\|\s+$` on 18 characters | 4,390 | 2,596 | −40.9% |
+| backreference | `(\w)\1` | 6,245 | 5,577 | −10.7% |
+| format tokens | dayjs-style `\[([^\]]+)]\|Y{1,4}\|M{1,4}\|…`, `g` | 4,374 | 3,340 | −23.6% |
+| property | `\p{L}+/u` | 2,941 | 2,814 | −4.3% |
+| long miss | `zzz` over 1,000 characters | 2,065 | 2,070 | +0.2% |
+
+The five `+0.x%` rows are searches whose paths these changes do not alter;
+they move by three to five instructions a search, and where those few come from
+was not isolated. The per
+search floor ([above](#the-floor-and-what-it-is)) is untouched: `%..|.` on its
+first character, the piece `String.prototype.split` pays per match, is still
+about 1,340 instructions, most of it the dispatcher rounds and trial setup.
+Measured in Perry on the same host, where these patterns run through the host
+runtime, `uuid`'s `REGEX.test` fell from 23,500 to 8,225 instructions per call
+and `JWS_REGEX.test` from 96,711 to 15,394.

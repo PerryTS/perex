@@ -16,3 +16,26 @@ The format version also binds Unicode semantics; a later Unicode update must
 explicitly version compatibility. Unicode character properties are implemented,
 while Unicode sets/string properties (`v`), full conformance, host integration,
 efficient suspension/resumption and per-case CPU/RSS acceptance remain outstanding.
+
+## Small folded classes are closed at compile time
+
+A folded class tested each subject character by computing its case equivalents
+and searching the class for any of them, and that search is the resumable class
+phase, so a repeated folded class could not use the inline scan or the byte run
+either. `/[0-9a-f]{8}/i` cost about five hundred instructions a character.
+
+Equivalence is symmetric — `equivalents` walks one cycle of a family from any
+of its members — so a character has an equivalent in the class exactly when it
+is in the class's case closure: every character some member is equivalent to.
+A folded class of at most 256 characters with no property is therefore compiled
+to its closure, sorted and merged, as an unfolded class. `[0-9a-f]` closes to
+three ranges, `[a-z]` under `u` to `[A-Za-z\u017f\u212a]`. Negation applies to
+membership either way and is kept. Larger classes, and classes holding a
+property, keep folding at match time.
+
+`folded_class_closure_matches_match_time_folding` in `tests/classes.rs` compares
+each closed class with the same class plus the Private Use Area, which has no
+case mappings and is too large to close, over the BMP's cased blocks and the
+astral ones, plain and negated, under `i` and `iu`. Dropping one equivalent from
+the closure fails it. `tools/check-casefold.mjs` and `tools/check-classes.mjs`
+supply Node's answers for the same forms.

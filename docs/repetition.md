@@ -181,8 +181,9 @@ large for one step; for the small classes ordinary patterns repeat, building it
 and taking it apart again costs several times the membership test itself, and
 this is the engine's hottest loop.
 
-A plain class of at most eight ranges is now tested in the scan, which leaves
-the step bounded in the same way the sorted-class search is. Folding, sorted
+A plain class of at most sixteen ranges (eight when this landed; `\s` has ten,
+so it kept the phase until the bound was raised) is now tested in the scan,
+which leaves the step bounded in the same way the sorted-class search is. Folding, sorted
 classes and larger ones keep the phase. Work is charged per range exactly as
 before, and a charge that fails hands the character to the phase, which re-tests
 the class from its first range, so resumption is unchanged.
@@ -291,3 +292,63 @@ and in the same units: `/a+!/` to 87.8 ns against V8's 38.0, `/[a-z]+!/` to
 against 39.5. These remain the shapes furthest behind V8 after the flat
 per-search cost in [performance](performance.md), which about forty-six of
 each of those nanoseconds is.
+
+## Counted minimums and bounded allowances as runs
+
+The run loop and the byte run above served one case: a greedy unbounded repeat
+that had already met its minimum. Everything else — the characters a repeat
+still owes (`{8}`, the one character `+` owes), a bounded allowance (`{1,3}`)
+and a lazy repeat's minimum — went one character per phase round trip, each
+re-reading the repeat record and rewriting the work state twice. For a counted
+repeat that is every character: `[0-9a-f]{8}` cost about four hundred
+instructions a character.
+
+Within its quota a repeat's characters are decided by the atom alone. The quota
+is the minimum still owed plus, for a greedy repeat, its remaining allowance
+(unbounded when it has none); a lazy repeat's quota is its minimum. So the same
+two loops now take the whole quota, spending the owed count first, then the
+allowance, and recording the minimum's end where the ordinary step records it.
+A run that ends short of the minimum fails, and one that stops at a character
+the atom rejects commits, both as the ordinary step decides them; a run that
+takes its whole quota commits without the extra round trip the next scan would
+have spent finding nothing left to take. Every character is charged exactly as
+the ordinary step charges it, and the quantum still bounds each call, so a
+paused search reaches the same total.
+
+## Taking a lazy repeat past endpoints its continuation cannot start at
+
+A lazy repeat commits each endpoint by pushing a retry frame and running its
+continuation. When the continuation's first consumed instruction rejects the
+next character, the continuation fails there having consumed and changed
+nothing (the `SAVE`s before it are rolled back), the frame is popped, and the
+repeat extends by one character: six phase round trips per character for
+`/^[a-z]+?\./`. The state that sequence reaches is exactly the one extending
+directly reaches.
+
+So a commit first looks past the `SAVE`s at the continuation's first consumed
+instruction, the same condition [retreating](#retreating-past-endpoints-the-continuation-cannot-start-at)
+uses: a literal, folded or not, an inline class or `.`, or a repeat of one of
+those that owes at least one character. While the next character is one that
+condition rejects, the repeat extends directly, each character decided by the
+repeat's own atom and charged as the extension step charges it. Where the atom
+rejects the character, or the allowance is spent, the retry the commit would
+have left fails, and so does this. The endpoint the continuation could start
+at, and the end of the input, go to the ordinary commit. The condition's own
+test is not charged, because a commit that asks for more frames is resumed and
+asks it again; a quantum that runs out part-way resumes the same commit on the
+next round, so a paused search reaches the same total.
+
+Over ASCII storage the endpoints are walked as bytes: a folded ASCII literal is
+its two cases there, since no character that folds into ASCII from outside it
+can occur in that storage, and a literal outside ASCII can never start there at
+all unless it is folded, which keeps the character path.
+
+### Checks
+
+`counted_runs_and_lazy_skips_keep_general_vm_captures_and_errors` in
+`tests/atom_repeat.rs` compares these patterns, in all four `i`/`u`
+combinations over byte and UTF-16 storage, against the general repetition
+instructions of the same VM, including every insufficient work allowance. A
+change that skipped an endpoint the continuation could start at fails it
+(checked by breaking the condition on purpose). The resumption tests and the
+paused and relocating runs of `tools/check-atom-filter.mjs` cover pausing.

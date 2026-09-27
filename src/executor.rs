@@ -1118,6 +1118,65 @@ impl Vm<'_, '_, '_, '_> {
             },
         };
     }
+    /// Decide an unfolded class for one character without the resumable class
+    /// phase, when the decision fits in the batch that phase would take: the
+    /// same ranges examined in the same order, each charged exactly as
+    /// `class_step` charges it, so totals are unchanged at any quantum.
+    /// Building that phase and taking it apart again cost more than the test
+    /// itself on most classes. `None` when the phase is needed: a sorted class
+    /// with no quantum left, or more ranges than one batch covers.
+    #[inline]
+    fn class_decide(
+        &mut self,
+        a: u32,
+        b: u32,
+        c: u32,
+        sorted: bool,
+        available: usize,
+    ) -> Result<Option<bool>, ExecError> {
+        let (index, end, negated) = (a, a + (b & !NEGATED), b & NEGATED != 0);
+        if sorted {
+            if available == 0 {
+                return Ok(None);
+            }
+            let (mut low, mut high) = (index, end);
+            while low < high {
+                self.charge(1)?;
+                let middle = low + (high - low) / 2;
+                let [lo, hi] = self.program.range(middle as usize);
+                if c < lo {
+                    high = middle;
+                } else if c > hi {
+                    low = middle + 1;
+                } else {
+                    return Ok(Some(!negated));
+                }
+            }
+            return Ok(Some(negated));
+        }
+        if (end - index) as usize > available.min(256) {
+            return Ok(None);
+        }
+        for index in index..end {
+            self.charge(1)?;
+            let [lo, hi] = self.program.range(index as usize);
+            let found = if lo & PROPERTY != 0 {
+                let inside = properties::contains(lo & !PROPERTY, c);
+                // A `v` complement (kind 2): see `class_step`.
+                if hi == 2 {
+                    !inside
+                } else {
+                    inside != (hi != 0)
+                }
+            } else {
+                c >= lo && c <= hi
+            };
+            if found {
+                return Ok(Some(!negated));
+            }
+        }
+        Ok(Some(negated))
+    }
     fn class_step(&mut self, available: usize) -> Result<(), ExecError> {
         let Phase::Class {
             index,
@@ -1456,7 +1515,7 @@ impl Vm<'_, '_, '_, '_> {
                 Phase::AtomScan => self.atom_scan(false, available)?,
                 Phase::AtomExtend => self.atom_scan(true, available)?,
                 Phase::AtomResult { matched, extend } => self.atom_result(matched, extend)?,
-                Phase::AtomCommit => self.atom_commit()?,
+                Phase::AtomCommit => self.atom_commit(available)?,
                 Phase::AtomRetreat => self.atom_retreat(available)?,
                 Phase::Named {
                     group,
@@ -1743,6 +1802,12 @@ impl Vm<'_, '_, '_, '_> {
             }
             CLASS | CLASS_I | CLASS_SORTED | CLASS_SORTED_I => {
                 if let Some(c) = self.read() {
+                    if matches!(op, CLASS | CLASS_SORTED)
+                        && let Some(found) =
+                            self.class_decide(a, b, c, op == CLASS_SORTED, available)?
+                    {
+                        return Ok(if found { Step::Next } else { Step::Fail });
+                    }
                     self.begin_class(
                         a,
                         b,

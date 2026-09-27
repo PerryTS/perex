@@ -52,7 +52,7 @@ const RETREAT_SCAN: usize = 8;
 /// Ranges a repeated class may hold and still be tested in one step. The step
 /// stays bounded work, like the sorted-class search, while covering the small
 /// classes ordinary patterns repeat.
-const ATOM_CLASS_RANGES: u32 = 8;
+const ATOM_CLASS_RANGES: u32 = 16;
 
 impl Vm<'_, '_, '_, '_> {
     fn atom_state(&self) -> Result<AtomState, ExecError> {
@@ -78,15 +78,23 @@ impl Vm<'_, '_, '_, '_> {
 
     /// Membership for an atom `inline_atom` accepted.
     fn atom_holds(&mut self, op: u32, a: u32, b: u32, c: u32) -> Result<bool, ExecError> {
-        Ok(match op {
+        if op == CLASS {
+            // Charged for the whole class rather than per range examined.
+            // A byte scan cannot know which range matched, and a paused
+            // search must reach the same total as an unpaused one, so the
+            // cost of a repeated class is its size either way.
+            self.charge((b & !NEGATED) as usize)?;
+        }
+        Ok(self.atom_member(op, a, b, c))
+    }
+
+    /// `atom_holds` without its charge, for a test that decides no step of its
+    /// own and so must not pay again when the step it serves is resumed.
+    fn atom_member(&self, op: u32, a: u32, b: u32, c: u32) -> bool {
+        match op {
             CHAR => equal(self.program, c, a, false),
             ANY | ANY_S => op == ANY_S || !line_terminator(c),
             _ => {
-                // Charged for the whole class rather than per range examined.
-                // A byte scan cannot know which range matched, and a paused
-                // search must reach the same total as an unpaused one, so the
-                // cost of a repeated class is its size either way.
-                self.charge((b & !NEGATED) as usize)?;
                 let mut found = false;
                 for index in a..a + (b & !NEGATED) {
                     let [lo, hi] = self.program.range(index as usize);
@@ -105,7 +113,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 found != (b & NEGATED != 0)
             }
-        })
+        }
     }
 
     /// The charge one character of this atom always costs, when that is the
@@ -309,17 +317,25 @@ impl Vm<'_, '_, '_, '_> {
             return Err(ExecError::InvalidProgram);
         }
         let [op, a, b] = self.program.instruction(self.state.pc + 3);
-        // Once a greedy unbounded repeat has met its minimum, consuming another
-        // character changes no counter: it only advances the cursor. Walking
-        // that run here instead of one character per phase round trip avoids
-        // re-reading the repeat record and rewriting the work state twice each
-        // time. Every decision still belongs to the code below, which re-reads
-        // the character the run stopped at.
-        if !extend && r[2] & 2 == 0 && infinite && atom.needed == 0 && self.inline_atom(op, b) {
-            // The most one character can charge: its own unit plus a range
-            // walk. Keeping that much quantum and budget in hand means no
-            // charge inside the loop can fail, so the cursor never stops
-            // between a character's read and its decision.
+        // Characters this scan may consume before anything but the atom itself
+        // decides: the minimum still owed, then, for a greedy repeat, its
+        // remaining allowance (unbounded when it has none). A lazy repeat stops
+        // at its minimum. Within that quota each consumed character only
+        // advances the cursor and a counter, so it is walked here instead of
+        // one character per phase round trip, which re-reads the repeat record
+        // and rewrites the work state twice per character. Every character is
+        // charged exactly as the ordinary step below charges it, and the
+        // character a run stops at is decided by that step, as before.
+        let lazy = r[2] & 2 != 0;
+        let allowance = if lazy {
+            0
+        } else if infinite {
+            usize::MAX
+        } else {
+            atom.remaining as usize
+        };
+        let quota = (atom.needed as usize).saturating_add(allowance);
+        if !extend && quota != 0 && self.inline_atom(op, b) {
             // A fixed-charge atom over ASCII storage is walked as bytes. The
             // charge is identical to deciding each character separately, so a
             // pause still reaches the same total, and the cursor moves once.
@@ -336,9 +352,18 @@ impl Vm<'_, '_, '_, '_> {
                 } else {
                     (available / per).min(self.budget.remaining() / per)
                 };
+                let limit = limit.min(quota);
                 let run = Self::byte_run(bytes, start, accepts, limit);
                 if run != 0 {
                     self.charge(run * per)?;
+                    let owed = (atom.needed as usize).min(run);
+                    if owed != 0 {
+                        atom.needed -= owed as u32;
+                        atom.minimum_end = start + owed;
+                    }
+                    if !infinite && !lazy {
+                        atom.remaining -= (run - owed) as u32;
+                    }
                     atom.before = self
                         .input
                         .cursor_at(start + run - 1)
@@ -349,6 +374,13 @@ impl Vm<'_, '_, '_, '_> {
                         .cursor_at(start + run)
                         .ok_or(ExecError::InvalidProgram)?;
                     self.state.work = Work::Atom(atom);
+                    if run == quota {
+                        // The minimum is met and nothing more may be taken
+                        // without a decision: commit, which is where the next
+                        // round of this phase would go.
+                        self.state.phase = Phase::AtomCommit;
+                        return Ok(());
+                    }
                 }
                 // The stopping character is left to the ordinary step below,
                 // which charges and decides it exactly as it always has.
@@ -356,10 +388,18 @@ impl Vm<'_, '_, '_, '_> {
                     return Ok(());
                 }
             }
+            let quota = (atom.needed as usize).saturating_add(if lazy {
+                0
+            } else if infinite {
+                usize::MAX
+            } else {
+                atom.remaining as usize
+            });
             let cost = 1 + if op == CLASS { b & !NEGATED } else { 0 } as usize;
             let mut used = 0;
+            let mut taken = 0;
             let mut ended = false;
-            while used + cost <= available && self.budget.remaining() > cost {
+            while taken < quota && used + cost <= available && self.budget.remaining() > cost {
                 let before = self.cursor.mark();
                 // Charged in the same order as the ordinary step: the character
                 // first, then whatever deciding it costs. A pause must not
@@ -375,17 +415,33 @@ impl Vm<'_, '_, '_, '_> {
                     ended = true;
                     break;
                 }
+                if atom.needed > 0 {
+                    atom.needed -= 1;
+                    atom.minimum_end = self.cursor.position();
+                } else if !infinite {
+                    atom.remaining -= 1;
+                }
                 atom.before = before;
                 used += cost;
+                taken += 1;
             }
             self.state.work = Work::Atom(atom);
             if ended {
                 // The run stops here. This is the same conclusion the ordinary
                 // step reaches, taken without charging the stopping character
-                // twice, and the run's end is recorded for the next start.
+                // twice, and the run's end is recorded for the next start. A
+                // run that stops short of its minimum fails, as there.
                 if self.program.run_skip() == Some(self.state.pc) {
                     self.state.run_end = self.cursor.position();
                 }
+                self.state.phase = if atom.needed != 0 {
+                    Phase::Fail
+                } else {
+                    Phase::AtomCommit
+                };
+                return Ok(());
+            }
+            if taken != 0 && taken == quota {
                 self.state.phase = Phase::AtomCommit;
                 return Ok(());
             }
@@ -490,13 +546,17 @@ impl Vm<'_, '_, '_, '_> {
         Ok(())
     }
 
-    pub(super) fn atom_commit(&mut self) -> Result<(), ExecError> {
+    pub(super) fn atom_commit(&mut self, available: usize) -> Result<(), ExecError> {
         let atom = self.atom_state()?;
         let r = self.atom_record()?;
         if atom.needed != 0 {
             return Err(ExecError::InvalidProgram);
         }
         let lazy = r[2] & 2 != 0;
+        if lazy && (r[2] & 1 != 0 || atom.remaining != 0) && self.lazy_skip(r, available)? {
+            return Ok(());
+        }
+        let atom = self.atom_state()?;
         let retry = if lazy {
             r[2] & 1 != 0 || atom.remaining != 0
         } else {
@@ -516,6 +576,189 @@ impl Vm<'_, '_, '_, '_> {
         self.state.work = Work::Idle;
         self.state.phase = Phase::Trial;
         Ok(())
+    }
+
+    /// A condition the first character a continuation consumes must meet, for
+    /// the continuation starting at `at`: the `SAVE`s before it consume nothing
+    /// and cannot fail, so they are looked past, as a retreat does. `None` when
+    /// the continuation states no such condition this can test in one step.
+    fn continuation_probe(&self, at: usize) -> Option<[u32; 3]> {
+        let mut at = at;
+        let mut skipped = 0;
+        while skipped < RETREAT_SCAN
+            && at < self.program.instructions()
+            && self.program.instruction(at)[0] == SAVE
+        {
+            at += 1;
+            skipped += 1;
+        }
+        if at >= self.program.instructions() {
+            return None;
+        }
+        let [next, value, third] = self.program.instruction(at);
+        let probe = if next == ATOM_REPEAT {
+            let inner = self.program.repeat(value as usize);
+            let body = at + 3;
+            (inner[0] >= 1 && body < self.program.instructions())
+                .then(|| self.program.instruction(body))?
+        } else {
+            [next, value, third]
+        };
+        (matches!(probe[0], CHAR | CHAR_I) || self.inline_atom(probe[0], probe[2])).then_some(probe)
+    }
+
+    /// Take a lazy repeat past the endpoints its continuation cannot start at.
+    ///
+    /// Committing a lazy repeat's endpoint pushes a retry frame and runs the
+    /// continuation; when the continuation's first consumed character fails
+    /// there, the frame is popped, rolled back and the repeat extended by one
+    /// character, which is decided by the phase round trips after it. At an
+    /// endpoint whose next character the continuation's first consumed
+    /// instruction rejects, all of that reaches the same state as extending
+    /// directly: the continuation consumed nothing and changed nothing before
+    /// failing, and its `SAVE`s, if any, are undone by the rollback. So this
+    /// extends directly while that holds, and leaves the endpoint the
+    /// continuation could start at, if any, to the ordinary commit. The
+    /// repeat's own atom decides each character exactly as an extension would;
+    /// where it rejects one, or the allowance runs out, the retry the commit
+    /// would have left fails, and so does this.
+    ///
+    /// Each skipped endpoint is charged one for the character and whatever its
+    /// atom test costs, as an extension step is, and at least one endpoint is
+    /// taken per call; a skip the quantum interrupts resumes in this same phase,
+    /// so a paused skip reaches the same total. Returns whether this left the
+    /// phase decided (a failure, or more to walk on a later round); `false`
+    /// sends the endpoint to the ordinary commit.
+    #[inline(never)]
+    fn lazy_skip(&mut self, r: [u32; 8], available: usize) -> Result<bool, ExecError> {
+        let [op, a, b] = self.program.instruction(self.state.pc + 3);
+        if !self.inline_atom(op, b) {
+            return Ok(false);
+        }
+        let Some([next, value, third]) = self.continuation_probe(r[4] as usize) else {
+            return Ok(false);
+        };
+        let mut atom = self.atom_state()?;
+        let infinite = r[2] & 1 != 0;
+        let cost = 1 + if op == CLASS { b & !NEGATED } else { 0 } as usize;
+        let limit = available.min(256).max(cost);
+        let mut used = 0;
+        // Over ASCII storage the endpoints are bytes. Walk the ones the
+        // continuation rejects and the atom accepts as a byte scan, charging
+        // each exactly as the step below does; the endpoint it stops at is
+        // decided by that step.
+        if !self.state.reverse
+            && let Some(bytes) = self.input.ascii_bytes()
+            && let Some((per, accepts)) = self.fixed_atom_charge(op, a, b)
+            && per == cost
+        {
+            // Where the continuation could start: its literal's byte (either
+            // case of a folded ASCII letter, as `equal` decides it on ASCII
+            // storage), or its first atom's byte predicate.
+            let stops = match next {
+                CHAR | CHAR_I if value < 128 => {
+                    let byte = value as u8;
+                    let folded = next == CHAR_I && byte.is_ascii_alphabetic();
+                    Some(if folded {
+                        AtomBytes::Ranges(
+                            {
+                                let mut ranges = [(0, 0); ATOM_CLASS_RANGES as usize];
+                                ranges[0] = (byte | 32, byte | 32);
+                                ranges[1] = (byte & !32, byte & !32);
+                                ranges
+                            },
+                            2,
+                            false,
+                        )
+                    } else {
+                        AtomBytes::Inside(byte, byte)
+                    })
+                }
+                // A literal outside ASCII: an unfolded one never occurs in
+                // this storage, and a folded one is left to the step below.
+                CHAR => Some(AtomBytes::Outside(0, 127)),
+                CHAR_I => None,
+                _ => self.fixed_atom_charge(next, value, third).map(|(_, p)| p),
+            };
+            if let Some(stops) = stops {
+                let start = self.cursor.position();
+                let mut end = start;
+                let most = (limit / cost).min(if infinite {
+                    usize::MAX
+                } else {
+                    atom.remaining as usize
+                });
+                while end < bytes.len()
+                    && end - start < most
+                    && !stops.holds(bytes[end])
+                    && accepts.holds(bytes[end])
+                {
+                    end += 1;
+                }
+                let taken = end - start;
+                if taken != 0 {
+                    self.charge(taken * cost)?;
+                    if !infinite {
+                        atom.remaining -= taken as u32;
+                    }
+                    atom.before = self
+                        .input
+                        .cursor_at(end - 1)
+                        .ok_or(ExecError::InvalidProgram)?
+                        .mark();
+                    self.cursor = self.input.cursor_at(end).ok_or(ExecError::InvalidProgram)?;
+                    used = taken * cost;
+                }
+            }
+        }
+        loop {
+            let before = self.cursor.mark();
+            let found = self.read();
+            self.restore(before);
+            let Some(c) = found else {
+                // Neither the continuation nor an extension can consume
+                // anything here; the retry the commit leaves would fail.
+                return Ok(false);
+            };
+            // Uncharged: a commit that asks for more frames is resumed and
+            // asks this again, and must not pay for it twice.
+            let possible = match next {
+                CHAR | CHAR_I => equal(self.program, c, value, next == CHAR_I),
+                _ => self.atom_member(next, value, third, c),
+            };
+            if possible {
+                self.state.work = Work::Atom(atom);
+                return Ok(false);
+            }
+            if used + cost > limit {
+                // The quantum is spent: resume this same commit on the next
+                // round, so where a pause falls changes no total.
+                self.state.work = Work::Atom(atom);
+                return Ok(true);
+            }
+            if !infinite && atom.remaining == 0 {
+                // No retry frame would be left, and the continuation fails.
+                self.state.work = Work::Atom(atom);
+                self.state.phase = Phase::Fail;
+                return Ok(true);
+            }
+            self.charge(1)?;
+            if !self.atom_holds(op, a, b, c)? {
+                // The extension the retry would try fails at this character.
+                self.state.work = Work::Atom(atom);
+                if self.program.run_skip() == Some(self.state.pc) {
+                    self.state.run_end = self.cursor.position();
+                }
+                self.state.phase = Phase::Fail;
+                return Ok(true);
+            }
+            self.read();
+            if !infinite {
+                atom.remaining -= 1;
+            }
+            atom.before = before;
+            used += cost;
+        }
     }
 
     pub(super) fn atom_retreat(&mut self, available: usize) -> Result<(), ExecError> {

@@ -297,3 +297,75 @@ fn literal_retry_filter_keeps_general_vm_captures_and_errors() {
         }
     }
 }
+
+/// Counted repeats walked as runs, and lazy repeats taken past endpoints their
+/// continuation cannot start at, give the general VM's answers and captures,
+/// and every insufficient work allowance still fails without output.
+#[test]
+fn counted_runs_and_lazy_skips_keep_general_vm_captures_and_errors() {
+    for source in [
+        r"^([0-9a-f]{8})-([0-9a-f]{4})$",
+        r"^(?:[0-9a-f]{2}-[0-9a-f]{3}|0{2}-0{3})$",
+        r"^([a-z]{2,4}?)\.([a-z]+)$",
+        r"^([a-z]+?)\.([a-z]+?)\.([a-z]+)?$",
+        r"^(\w+?)(\d+)$",
+        r"<(.+?)>",
+        r"^(\s{2,})(\S+?)\s*$",
+        r"^([^,]{1,3}?),",
+        r"(?<=^([a-z]+?)\.)x",
+        r"^(x{2,3}?)k",
+        r"^(.+?)ſ",
+        r"^([a-z]{1,2}?)K",
+        r"^(\d{1,2})\D",
+        r"^([a-z]+?)(?:\.|$)",
+    ] {
+        for flags in ["", "u", "i", "ui"] {
+            let optimized = words(source, flags);
+            let original = general(optimized.clone());
+            for subject in [
+                "",
+                "3b241101-e2bb",
+                "3B241101-E2BB",
+                "ab-cde",
+                "00-000",
+                "abc.def",
+                "aBc.dEf.gh",
+                "a.b.",
+                "abc123",
+                "<a><bb>",
+                "   word  ",
+                "ab,cd",
+                "abcd,",
+                "abc.x",
+                "xxxk",
+                "xxK",
+                "xxxxk",
+                "abſ",
+                "abS",
+                "ak",
+                "a\u{212a}",
+                "12x",
+                "123x",
+                "é.é.é",
+                "😀.a.b",
+            ] {
+                let units: Vec<_> = subject.encode_utf16().collect();
+                for input in [Input::utf8(subject), Input::utf16(&units)] {
+                    let a = execute(&optimized, input, 1024, 8192, 2_000_000);
+                    let b = execute(&original, input, 1024, 8192, 2_000_000);
+                    assert_eq!((&a.0, &a.1), (&b.0, &b.1), "{source} {flags} {subject}");
+                    for allowance in 0..a.2 {
+                        let (error, captures, _) =
+                            execute(&optimized, input, 1024, 8192, allowance);
+                        assert_eq!(
+                            error,
+                            Err(ExecError::WorkLimit),
+                            "{source} {flags} {subject} {allowance}"
+                        );
+                        assert!(captures.iter().all(|s| *s == Span::new(900, 901)));
+                    }
+                }
+            }
+        }
+    }
+}
