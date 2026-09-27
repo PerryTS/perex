@@ -34,3 +34,14 @@ instructions, corrupt ordering, and complete captures/work across relocation.
 duplicated, overlapping, complemented and folded classes, including original
 surrogate units, assertions, repeats, backreferences and sticky starts. Passing
 these checks is not a measured CPU/RSS improvement or full host conformance.
+
+## Deciding an unfolded class in the instruction
+
+A class instruction built the resumable class phase for every character, decided
+it and took it apart again, even when the whole decision fit in the batch that
+phase takes. An unfolded class whose decision fits that batch — a sorted class
+with any quantum left, or a linear one of at most 256 ranges within the quantum
+— is now decided in the instruction itself: the same ranges examined in the
+same order, each charged as the phase charges it, so totals are unchanged at any
+quantum. Folded classes, which small ones rarely are now (see
+[casefold](casefold.md)), and larger ones keep the phase.

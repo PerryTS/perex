@@ -161,6 +161,16 @@ impl Parser<'_, '_> {
     }
     fn leaf(&mut self, kind: u32, a: u32, mut b: u32) -> Result<u32, CompileError> {
         let mut flags = self.flags;
+        // A small folded class is replaced by its case closure, which is the
+        // same membership test without folding each subject character at
+        // match time (see `close_fold`).
+        if kind == CLASS
+            && flags & I != 0
+            && let Some(count) = self.close_fold(a as usize, (b & !NEGATED) as usize)?
+        {
+            b = (b & NEGATED) | count as u32;
+            flags &= !I;
+        }
         if kind == CLASS
             && let Some(count) = self.normalize_class(a as usize, (b & !NEGATED) as usize)?
         {

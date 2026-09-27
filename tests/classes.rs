@@ -129,3 +129,46 @@ fn binary_and_linear_class_membership_preserve_full_capture_results() {
         }
     }
 }
+
+/// A small folded class is compiled to its case closure. The closure must
+/// answer every character exactly as folding at match time does. The same
+/// class plus the Private Use Area (which has no case mappings, so it changes
+/// no answer outside itself) is too large to close and keeps folding at match
+/// time, so the two programs are a differential of the two forms.
+#[test]
+fn folded_class_closure_matches_match_time_folding() {
+    const PUA: &str = r"-";
+    let classes = [
+        "a-z", "0-9a-f", "k", "s", r"K", r"ſ", "σ", "à-þ", "a-f-", r"\w", r"\d", "ǅ", r"ẞ", "ß",
+        r"İı", "Ω",
+    ];
+    for flags in ["i", "iu"] {
+        for class in classes {
+            for negated in ["", "^"] {
+                let closed = program(&format!("^[{negated}{class}]$"), flags);
+                let folded = program(&format!("^[{negated}{class}{PUA}]$"), flags);
+                let mut checked = 0;
+                for c in (0..0x3000u32)
+                    .chain(0xa640..0xa800)
+                    .chain(0xfb00..0xfb20)
+                    .chain(0xff00..0xff60)
+                    .chain(0x10400..0x10450)
+                    .chain(0x1e900..0x1e950)
+                {
+                    let Some(ch) = char::from_u32(c) else {
+                        continue;
+                    };
+                    let mut buffer = [0u16; 2];
+                    let units = ch.encode_utf16(&mut buffer);
+                    // Astral characters are two units without `u`, which a
+                    // one-character class never matches either way.
+                    let a = answer(&closed, units).is_some();
+                    let b = answer(&folded, units).is_some();
+                    assert_eq!(a, b, "[{negated}{class}]/{flags} at U+{c:04X}");
+                    checked += 1;
+                }
+                assert!(checked > 12_000);
+            }
+        }
+    }
+}

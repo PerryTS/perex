@@ -1775,7 +1775,6 @@ mod tests {
         for (pattern, flags) in [
             ("a+?", ""),
             ("a|b", ""),
-            ("[a-z]", "i"),
             ("a", "y"),
             ("^a", "m"),
             ("a$", "m"),
