@@ -275,6 +275,11 @@ impl Prepared<'_> {
                 crate::program::ANCHORED
             } else {
                 0
+            }
+            | if crate::program::derive_dfa(Program { words: output }) {
+                crate::program::DFA
+            } else {
+                0
             };
         output[8] = parser.end_candidate_descriptor(root);
         // Derived from the emitted instructions with the same function the

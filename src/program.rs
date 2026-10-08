@@ -3,7 +3,7 @@ use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 11;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 14;
+pub(crate) const VERSION: u32 = 15;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -100,6 +100,13 @@ pub(crate) const BRANCH: u32 = 31;
 /// [`derive_start_anchored`] and re-derived on validation, so a search reads
 /// it instead of walking the entry each time.
 pub(crate) const ANCHORED: u32 = 1 << 24;
+/// Word 7 flag: every instruction is one the lazy automaton decides exactly
+/// and every repeat's counter fits its state key. Derived by [`derive_dfa`]
+/// and re-derived on validation; see `docs/dfa.md`.
+pub(crate) const DFA: u32 = 1 << 25;
+/// Largest repeat bound the automaton counts to: a maximum, or the minimum of
+/// an unbounded repeat.
+pub(crate) const DFA_COUNT_MAX: u32 = 1023;
 /// Word 7 bits holding the first-character descriptor.
 pub(crate) const DESCRIPTOR: u32 = 0xff_ffff;
 /// A first-character mask admitting every character: the set is unknown.
@@ -478,6 +485,85 @@ pub(crate) fn leading_pc(words: &[u32], instructions: usize) -> usize {
     pc
 }
 
+/// Whether the lazy automaton can decide this program exactly. Every
+/// instruction must be a character, class, `.`, capture bookkeeping, branch,
+/// jump, position assertion or repeat, and every repeat must be in the shape
+/// the compiler emits with a counter [`dfa_fields`] can place. Backreferences,
+/// lookaround and properties of strings make it ineligible.
+///
+/// Called on validated instructions and repeat records only.
+pub(crate) fn derive_dfa(p: Program<'_>) -> bool {
+    if p.instructions() > PC_LIMIT {
+        return false;
+    }
+    for pc in 0..p.instructions() {
+        let [op, a, _] = p.instruction(pc);
+        let admitted = match op {
+            MATCH | CHAR | CHAR_I | ANY | ANY_S | CLASS | CLASS_I | CLASS_SORTED
+            | CLASS_SORTED_I | SAVE | SPLIT | BRANCH | JUMP | START | START_M | END | END_M
+            | WORD | WORD_I | REPEAT_INIT | ATOM_REPEAT => true,
+            REPEAT_CHOICE => p.repeat(a as usize)[3] as usize == pc + 1,
+            REPEAT_BODY => p.repeat(a as usize)[3] as usize == pc,
+            REPEAT_NEXT => p.repeat(a as usize)[4] as usize == pc + 1,
+            _ => false,
+        };
+        if !admitted {
+            return false;
+        }
+    }
+    dfa_fields(p, |_, _, _| {})
+}
+
+/// Instructions an automaton thread can address beside its generation tag.
+const PC_LIMIT: usize = (1 << 24) - 1;
+
+/// Place each repeat's counter in a 32-bit key: the bits of its bound and one
+/// empty-check bit above them, after the fields of the repeats around it.
+/// Repeats that do not enclose one another share bits, since a thread is
+/// inside at most one of them. Reports each repeat as `(id, offset, bits)` and
+/// returns false when a repeat is not in the emitted shape, does not nest
+/// properly, counts too far, or the fields around one instruction exceed 32
+/// bits.
+pub(crate) fn dfa_fields(p: Program<'_>, mut each: impl FnMut(usize, u32, u32)) -> bool {
+    let n = p.instructions();
+    let mut open = [(0usize, 0u32); 32];
+    let mut depth = 0;
+    for pc in 0..n {
+        while depth > 0 && open[depth - 1].0 <= pc {
+            depth -= 1;
+        }
+        let [op, a, _] = p.instruction(pc);
+        if !matches!(op, REPEAT_INIT | ATOM_REPEAT) {
+            continue;
+        }
+        let r = p.repeat(a as usize);
+        let exit = r[4] as usize;
+        if r[3] as usize != pc + 2
+            || exit < pc + 4
+            || p.instruction(pc + 1) != [REPEAT_CHOICE, a, 0]
+            || p.instruction(pc + 2) != [REPEAT_BODY, a, 0]
+            || p.instruction(exit - 1) != [REPEAT_NEXT, a, 0]
+            || (depth > 0 && exit > open[depth - 1].0)
+            || depth == open.len()
+        {
+            return false;
+        }
+        let bound = if r[2] & 1 != 0 { r[0] } else { r[1] };
+        if bound > DFA_COUNT_MAX {
+            return false;
+        }
+        let bits = u32::BITS - bound.leading_zeros();
+        let offset = if depth > 0 { open[depth - 1].1 } else { 0 };
+        if offset + bits + 1 > 32 {
+            return false;
+        }
+        each(a as usize, offset, bits);
+        open[depth] = (exit, offset + bits + 1);
+        depth += 1;
+    }
+    true
+}
+
 /// Whether a failed attempt at one start proves failure at every later start
 /// inside the same run of the pattern's leading atom.
 ///
@@ -546,7 +632,7 @@ impl<'a> Program<'a> {
         // semantic guarantee belongs to the compiler.
         for (index, &candidate) in words[7..9].iter().enumerate() {
             let descriptor = candidate & DESCRIPTOR;
-            if index == 0 && candidate & !(DESCRIPTOR | ANCHORED) != 0 {
+            if index == 0 && candidate & !(DESCRIPTOR | ANCHORED | DFA) != 0 {
                 return Err(bad);
             }
             let lo = (descriptor >> 8) & 255;
@@ -777,6 +863,12 @@ impl<'a> Program<'a> {
                     return Err(bad);
                 }
             }
+        }
+        budget
+            .charge(p.instructions() / 8 + 1)
+            .map_err(|_| ProgramError::WorkLimit)?;
+        if (words[7] & DFA != 0) != derive_dfa(p) {
+            return Err(bad);
         }
         Ok(p)
     }

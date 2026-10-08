@@ -6,12 +6,12 @@ use super::*;
 /// candidate phase. A pattern without a leading claim carries none, and builds
 /// none: for a short subject the description costs more than the scan it steers.
 #[derive(Clone, Copy)]
-struct Prefix {
-    first: [u8; LEADING_BRANCHES],
+pub(crate) struct Prefix {
+    pub(crate) first: [u8; LEADING_BRANCHES],
     /// The character after each first one. Every leading run and every branch
     /// of an admitted alternation holds at least two, so this is always known.
-    second: [u8; LEADING_BRANCHES],
-    members: usize,
+    pub(crate) second: [u8; LEADING_BRANCHES],
+    pub(crate) members: usize,
 }
 
 /// The longest remainder `short_start` scans for one unit of work.
@@ -111,91 +111,6 @@ impl Vm<'_, '_, '_, '_> {
                 Phase::Initialize(0)
             };
     }
-    /// What the scan should look for, for a program that carries a leading
-    /// claim.
-    fn prefix(&self, leading: usize) -> Prefix {
-        if leading == LEADING_ALTERNATION as usize {
-            self.branch_pairs()
-        } else {
-            self.literal_pairs()
-        }
-    }
-
-    /// The first two characters of every branch of the entry alternation. The
-    /// derivation proved every branch begins with at least two ASCII
-    /// characters, so each contributes exactly one pair, and there are at most
-    /// `LEADING_BRANCHES` of them.
-    fn branch_pairs(&self) -> Prefix {
-        let mut prefix = Prefix {
-            first: [0; LEADING_BRANCHES],
-            second: [0; LEADING_BRANCHES],
-            members: 0,
-        };
-        let mut pending = [0usize; LEADING_BRANCHES];
-        let mut depth = 0;
-        let mut pc = self.program.leading_pc();
-        loop {
-            if let Some((first, second)) = branch_arms(pc, self.program.instruction(pc)) {
-                if depth == pending.len() {
-                    prefix.members = 0;
-                    return prefix;
-                }
-                pending[depth] = second;
-                depth += 1;
-                pc = first;
-                continue;
-            }
-            if prefix.members == prefix.first.len() {
-                prefix.members = 0;
-                return prefix;
-            }
-            prefix.first[prefix.members] = self.program.instruction(pc)[1] as u8;
-            prefix.second[prefix.members] = self.program.instruction(pc + 1)[1] as u8;
-            prefix.members += 1;
-            if depth == 0 {
-                return prefix;
-            }
-            depth -= 1;
-            pc = pending[depth];
-        }
-    }
-
-    /// The byte pairs a leading literal admits at its first two characters. A
-    /// folded run admits either case of each, and `derive_leading` accepts only
-    /// ASCII characters, so every admitted byte is a single one. This scans
-    /// wholly ASCII storage, where an ASCII-insensitive comparison is exact for
-    /// a folded run.
-    fn literal_pairs(&self) -> Prefix {
-        let mut prefix = Prefix {
-            first: [0; LEADING_BRANCHES],
-            second: [0; LEADING_BRANCHES],
-            members: 0,
-        };
-        let pc = self.program.leading_pc();
-        let one = self.program.instruction(pc)[1] as u8;
-        let two = self.program.instruction(pc + 1)[1] as u8;
-        if !self.program.leading_fold() {
-            prefix.first[0] = one;
-            prefix.second[0] = two;
-            prefix.members = 1;
-            return prefix;
-        }
-        for a in [one.to_ascii_lowercase(), one.to_ascii_uppercase()] {
-            for b in [two.to_ascii_lowercase(), two.to_ascii_uppercase()] {
-                let held = prefix.first[..prefix.members]
-                    .iter()
-                    .zip(&prefix.second[..prefix.members])
-                    .any(|(&f, &s)| f == a && s == b);
-                if !held {
-                    prefix.first[prefix.members] = a;
-                    prefix.second[prefix.members] = b;
-                    prefix.members += 1;
-                }
-            }
-        }
-        prefix
-    }
-
     /// Compare the entry alternation's branches against original bytes at `at`,
     /// succeeding as soon as one matches. The branches are read from the
     /// instructions, so this needs no program storage and no match state.
@@ -324,7 +239,7 @@ impl Vm<'_, '_, '_, '_> {
         // A leading run and an alternation both name the exact bytes their
         // first two characters admit, which on ordinary text stops at a small
         // fraction of the positions the descriptor's widened interval does.
-        let prefix = (leading != 0).then(|| self.prefix(leading));
+        let prefix = (leading != 0).then(|| prefix(self.program, leading));
         let mut scanned = 0;
         let found = loop {
             let (found, inspected) = match &prefix {
@@ -435,6 +350,95 @@ impl Vm<'_, '_, '_, '_> {
     }
 }
 
+/// What a start scan should look for, for a program that carries a leading
+/// claim of `leading` characters: the byte pairs it admits at its first two.
+/// The evaluator's candidate phase and the automaton's idle skip both use it.
+#[inline(always)]
+pub(crate) fn prefix(program: Program<'_>, leading: usize) -> Prefix {
+    if leading == LEADING_ALTERNATION as usize {
+        branch_pairs(program)
+    } else {
+        literal_pairs(program)
+    }
+}
+
+/// The first two characters of every branch of the entry alternation. The
+/// derivation proved every branch begins with at least two ASCII
+/// characters, so each contributes exactly one pair, and there are at most
+/// `LEADING_BRANCHES` of them.
+#[inline(always)]
+fn branch_pairs(program: Program<'_>) -> Prefix {
+    let mut prefix = Prefix {
+        first: [0; LEADING_BRANCHES],
+        second: [0; LEADING_BRANCHES],
+        members: 0,
+    };
+    let mut pending = [0usize; LEADING_BRANCHES];
+    let mut depth = 0;
+    let mut pc = program.leading_pc();
+    loop {
+        if let Some((first, second)) = branch_arms(pc, program.instruction(pc)) {
+            if depth == pending.len() {
+                prefix.members = 0;
+                return prefix;
+            }
+            pending[depth] = second;
+            depth += 1;
+            pc = first;
+            continue;
+        }
+        if prefix.members == prefix.first.len() {
+            prefix.members = 0;
+            return prefix;
+        }
+        prefix.first[prefix.members] = program.instruction(pc)[1] as u8;
+        prefix.second[prefix.members] = program.instruction(pc + 1)[1] as u8;
+        prefix.members += 1;
+        if depth == 0 {
+            return prefix;
+        }
+        depth -= 1;
+        pc = pending[depth];
+    }
+}
+
+/// The byte pairs a leading literal admits at its first two characters. A
+/// folded run admits either case of each, and `derive_leading` accepts only
+/// ASCII characters, so every admitted byte is a single one. This scans
+/// wholly ASCII storage, where an ASCII-insensitive comparison is exact for
+/// a folded run.
+#[inline(always)]
+fn literal_pairs(program: Program<'_>) -> Prefix {
+    let mut prefix = Prefix {
+        first: [0; LEADING_BRANCHES],
+        second: [0; LEADING_BRANCHES],
+        members: 0,
+    };
+    let pc = program.leading_pc();
+    let one = program.instruction(pc)[1] as u8;
+    let two = program.instruction(pc + 1)[1] as u8;
+    if !program.leading_fold() {
+        prefix.first[0] = one;
+        prefix.second[0] = two;
+        prefix.members = 1;
+        return prefix;
+    }
+    for a in [one.to_ascii_lowercase(), one.to_ascii_uppercase()] {
+        for b in [two.to_ascii_lowercase(), two.to_ascii_uppercase()] {
+            let held = prefix.first[..prefix.members]
+                .iter()
+                .zip(&prefix.second[..prefix.members])
+                .any(|(&f, &s)| f == a && s == b);
+            if !held {
+                prefix.first[prefix.members] = a;
+                prefix.second[prefix.members] = b;
+                prefix.members += 1;
+            }
+        }
+    }
+    prefix
+}
+
 /// The first position holding any byte of `set`, and the positions inspected.
 ///
 /// A union of first characters is widened into one interval for the word 7
@@ -450,7 +454,7 @@ impl Vm<'_, '_, '_, '_> {
 /// ordinary text, and a folded first character far more than that. Deciding it
 /// on two admits almost none, which is what the positions this admits cost:
 /// each is published as a start, or compared against the whole prefix.
-pub(super) fn first_in_pairs(
+pub(crate) fn first_in_pairs(
     bytes: &[u8],
     limit: usize,
     first: &[u8],
@@ -521,7 +525,9 @@ pub(super) fn first_in_pairs(
     (None, limit)
 }
 
-pub(super) fn first_in_range<const MIXED: bool, const STOP_NON_ASCII: bool>(
+/// The first position whose byte lies in `lo..=hi` (or, with
+/// `STOP_NON_ASCII`, is not ASCII), and the positions inspected.
+pub(crate) fn first_in_range<const MIXED: bool, const STOP_NON_ASCII: bool>(
     bytes: &[u8],
     lo: u8,
     hi: u8,
@@ -530,27 +536,10 @@ pub(super) fn first_in_range<const MIXED: bool, const STOP_NON_ASCII: bool>(
         return (Some(0), 1);
     }
     let mut i = 1;
-    const HIGH: u64 = 0x8080_8080_8080_8080;
-    const ONES: u64 = 0x0101_0101_0101_0101;
-    let lower = u64::from(lo) * ONES;
-    let upper = u64::from(hi) * ONES;
+    let (lower, upper) = (u64::from(lo) * ONES, u64::from(hi) * ONES);
     while i + 8 <= bytes.len() {
         let word = u64::from_le_bytes(bytes[i..i + 8].try_into().unwrap());
-        let lanes = if MIXED { word & !HIGH } else { word };
-        // ASCII lanes are <=127. Setting the minuend's high bit prevents
-        // inter-lane borrows in both subtractions, so every lane is exact.
-        let range =
-            ((lanes | HIGH).wrapping_sub(lower)) & ((upper | HIGH).wrapping_sub(lanes)) & HIGH;
-        let mask = if STOP_NON_ASCII {
-            range | (word & HIGH)
-        } else if MIXED {
-            // Admission seeks an ASCII member, so UTF-8/WTF-8 high-byte lanes
-            // cannot qualify. Masking them before subtraction prevents borrows
-            // from changing an adjacent lane's comparison.
-            range & !word
-        } else {
-            range
-        };
+        let mask = range_marks::<MIXED, STOP_NON_ASCII>(word, lower, upper);
         if mask != 0 {
             let at = i + mask.trailing_zeros() as usize / 8;
             return (Some(at), at + 1);
@@ -564,6 +553,87 @@ pub(super) fn first_in_range<const MIXED: bool, const STOP_NON_ASCII: bool>(
         i += 1;
     }
     (None, bytes.len())
+}
+
+const HIGH: u64 = 0x8080_8080_8080_8080;
+const ONES: u64 = 0x0101_0101_0101_0101;
+
+/// The high bit of every lane of `word` that [`first_in_range`] stops at,
+/// for `lower` and `upper` holding `lo` and `hi` in every lane.
+#[inline(always)]
+pub(crate) fn range_marks<const MIXED: bool, const STOP_NON_ASCII: bool>(
+    word: u64,
+    lower: u64,
+    upper: u64,
+) -> u64 {
+    let lanes = if MIXED { word & !HIGH } else { word };
+    // ASCII lanes are <=127. Setting the minuend's high bit prevents
+    // inter-lane borrows in both subtractions, so every lane is exact.
+    let range = ((lanes | HIGH).wrapping_sub(lower)) & ((upper | HIGH).wrapping_sub(lanes)) & HIGH;
+    if STOP_NON_ASCII {
+        range | (word & HIGH)
+    } else if MIXED {
+        // Admission seeks an ASCII member, so UTF-8/WTF-8 high-byte lanes
+        // cannot qualify. Masking them before subtraction prevents borrows
+        // from changing an adjacent lane's comparison.
+        range & !word
+    } else {
+        range
+    }
+}
+
+/// [`first_in_range`] for a caller that scans between short steps, such as
+/// the automaton's idle skip, where a call would cost more than a short scan.
+/// After the first word it tests four words at a time with one branch, so a
+/// long run without a stop costs one branch per thirty-two bytes.
+#[inline(always)]
+pub(crate) fn scan_range<const MIXED: bool, const STOP_NON_ASCII: bool>(
+    bytes: &[u8],
+    lo: u8,
+    hi: u8,
+) -> Option<usize> {
+    if (bytes[0] >= lo && bytes[0] <= hi) || (STOP_NON_ASCII && bytes[0] >= 128) {
+        return Some(0);
+    }
+    let mut i = 1;
+    let (lower, upper) = (u64::from(lo) * ONES, u64::from(hi) * ONES);
+    let marks = |word: &[u8; 8]| {
+        range_marks::<MIXED, STOP_NON_ASCII>(u64::from_le_bytes(*word), lower, upper)
+    };
+    // One word first: where stops are dense, the next one is usually in it.
+    if let Some(word) = bytes.get(i..i + 8) {
+        let mask = marks(word.try_into().unwrap());
+        if mask != 0 {
+            return Some(i + mask.trailing_zeros() as usize / 8);
+        }
+        i += 8;
+    }
+    while let Some(block) = bytes.get(i..i + 32) {
+        let (words, _) = block.as_chunks::<8>();
+        let found = [
+            marks(&words[0]),
+            marks(&words[1]),
+            marks(&words[2]),
+            marks(&words[3]),
+        ];
+        if found[0] | found[1] | found[2] | found[3] != 0 {
+            for (word, &mask) in found.iter().enumerate() {
+                if mask != 0 {
+                    return Some(i + 8 * word + mask.trailing_zeros() as usize / 8);
+                }
+            }
+        }
+        i += 32;
+    }
+    while let Some(word) = bytes.get(i..i + 8) {
+        let mask = marks(word.try_into().unwrap());
+        if mask != 0 {
+            return Some(i + mask.trailing_zeros() as usize / 8);
+        }
+        i += 8;
+    }
+    (i..bytes.len())
+        .find(|&at| (bytes[at] >= lo && bytes[at] <= hi) || (STOP_NON_ASCII && bytes[at] >= 128))
 }
 
 #[cfg(test)]

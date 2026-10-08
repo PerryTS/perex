@@ -146,7 +146,7 @@ fn modifier_errors_and_instruction_corruption_are_explicit() {
         (r"(?<x>a)|(?<x>b)\k<x>", "i"),
     ] {
         let words = program(source, flags).unwrap();
-        assert_eq!(words[1], 14);
+        assert_eq!(words[1], 15);
         for pc in 0..words[4] as usize {
             let at = 11 + pc * 3;
             if (19..=26).contains(&words[at]) {

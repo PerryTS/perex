@@ -36,7 +36,8 @@ no ASCII start is possible, or `2 | (lo << 8) | (hi << 16)` for an inclusive
 interval with `0 <= lo <= hi <= 127`. Reserved bits, malformed bounds and old
 format versions are rejected. The additional word costs four used program bytes.
 Since format 14 the descriptor occupies word 7's low 24 bits; bit 24 holds the
-validated start-anchored claim and the bits above it are reserved.
+validated start-anchored claim. Since format 15 bit 25 holds the validated
+[automaton eligibility](dfa.md) claim, and the bits above it are reserved.
 Bindings check the full eleven-word header when reacquiring a view. AOT and runtime
 programs must use this same format and its version checks.
 
@@ -65,7 +66,8 @@ positions; [leading](leading.md) describes it. Only logical positions
 through the first candidate are charged, so word-read speculation does not change
 matching work across quanta. Subject positions remain cursor offsets/checkpoints;
 no subject address survives the scoped borrow. The scan adds a phase but no frame,
-undo entry or match-scratch buffer.
+undo entry or match-scratch buffer. The lazy automaton's idle skip uses these same scans and
+leading pairs ([lazy DFA](dfa.md#the-idle-skip)).
 
 Mixed scanning uses the cursor's current byte suffix, never a UTF-16 re-seek from
 an end of the string. It checks the skipped prefix is ASCII and advances byte and

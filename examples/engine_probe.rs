@@ -3,6 +3,7 @@
 use perex::{
     Budget,
     compiler::{CompileError, Node, Range, compile},
+    dfa,
     executor::{Frame, Scratch, Undo, find},
     input::Input,
     span::Span,
@@ -95,6 +96,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.next().is_some() {
         return Err("extra argument".into());
     }
+    // `PEREX_DFA` answers every eligible case with the lazy automaton as well
+    // and reports any disagreement as an outcome of its own, so every harness
+    // that runs this probe compares the automaton too: `1` with a roomy cache,
+    // `small` with the least storage each program accepts plus a little, which
+    // clears and thrashes, or a number of words.
+    let automaton = std::env::var("PEREX_DFA")
+        .ok()
+        .filter(|mode| !mode.is_empty());
+    let mut cache: Vec<u32> = Vec::new();
+    let mut cached_program: Vec<u32> = Vec::new();
+    let (mut eligible, mut answered) = (0usize, 0usize);
     let mut out = io::BufWriter::new(io::stdout().lock());
     for line in io::stdin().lock().lines() {
         let line = line?;
@@ -168,6 +180,121 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             find(program, input, start, scratch, &mut captures, &mut budget)
         };
+        // Where the evaluator ran out of work, the automaton's answer stands
+        // in for it: no match, or the evaluator's own captures from the start
+        // the automaton found. Node then checks that answer.
+        let found = match found {
+            Err(perex::executor::ExecError::WorkLimit)
+                if automaton.is_some() && dfa::eligible(program) =>
+            {
+                let mut cache = vec![0; dfa::minimum_words(program).unwrap().max(1 << 16)];
+                match dfa::find(program, input, start, &mut cache, &mut Budget::new(work)) {
+                    Ok(dfa::Found::NoMatch) => Ok(false),
+                    Ok(dfa::Found::Match(span)) => {
+                        let mut registers = vec![0; program.register_count()];
+                        let mut frames = vec![Frame::default(); 16_384];
+                        let mut undo = vec![Undo::default(); 131_072];
+                        let rerun = find(
+                            program,
+                            input,
+                            span.start(),
+                            Scratch {
+                                registers: &mut registers,
+                                frames: &mut frames,
+                                undo: &mut undo,
+                            },
+                            &mut captures,
+                            &mut Budget::new(work),
+                        );
+                        match rerun {
+                            Ok(true) if captures[0] == Some(span) => Ok(true),
+                            Ok(_) => {
+                                writeln!(
+                                    out,
+                                    "{{\"id\":{id:?},\"outcome\":\"dfa-mismatch\",\"rerun\":\"{rerun:?}\"}}"
+                                )?;
+                                continue;
+                            }
+                            Err(error) => Err(error),
+                        }
+                    }
+                    other => {
+                        if std::env::var_os("PEREX_DFA_DEBUG").is_some() {
+                            eprintln!("{id}: evaluator out of work, automaton {other:?}");
+                        }
+                        found
+                    }
+                }
+            }
+            found => found,
+        };
+        if let Some(size) = automaton.as_deref()
+            && let Some(minimum) = dfa::minimum_words(program)
+            && let Ok(vm) = found
+        {
+            let words = match size {
+                "small" => minimum + 256,
+                "1" => minimum.max(1 << 16),
+                number => number.parse::<usize>()?.max(minimum),
+            };
+            // One cache per program: a different program starts a new one.
+            if cached_program != program.words() || cache.len() != words {
+                cache = vec![0; words];
+                cached_program = program.words().to_vec();
+            }
+            let mut budget = Budget::new(work);
+            let tested = dfa::is_match(program, input, start, &mut cache, &mut budget);
+            let mut budget = Budget::new(work);
+            let bounds = dfa::find(program, input, start, &mut cache, &mut budget);
+            eligible += 1;
+            answered += usize::from(!matches!(bounds, Ok(dfa::Found::Declined(_))));
+            // A declined call is not an answer: the cache may also disable
+            // itself between the two calls. Every answer must be the
+            // evaluator's.
+            let tested_agrees = match tested {
+                Ok(dfa::Tested::Declined(_)) => true,
+                Ok(dfa::Tested::Match) => vm,
+                Ok(dfa::Tested::NoMatch) => !vm,
+                // Exhausting the allowance is not an answer either.
+                Err(perex::executor::ExecError::WorkLimit) => true,
+                Err(_) => false,
+            };
+            let bounds_agree = match bounds {
+                Ok(dfa::Found::Declined(_)) => true,
+                Ok(dfa::Found::NoMatch) => !vm,
+                Ok(dfa::Found::Match(span)) => {
+                    // Captures come from the evaluator started at the
+                    // automaton's start: they must be the same match.
+                    let mut again = vec![None; program.capture_count()];
+                    let mut registers = vec![0; program.register_count()];
+                    let mut frames = vec![Frame::default(); 16_384];
+                    let mut undo = vec![Undo::default(); 131_072];
+                    let rerun = find(
+                        program,
+                        input,
+                        span.start(),
+                        Scratch {
+                            registers: &mut registers,
+                            frames: &mut frames,
+                            undo: &mut undo,
+                        },
+                        &mut again,
+                        &mut Budget::new(work),
+                    );
+                    vm && captures[0] == Some(span) && rerun == Ok(true) && again == captures
+                }
+                Err(perex::executor::ExecError::WorkLimit) => true,
+                Err(_) => false,
+            };
+            let agreed = tested_agrees && bounds_agree;
+            if !agreed {
+                writeln!(
+                    out,
+                    "{{\"id\":{id:?},\"outcome\":\"dfa-mismatch\",\"vm\":{vm},\"test\":\"{tested:?}\",\"find\":\"{bounds:?}\"}}"
+                )?;
+                continue;
+            }
+        }
         match found {
             Ok(false) => writeln!(out, "{{\"id\":{id:?},\"outcome\":\"no-match\"}}")?,
             Err(error) => writeln!(
@@ -209,6 +336,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+    }
+    if automaton.is_some() {
+        eprintln!("dfa: eligible {eligible} answered {answered}");
     }
     Ok(())
 }

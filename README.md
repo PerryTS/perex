@@ -130,6 +130,9 @@ node tools/check-repetition.mjs target/release/examples/engine_probe
 node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/atom-filter
 node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/atom-filter-q1 --quantum 1 --relocate --grow
 node tools/check-atom-filter.mjs target/release/examples/engine_probe artifacts/atom-filter-q17 --quantum 17 --relocate --grow
+PEREX_DFA=1 node tools/check-engine.mjs target/release/examples/engine_probe --allow-listed-unsupported --allow-reviewed-reference-disagreements
+PEREX_DFA=small node tools/check-engine.mjs target/release/examples/engine_probe --allow-listed-unsupported --allow-reviewed-reference-disagreements
+node tools/check-dfa-fuzz.mjs target/release/examples/engine_probe artifacts/dfa-fuzz --seed 1 --cases 20000
 node tools/check-modifiers.mjs target/release/examples/engine_probe
 node tools/check-unicode-sets.mjs target/release/examples/engine_probe artifacts/unicode-sets
 node tools/check-sets.mjs target/release/examples/engine_probe artifacts/sets --allow-reviewed-reference-disagreements
@@ -176,6 +179,8 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 [Unicode sets](docs/sets.md) implements the `v` grammar: union, ranges, nesting, the set operators, nested complements, string members, the properties of strings, its escaping and reserved-punctuation rules, and its complement-after-folding rule. A property of strings is a shared table of sequences and a program reference to it, never members copied into a program.
 
 [Test262 pattern conformance](docs/conformance.md) compares every pattern harvested from the suite's regular-expression tests against Node, for syntax acceptance and complete match answers. There is no remaining gap: 48,718 cases compared, nothing unsupported and no difference, on the harvest recorded there.
+
+[The lazy automaton](docs/dfa.md) answers whether a program matches, and where its match begins and ends, in a few instructions per character from states it builds on demand in a cache the host owns, for programs without backreferences, lookaround or properties of strings. The evaluator remains the only source of captures, and every differential harness compares the two.
 
 [Branches](docs/branch.md) lay alternation out flat and skip an alternative, and its backtracking frame, when the next character cannot begin it, by a first-character set re-derived from the instructions during validation.
 

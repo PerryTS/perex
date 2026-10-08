@@ -8,7 +8,7 @@ use crate::{
 };
 mod admission;
 mod atom;
-mod candidate;
+pub(crate) mod candidate;
 mod state;
 use state::*;
 const UNSET: usize = usize::MAX;

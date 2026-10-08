@@ -337,7 +337,7 @@ fn validation_rederives_masks_and_the_anchored_claim() {
             "anchored {flip}"
         );
         let mut reserved = program.clone();
-        reserved[7] |= 1 << 25;
+        reserved[7] |= 1 << 26;
         assert!(Program::from_words(&reserved, &mut Budget::new(100_000)).is_err());
     }
 }

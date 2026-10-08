@@ -21,7 +21,8 @@ fn compile_words(source: &str, flags: &str) -> Vec<u32> {
     .unwrap();
     let mut moved = p.words().to_vec();
     // These witnesses isolate required-text admission from candidate skipping.
-    moved[7] = 0;
+    // The descriptor only: bits 24 and 25 are validated claims.
+    moved[7] &= !0x00ff_ffff;
     words.fill(0xdeadbeef);
     moved
 }
