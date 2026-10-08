@@ -66,7 +66,7 @@ impl Vm<'_, '_, '_, '_> {
     /// scan's chunk, so the step stays inside the bound a pause documents.
     #[inline(always)]
     pub(super) fn short_start(&mut self) -> Result<ShortStart, ExecError> {
-        let descriptor = self.program.words[7];
+        let descriptor = self.program.first_descriptor();
         let from = self.state.requested_start;
         let Some(rest) = self.input.ascii_bytes().and_then(|bytes| bytes.get(from..)) else {
             return Ok(ShortStart::Unknown);
@@ -104,11 +104,12 @@ impl Vm<'_, '_, '_, '_> {
     }
 
     pub(super) fn start_candidate(&mut self) {
-        self.state.phase = if self.program.words[7] != 0 && self.input.original_bytes().is_some() {
-            Phase::Candidate
-        } else {
-            Phase::Initialize(0)
-        };
+        self.state.phase =
+            if self.program.first_descriptor() != 0 && self.input.original_bytes().is_some() {
+                Phase::Candidate
+            } else {
+                Phase::Initialize(0)
+            };
     }
     /// What the scan should look for, for a program that carries a leading
     /// claim.
@@ -134,15 +135,14 @@ impl Vm<'_, '_, '_, '_> {
         let mut depth = 0;
         let mut pc = self.program.leading_pc();
         loop {
-            let [op, a, b] = self.program.instruction(pc);
-            if op == SPLIT {
+            if let Some((first, second)) = branch_arms(pc, self.program.instruction(pc)) {
                 if depth == pending.len() {
                     prefix.members = 0;
                     return prefix;
                 }
-                pending[depth] = b as usize;
+                pending[depth] = second;
                 depth += 1;
-                pc = a as usize;
+                pc = first;
                 continue;
             }
             if prefix.members == prefix.first.len() {
@@ -205,15 +205,14 @@ impl Vm<'_, '_, '_, '_> {
         let mut pc = self.program.leading_pc();
         loop {
             self.charge(1)?;
-            let [op, a, b] = self.program.instruction(pc);
-            if op == SPLIT {
+            if let Some((first, second)) = branch_arms(pc, self.program.instruction(pc)) {
                 // The derivation proved the branch count fits.
                 if depth == pending.len() {
                     return Ok(true);
                 }
-                pending[depth] = b as usize;
+                pending[depth] = second;
                 depth += 1;
-                pc = a as usize;
+                pc = first;
                 continue;
             }
             let mut matched = true;
@@ -280,7 +279,7 @@ impl Vm<'_, '_, '_, '_> {
             return self.mixed_candidate_step(available);
         };
         let start = self.cursor.position();
-        let descriptor = self.program.words[7];
+        let descriptor = self.program.first_descriptor();
         if descriptor == 1 || start == bytes.len() {
             self.charge(1)?;
             self.state.phase = Phase::Finished(false);
@@ -402,7 +401,7 @@ impl Vm<'_, '_, '_, '_> {
             self.state.phase = Phase::Finished(false);
             return Ok(());
         }
-        let descriptor = self.program.words[7];
+        let descriptor = self.program.first_descriptor();
         let (lo, hi) = if descriptor == 1 {
             // No ASCII member is possible, but every non-ASCII lead byte must
             // still go through the ordinary matcher.

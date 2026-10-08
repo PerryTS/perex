@@ -177,6 +177,8 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 
 [Test262 pattern conformance](docs/conformance.md) compares every pattern harvested from the suite's regular-expression tests against Node, for syntax acceptance and complete match answers. There is no remaining gap: 48,718 cases compared, nothing unsupported and no difference, on the harvest recorded there.
 
+[Branches](docs/branch.md) lay alternation out flat and skip an alternative, and its backtracking frame, when the next character cannot begin it, by a first-character set re-derived from the instructions during validation.
+
 [Leading literal starts](docs/leading.md) reject an impossible start with a byte comparison instead of an initialized trial. The claim is re-derived from the instructions during program validation, so it cannot disagree with them.
 
 [Required-text admission](docs/admission.md) also bounds where a match can begin when the condition is one the match itself consumes, so text present only before every possible start stops the search instead of retrying it.

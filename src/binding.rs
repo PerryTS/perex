@@ -212,6 +212,21 @@ impl<S: ImmutableSubject> BoundSubject<S> {
     }
 }
 
+/// Whether `words` begins with `header`. Every view checks this, so it is
+/// written as one pass of word differences rather than a call to a general
+/// slice comparison: the header is fixed-size and nearly always equal.
+#[inline(always)]
+fn same_header(words: &[u32], header: &[u32; crate::program::HEADER]) -> bool {
+    words.len() >= header.len()
+        && words[..header.len()]
+            .iter()
+            .zip(header)
+            .fold(0, |difference, (word, expected)| {
+                difference | (word ^ expected)
+            })
+            == 0
+}
+
 /// What validating a program established, as plain data: its length and
 /// header. Obtained only from a [`BoundProgram`] that validated it, and small
 /// enough for a host to keep beside the program it describes, so later
@@ -269,10 +284,7 @@ impl<P: ImmutableProgram> BoundProgram<P> {
         witness: ProgramWitness,
     ) -> Result<Self, BindingError<P, BoundProgramError<P::Error>>> {
         let result = storage
-            .with_words(|words| {
-                words.len() == witness.words
-                    && words.get(..witness.header.len()) == Some(&witness.header)
-            })
+            .with_words(|words| words.len() == witness.words && same_header(words, &witness.header))
             .map_err(BoundProgramError::Resource)
             .and_then(|same| {
                 if same {
@@ -315,8 +327,7 @@ impl<P: ImmutableProgram> BoundProgram<P> {
     ) -> Result<T, BoundProgramError<P::Error>> {
         self.storage
             .with_words(|words| {
-                if words.len() != self.words || words.get(..self.header.len()) != Some(&self.header)
-                {
+                if words.len() != self.words || !same_header(words, &self.header) {
                     return Err(BoundProgramError::ChangedLayout);
                 }
                 Ok(f(Program { words }))

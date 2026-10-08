@@ -121,8 +121,7 @@ impl Vm<'_, '_, '_, '_> {
                 // Admission still runs for these: when the condition is absent
                 // it rejects in one scan a single attempt whose backtracking
                 // could otherwise cost far more than the scan.
-                self.state.anchored =
-                    derive_start_anchored(self.program.words, self.program.instructions());
+                self.state.anchored = self.program.start_anchored();
                 self.state.one_start = self.program.words[2] & Y != 0 || self.state.anchored;
                 if !self.end_candidate()? {
                     self.state.phase = Phase::Finished(false);
