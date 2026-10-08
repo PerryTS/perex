@@ -19,6 +19,7 @@ pub mod span;
 
 mod casefold;
 pub mod compiler;
+pub mod dfa;
 pub mod executor;
 pub mod native;
 pub mod program;

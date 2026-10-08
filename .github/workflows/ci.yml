@@ -24,6 +24,16 @@ jobs:
 
   input-differential:
     runs-on: ubuntu-latest
+    # Every harness below runs three times: with the evaluator alone, and with
+    # the lazy automaton answering every eligible case beside it, in a roomy
+    # cache and in the least storage each program accepts. Any disagreement is
+    # an outcome of its own. See docs/dfa.md.
+    strategy:
+      fail-fast: false
+      matrix:
+        dfa: ["", "1", "small"]
+    env:
+      PEREX_DFA: ${{ matrix.dfa }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -129,6 +139,11 @@ jobs:
         run: node tools/check-test262.mjs target/release/examples/engine_probe third_party/test262-checkout artifacts/test262 --work 64000000
       - name: Unicode and legacy case equivalence differential
         run: node tools/check-casefold.mjs target/release/examples/engine_probe
+      - name: Random automaton-eligible patterns against Node
+        if: matrix.dfa != ''
+        run: |
+          node tools/check-dfa-fuzz.mjs target/release/examples/engine_probe artifacts/dfa-fuzz-1 --seed 1 --cases 20000
+          node tools/check-dfa-fuzz.mjs target/release/examples/engine_probe artifacts/dfa-fuzz-2 --seed 2 --cases 20000
       - run: cargo +stable build --locked --release --example property_probe
       - name: Exhaustive properties and exact reviewed reference disagreements
         run: node tools/check-properties.mjs target/release/examples/property_probe target/release/examples/engine_probe --allow-reviewed-reference-disagreements
