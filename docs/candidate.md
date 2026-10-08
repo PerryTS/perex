@@ -35,6 +35,8 @@ Program format 10 has nine header words, retaining the first-character descripto
 no ASCII start is possible, or `2 | (lo << 8) | (hi << 16)` for an inclusive
 interval with `0 <= lo <= hi <= 127`. Reserved bits, malformed bounds and old
 format versions are rejected. The additional word costs four used program bytes.
+Since format 14 the descriptor occupies word 7's low 24 bits; bit 24 holds the
+validated start-anchored claim and the bits above it are reserved.
 Bindings check the full eleven-word header when reacquiring a view. AOT and runtime
 programs must use this same format and its version checks.
 
@@ -144,12 +146,10 @@ the 256 KiB literal lookbehind, which measured between 0 and 2.9 percent slower
 across five runs of 21 rounds each: its remainder is too long to scan, and it
 pays only for being told so.
 
-The claim that a program is anchored at the subject's start is derived at the
+The claim that a program is anchored at the subject's start was derived at the
 start of every search, and the same measurement priced that derivation at
-1.3 ns of the empty search. It now decides the common case — a consuming
-instruction straight after the entry `SAVE`s — before building its branch stack.
-Without that, the misses were about 1 ns slower and the literal hits up to
-1 ns slower; `[^0-9]+!` was 0.8 percent slower than before rather than 1.1.
+1.3 ns of the empty search. Format 14 stores it instead, as a validated word 7
+flag; see [start-anchored starts](#start-anchored-starts).
 
 ### Checks
 
@@ -273,14 +273,20 @@ where one attempt charges a handful. Perry's `test` and `exec` calls pay a
 search per call, so a failing anchored pattern paid it on every call (Perry
 issue #10166).
 
-The claim is derived from the instructions rather than stored, like the leading
-run, so no program word can assert it falsely. From instruction zero, capture
+The claim is derived from the instructions by the compiler and stored as word
+7's bit 24, above the descriptor; `Program::from_words` derives it again and
+rejects a program whose bit disagrees, as it does for the leading run, so no
+program word can assert it falsely. Format 13 derived it at the start of every
+search instead, which for an alternation of ten nested branches walked the
+branch stack to its limit each time: 313 of the 654 instructions a miss of
+Claude Code's emoji pattern cost. A search now reads the bit. From instruction zero, capture
 bookkeeping is skipped and a `SPLIT` is followed into both branches; every path
 must reach `START`. Anything first that could consume or match elsewhere — a
 character, a class, a repeat, an assertion, a jump, or `^` under `m` — disables
 it, so `^a|b`, `(?:^)?a`, `(?:^a)+`, `(?<=^)a` and `(?m)^a` are searched as
-before. The walk inspects at most 128 instructions and eight pending branches,
-once per search, on entering admission.
+before. A `BRANCH` is followed like a `SPLIT`. The walk inspects at most 128
+instructions and eight pending branches, once per compilation and once per
+validation.
 
 A start-anchored search then behaves as a sticky one does for choosing starts:
 the candidate scan examines only its first position, and no later start is

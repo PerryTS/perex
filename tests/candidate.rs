@@ -154,7 +154,7 @@ fn descriptors_are_validated_and_old_formats_rejected() {
     let mut bounded = original.clone();
     bounded[8] = original[8] | (7 << 24);
     assert!(Program::from_words(&bounded, &mut Budget::new(1000)).is_ok());
-    for version in [7, 8, 9] {
+    for version in [7, 8, 9, 13] {
         let mut bad = original.clone();
         bad[1] = version;
         assert_eq!(

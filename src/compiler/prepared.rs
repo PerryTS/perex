@@ -118,14 +118,44 @@ impl Prepared<'_> {
                     parser.nodes[b as usize].reverse = n.reverse;
                 }
                 ALT => {
-                    let len = parser.nodes[n.a as usize].len;
-                    let right = pc + len + 2;
-                    parser.nodes[n.a as usize].start = pc + 1;
-                    parser.nodes[n.a as usize].reverse = n.reverse;
-                    parser.nodes[n.b as usize].start = right;
+                    // `a|b|c` parses as `(a|b)|c`. Nested as parsed, the
+                    // first alternative is entered under one live frame per
+                    // alternative and a success leaves through one jump per
+                    // level. Ordered choice is associative, so the chain is
+                    // laid out flat instead: each alternative but the last
+                    // behind its own `SPLIT`, whose frame resumes at the next
+                    // alternative, and each jumping straight to the end. The
+                    // left spine's inner alternations are laid out here, so
+                    // their own nodes become no instruction. The size is the
+                    // same: two instructions per alternation either way.
+                    let end = pc + n.len;
+                    let last = parser.nodes[n.b as usize];
+                    let mut next = end - last.len;
+                    parser.nodes[n.b as usize].start = next;
                     parser.nodes[n.b as usize].reverse = n.reverse;
-                    write(output, pc, SPLIT, pc + 1, right);
-                    write(output, right - 1, JUMP, pc + n.len, 0);
+                    let mut left = n.a;
+                    loop {
+                        parser.step()?;
+                        let node = parser.nodes[left as usize];
+                        let (alternative, inner) = if node.kind == ALT {
+                            parser.nodes[left as usize].start = 0;
+                            (node.b, Some(node.a))
+                        } else {
+                            (left, None)
+                        };
+                        let len = parser.nodes[alternative as usize].len;
+                        let split = next - len - 2;
+                        parser.nodes[alternative as usize].start = split + 1;
+                        parser.nodes[alternative as usize].reverse = n.reverse;
+                        write(output, split, SPLIT, split + 1, next);
+                        write(output, next - 1, JUMP, end, 0);
+                        next = split;
+                        match inner {
+                            Some(inner) => left = inner,
+                            None => break,
+                        }
+                    }
+                    debug_assert_eq!(next, pc);
                 }
                 GROUP => {
                     child(n.a, pc + 1, n.reverse);
@@ -216,12 +246,36 @@ impl Prepared<'_> {
                 output[at + 7] = 1;
             }
         }
+        // A branch whose first arm can only begin with characters from a known
+        // set carries that set, so a search skips the arm, and its frame,
+        // where the next character is outside it. Derived from the final
+        // instructions with the function the validator re-runs; an earlier
+        // branch already rewritten is followed exactly as a `SPLIT` would be.
+        for pc in 0..count as usize {
+            let at = HEADER + pc * 3;
+            if output[at] == SPLIT && output[at + 1] as usize == pc + 1 {
+                let mask = crate::program::derive_first_mask(output, pc + 1, parser.budget)
+                    .map_err(|e| match e {
+                        ProgramError::WorkLimit => CompileError::WorkLimit,
+                        ProgramError::Invalid => CompileError::InvalidProgram,
+                    })?;
+                if mask != crate::program::ALL_FIRST {
+                    output[at] = crate::program::BRANCH;
+                    output[at + 1] = mask;
+                }
+            }
+        }
         if parser.repeats != 0 {
             let hint = parser.admission(Program { words: output }, root)?;
             output[2] |= hint;
         }
         parser.candidate()?;
-        output[7] = parser.candidate_descriptor(root);
+        output[7] = parser.candidate_descriptor(root)
+            | if crate::program::derive_start_anchored(output, count as usize) {
+                crate::program::ANCHORED
+            } else {
+                0
+            };
         output[8] = parser.end_candidate_descriptor(root);
         // Derived from the emitted instructions with the same function the
         // validator re-runs, so the stored word cannot disagree with the program.

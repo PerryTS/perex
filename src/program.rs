@@ -3,7 +3,7 @@ use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 11;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 13;
+pub(crate) const VERSION: u32 = 14;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -86,6 +86,163 @@ pub(crate) const CLASS_SORTED_I: u32 = 28;
 /// an operator around it left.
 pub(crate) const SEQUENCE: u32 = 29;
 pub(crate) const SEQUENCE_I: u32 = 30;
+/// A `SPLIT` whose first arm begins at the next instruction and can only
+/// succeed by consuming a first character in the set operand `a` describes,
+/// one bit per [`first_bucket`]. When the character the arm would read first
+/// is absent or falls in no set bucket, the arm cannot match, and execution
+/// continues at `b` without a backtracking frame: what trying the arm, failing
+/// and backtracking would have reached. Operand `a` is derived from the
+/// instructions by [`derive_first_mask`] and checked against it on validation,
+/// so no program can claim a narrower set than its arm has.
+pub(crate) const BRANCH: u32 = 31;
+/// Word 7 flag, above its first-character descriptor: every successful match
+/// asserts `^` without `m` before it consumes anything. Derived by
+/// [`derive_start_anchored`] and re-derived on validation, so a search reads
+/// it instead of walking the entry each time.
+pub(crate) const ANCHORED: u32 = 1 << 24;
+/// Word 7 bits holding the first-character descriptor.
+pub(crate) const DESCRIPTOR: u32 = 0xff_ffff;
+/// A first-character mask admitting every character: the set is unknown.
+pub(crate) const ALL_FIRST: u32 = u32::MAX;
+/// Instructions [`derive_first_mask`] inspects from one arm before it gives
+/// up and reports [`ALL_FIRST`].
+const FIRST_SCAN: usize = 32;
+/// Paths [`derive_first_mask`] follows at once through nested branches.
+const FIRST_PATHS: usize = 8;
+
+/// The bucket of a character in a first-character mask. ASCII characters fall
+/// in 24 buckets by their low five bits, so the two cases of a letter share
+/// one; every other character falls in one of 8 buckets by its high bits, so
+/// surrogate halves, the CJK blocks and the symbol blocks are told apart.
+#[inline(always)]
+pub(crate) fn first_bucket(c: u32) -> u32 {
+    if c < 128 {
+        (c & 31) % 24
+    } else {
+        24 + (c >> 13).min(7)
+    }
+}
+
+/// The buckets a character range covers.
+fn range_mask(lo: u32, hi: u32) -> u32 {
+    let mut mask = 0;
+    if lo < 128 {
+        let top = hi.min(127);
+        if top - lo >= 31 {
+            mask |= (1 << 24) - 1;
+        } else {
+            for c in lo..=top {
+                mask |= 1 << first_bucket(c);
+            }
+        }
+    }
+    if hi >= 128 {
+        for bucket in first_bucket(lo.max(128))..=first_bucket(hi) {
+            mask |= 1 << bucket;
+        }
+    }
+    mask
+}
+
+/// The arms of a branching instruction at `pc`: where it continues first and
+/// where its backtracking frame resumes. `None` for any other instruction.
+#[inline(always)]
+pub(crate) fn branch_arms(pc: usize, [op, a, b]: [u32; 3]) -> Option<(usize, usize)> {
+    match op {
+        SPLIT => Some((a as usize, b as usize)),
+        BRANCH => Some((pc + 1, b as usize)),
+        _ => None,
+    }
+}
+
+/// The first-character mask of the code starting at `pc`: one bit per bucket
+/// that can hold the first character any successful path from there consumes,
+/// read in the direction that code runs. [`ALL_FIRST`] when some path can
+/// succeed without consuming, or reaches an instruction this does not follow
+/// — an assertion body, a repeat, a backreference, a fold that can reach ASCII
+/// from outside it, a property, a complement — or when the walk is too long.
+///
+/// Position assertions consume nothing and are passed over: dropping a
+/// condition can only widen the set. A path ends at its first consuming
+/// instruction, whose own characters are the path's contribution.
+pub(crate) fn derive_first_mask(
+    words: &[u32],
+    pc: usize,
+    budget: &mut Budget,
+) -> Result<u32, ProgramError> {
+    let instructions = words[4] as usize;
+    let unicode = words[2] & U != 0;
+    let mut pending = [0usize; FIRST_PATHS];
+    let mut depth = 0;
+    let mut pc = pc;
+    let mut mask = 0u32;
+    let mut inspected = 0;
+    loop {
+        inspected += 1;
+        budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
+        if inspected > FIRST_SCAN || pc >= instructions {
+            return Ok(ALL_FIRST);
+        }
+        let at = HEADER + pc * 3;
+        let instruction: [u32; 3] = words[at..at + 3].try_into().unwrap();
+        let [op, a, b] = instruction;
+        if let Some((first, second)) = branch_arms(pc, instruction) {
+            if depth == pending.len() {
+                return Ok(ALL_FIRST);
+            }
+            pending[depth] = second;
+            depth += 1;
+            pc = first;
+            continue;
+        }
+        match op {
+            SAVE | START | START_M | END | END_M | WORD | WORD_I => {
+                pc += 1;
+                continue;
+            }
+            JUMP => {
+                pc = a as usize;
+                continue;
+            }
+            CHAR => mask |= 1 << first_bucket(a),
+            // Both cases of an ASCII letter share a bucket. Under `u`, `k` and
+            // `s` also fold with U+212A and U+017F, so a folded ASCII letter
+            // admits non-ASCII characters as well; a folded non-ASCII
+            // character can fold into ASCII, so it admits everything.
+            CHAR_I if a < 128 => {
+                mask |= 1 << first_bucket(a);
+                if (a as u8).is_ascii_alphabetic() && unicode {
+                    mask |= !((1 << 24) - 1);
+                }
+            }
+            CLASS | CLASS_SORTED if b & NEGATED == 0 => {
+                let start = a as usize;
+                let end = start + b as usize;
+                if end > words[5] as usize {
+                    return Err(ProgramError::Invalid);
+                }
+                for index in start..end {
+                    budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
+                    let base = HEADER + instructions * 3 + index * 2;
+                    let (lo, hi) = (words[base], words[base + 1]);
+                    if lo & PROPERTY != 0 || lo > hi {
+                        return Ok(ALL_FIRST);
+                    }
+                    mask |= range_mask(lo, hi);
+                }
+            }
+            _ => return Ok(ALL_FIRST),
+        }
+        if mask == ALL_FIRST {
+            return Ok(ALL_FIRST);
+        }
+        if depth == 0 {
+            return Ok(mask);
+        }
+        depth -= 1;
+        pc = pending[depth];
+    }
+}
 /// Operand `a`'s group when the instruction covers every group of its set.
 pub(crate) const EVERY_GROUP: u32 = 255 << 8;
 /// The set and the group of equal-length members an instruction addresses.
@@ -208,7 +365,7 @@ pub(crate) fn derive_leading(words: &[u32], instructions: usize) -> u32 {
 /// undecidable here and disables the claim.
 fn derive_alternation(words: &[u32], instructions: usize) -> bool {
     let entry = leading_pc(words, instructions);
-    if entry >= instructions || words[HEADER + entry * 3] != SPLIT {
+    if entry >= instructions || !matches!(words[HEADER + entry * 3], SPLIT | BRANCH) {
         return false;
     }
     let mut pending = [0usize; LEADING_BRANCHES];
@@ -222,13 +379,13 @@ fn derive_alternation(words: &[u32], instructions: usize) -> bool {
             return false;
         }
         let at = HEADER + pc * 3;
-        if words[at] == SPLIT {
+        if let Some((first, second)) = branch_arms(pc, words[at..at + 3].try_into().unwrap()) {
             if depth == pending.len() {
                 return false;
             }
-            pending[depth] = words[at + 2] as usize;
+            pending[depth] = second;
             depth += 1;
-            pc = words[at + 1] as usize;
+            pc = first;
             continue;
         }
         let mut run = 0;
@@ -263,17 +420,17 @@ fn derive_alternation(words: &[u32], instructions: usize) -> bool {
 /// such a program tries only its first start, as a sticky one does: every later
 /// start fails at the same `^`.
 ///
-/// Derived from the instructions each search, like [`derive_leading`], rather
-/// than stored, so no program word can claim it falsely.
+/// Derived from the instructions when the program is emitted and again when it
+/// is validated, which rejects a word 2 [`ANCHORED`] flag that disagrees, so no
+/// program word can claim it falsely and a search only reads the flag.
 pub(crate) fn derive_start_anchored(words: &[u32], instructions: usize) -> bool {
     // Almost every program reaches a consuming instruction straight after its
     // entry `SAVE`s, which decides the claim without the branch stack below.
-    // This runs at the start of every search, so the common case stays short.
     let entry = leading_pc(words, instructions);
     if entry < instructions && entry < LEADING_SCAN {
         match words[HEADER + entry * 3] {
             START => return true,
-            SPLIT => {}
+            SPLIT | BRANCH => {}
             _ => return false,
         }
     }
@@ -287,16 +444,18 @@ pub(crate) fn derive_start_anchored(words: &[u32], instructions: usize) -> bool 
             return false;
         }
         let at = HEADER + pc * 3;
-        match words[at] {
-            SAVE => pc += 1,
-            SPLIT => {
-                if depth == pending.len() {
-                    return false;
-                }
-                pending[depth] = words[at + 2] as usize;
-                depth += 1;
-                pc = words[at + 1] as usize;
+        let instruction: [u32; 3] = words[at..at + 3].try_into().unwrap();
+        if let Some((first, second)) = branch_arms(pc, instruction) {
+            if depth == pending.len() {
+                return false;
             }
+            pending[depth] = second;
+            depth += 1;
+            pc = first;
+            continue;
+        }
+        match instruction[0] {
+            SAVE => pc += 1,
             START => {
                 if depth == 0 {
                     return true;
@@ -380,17 +539,14 @@ impl<'a> Program<'a> {
         {
             return Err(bad);
         }
-        // Word 8's upper byte carries the end-anchored length bound; word 7 has
-        // no such field. Both share the character-range encoding below it. Like
-        // the range descriptors, the bound's representation is checked here and
-        // its semantic guarantee belongs to the compiler.
+        // Word 8's upper byte carries the end-anchored length bound; word 7's
+        // carries only the anchored flag, checked against the instructions
+        // below. Both share the character-range encoding below it. Like the
+        // range descriptors, the bound's representation is checked here and its
+        // semantic guarantee belongs to the compiler.
         for (index, &candidate) in words[7..9].iter().enumerate() {
-            let descriptor = if index == 1 {
-                candidate & 0xff_ffff
-            } else {
-                candidate
-            };
-            if index == 0 && candidate != descriptor {
+            let descriptor = candidate & DESCRIPTOR;
+            if index == 0 && candidate & !(DESCRIPTOR | ANCHORED) != 0 {
                 return Err(bad);
             }
             let lo = (descriptor >> 8) & 255;
@@ -430,6 +586,7 @@ impl<'a> Program<'a> {
         // so every field is checked on its own.
         if words[9] & RUN_SKIP != derive_run_skip(words, p)
             || words[9] & LEADING_MASK != derive_leading(words, p.instructions())
+            || (words[7] & ANCHORED != 0) != derive_start_anchored(words, p.instructions())
             || (words[9] & ADMISSION_FORWARD != 0 && words[2] & ADMISSION == 0)
         {
             return Err(bad);
@@ -528,6 +685,12 @@ impl<'a> Program<'a> {
                 }
                 SAVE => a < words[3] * 2 && b == 0,
                 SPLIT => a < words[4] && b < words[4],
+                BRANCH => {
+                    b < words[4]
+                        && pc + 1 < p.instructions()
+                        && a != ALL_FIRST
+                        && derive_first_mask(words, pc + 1, budget)? == a
+                }
                 JUMP => a < words[4] && b == 0,
                 WORD | WORD_I => a <= 1 && b == 0,
                 BACKREF | BACKREF_I => a > 0 && a < words[3] && b == 0,
@@ -663,6 +826,15 @@ impl<'a> Program<'a> {
         }
     }
     /// Instruction holding the first character of [`Program::leading`].
+    /// Word 7's first-character descriptor; see `docs/candidate.md`.
+    pub(crate) fn first_descriptor(self) -> u32 {
+        self.words[7] & DESCRIPTOR
+    }
+    /// Whether every match begins at the subject's start. See
+    /// [`derive_start_anchored`].
+    pub(crate) fn start_anchored(self) -> bool {
+        self.words[7] & ANCHORED != 0
+    }
     pub(crate) fn leading_pc(self) -> usize {
         leading_pc(self.words, self.instructions())
     }

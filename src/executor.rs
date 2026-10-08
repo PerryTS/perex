@@ -1371,18 +1371,24 @@ impl Vm<'_, '_, '_, '_> {
     }
     /// Clear the registers a trial starts from, in bounded steps, and enter the
     /// trial once they are all clear.
+    ///
+    /// Only the capture registers start a trial cleared. A repeat's two
+    /// registers follow them, and the only way into a repeat is its
+    /// `REPEAT_INIT`, which writes both before anything in the repeat reads
+    /// them; a frame or undo entry that restores an earlier value restores it
+    /// to a point before that write, where nothing reads it either. So a
+    /// pattern with many repeats, such as one `?` per alternative, does not
+    /// pay for clearing them at every start.
     fn initialize(&mut self, index: usize, available: usize) -> Result<(), ExecError> {
-        if index == self.program.register_count() {
+        let count = self.program.capture_count() * 2;
+        if index == count {
             self.begin_trial();
             return self.skip_verified();
         }
-        let end = self
-            .program
-            .register_count()
-            .min(index + available.min(256));
+        let end = count.min(index + available.min(256));
         self.charge(end - index)?;
         self.scratch.registers[index..end].fill(UNSET);
-        if end == self.program.register_count() {
+        if end == count {
             self.begin_trial();
             self.skip_verified()
         } else {
@@ -1839,6 +1845,33 @@ impl Vm<'_, '_, '_, '_> {
             SPLIT => {
                 self.push(b as usize, 0)?;
                 self.state.pc = a as usize;
+            }
+            BRANCH => {
+                // The arm begins at the next instruction, where `pc` already
+                // is. One that cannot consume the next character would fail
+                // and resume at `b` with nothing changed; go there directly.
+                // When `b` is the next alternative's own branch, it is decided
+                // here against the same character, and charged as executing
+                // it would be, so a chain of alternatives costs one read.
+                let mut ahead = self.cursor;
+                let bucket = read(&mut ahead, self.program.unicode(), self.state.reverse)
+                    .map_or(0, |c| 1 << first_bucket(c));
+                // The chain stays within the quantum the next instruction
+                // would have been given; past it, the trial loop takes the
+                // next branch as it takes any instruction.
+                let (mut mask, mut right, mut chained) = (a, b as usize, 1);
+                while mask & bucket == 0 {
+                    let [op, a, b] = self.program.instruction(right);
+                    if op != BRANCH || chained >= available {
+                        self.state.pc = right;
+                        return Ok(Step::Next);
+                    }
+                    chained += 1;
+                    self.charge(1)?;
+                    self.state.pc = right + 1;
+                    (mask, right) = (a, b as usize);
+                }
+                self.push(right, 0)?;
             }
             JUMP => self.state.pc = a as usize,
             START | START_M => {
