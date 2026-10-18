@@ -29,6 +29,7 @@ impl<'a> Program<'a> {
     /// A bounded literal-prefix executor, or `None` for every other program.
     /// In particular, multiline `^`, folded characters, captures and trailing
     /// assertions remain the ordinary evaluator's or automaton's responsibility.
+    #[inline]
     pub fn literal_prefix(self) -> Option<LiteralPrefix<'a>> {
         (self.words()[7] & LITERAL_PREFIX != 0).then_some(LiteralPrefix { program: self })
     }
@@ -38,6 +39,7 @@ impl LiteralPrefix<'_> {
     /// The complete group-zero answer the evaluator would produce at or after
     /// `start_utf16`. Reads the original subject; no view or address is retained.
     /// Work exhaustion is an error, never a no-match answer.
+    #[inline]
     pub fn find(
         self,
         input: Input<'_>,
@@ -45,6 +47,35 @@ impl LiteralPrefix<'_> {
         budget: &mut Budget,
     ) -> Result<Option<Span>, ExecError> {
         budget.charge(1).map_err(|_| ExecError::WorkLimit)?;
+        // A counted ASCII subject needs no cursor state or decoding. Compare
+        // the original bytes directly with the immutable CHAR operands; a
+        // non-ASCII operand simply cannot match this storage.
+        if let Some(bytes) = input.ascii_bytes() {
+            if start_utf16 != 0 {
+                return Ok(None);
+            }
+            let count = self.program.instructions() - 4;
+            for index in 0..count {
+                budget.charge(1).map_err(|_| ExecError::WorkLimit)?;
+                if bytes.get(index).copied().map(u32::from)
+                    != Some(self.program.instruction(index + 2)[1])
+                {
+                    return Ok(None);
+                }
+            }
+            return Ok(Span::new(0, count));
+        }
+        self.find_cursor(input, start_utf16, budget)
+    }
+
+    // Keep the lossless cursor machinery outside the ASCII caller's frame.
+    #[inline(never)]
+    fn find_cursor(
+        self,
+        input: Input<'_>,
+        start_utf16: usize,
+        budget: &mut Budget,
+    ) -> Result<Option<Span>, ExecError> {
         let unicode = self.program.words()[2] & U != 0;
         // Unicode RegExpBuiltinExec can normalize a start between a leading
         // surrogate pair's halves back to zero. No later start can reach ^.
