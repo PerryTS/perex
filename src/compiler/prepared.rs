@@ -281,6 +281,9 @@ impl Prepared<'_> {
             } else {
                 0
             };
+        if crate::literal::eligible(Program { words: output }) {
+            output[7] |= crate::program::LITERAL_PREFIX;
+        }
         output[8] = parser.end_candidate_descriptor(root);
         // Derived from the emitted instructions with the same function the
         // validator re-runs, so the stored word cannot disagree with the program.

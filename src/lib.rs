@@ -15,6 +15,7 @@
 
 pub mod binding;
 pub mod input;
+pub mod literal;
 pub mod span;
 
 mod casefold;
