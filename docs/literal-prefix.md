@@ -7,8 +7,9 @@ it and rejects either a forged or a missing claim. The instructions remain
 the program data; there is no second program, native code or retained state.
 
 `Program::literal_prefix()` obtains an exact executor. Its `find` compares
-those literal characters with the original input cursor and returns group
-zero's span. Multiline assertions, case folding, captures and other suffixes
+those literal characters with the original input and returns group zero's
+span. ASCII byte storage is compared directly without constructing cursor
+state; other storage uses the lossless cursor. Multiline assertions, case folding, captures and other suffixes
 use the ordinary evaluator or automaton. Unicode starts between a leading
 surrogate pair's halves normalize exactly as the evaluator does. Work is
 charged for the check and each compared character; the 32-character bound
