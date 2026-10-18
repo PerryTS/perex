@@ -178,6 +178,9 @@ pub fn eligible(program: Program<'_>) -> bool {
 /// The least cache storage, in words, that `program` can be searched in, or
 /// `None` when it is not eligible. More storage holds more states.
 pub fn minimum_words(program: Program<'_>) -> Option<usize> {
+    if program.literal_prefix().is_some() {
+        return Some(0);
+    }
     if !eligible(program) {
         return None;
     }
@@ -287,6 +290,12 @@ fn search(
     budget: &mut Budget,
     bounds: bool,
 ) -> Result<Outcome, ExecError> {
+    if let Some(prefix) = program.literal_prefix() {
+        return Ok(match prefix.find(input, start_utf16, budget)? {
+            Some(span) => Outcome::Matched(bounds.then_some(span)),
+            None => Outcome::NoMatch,
+        });
+    }
     // A validated program holds its whole header; reading it as one array
     // checks that once.
     let Some(words) = program.words.first_chunk::<HEADER>() else {

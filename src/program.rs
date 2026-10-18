@@ -3,7 +3,7 @@ use crate::{Budget, properties};
 
 pub(crate) const HEADER: usize = 11;
 pub(crate) const MAGIC: u32 = 0x50525831;
-pub(crate) const VERSION: u32 = 15;
+pub(crate) const VERSION: u32 = 16;
 pub(crate) const U: u32 = 1;
 pub(crate) const M: u32 = 2;
 pub(crate) const S: u32 = 4;
@@ -104,6 +104,9 @@ pub(crate) const ANCHORED: u32 = 1 << 24;
 /// and every repeat's counter fits its state key. Derived by [`derive_dfa`]
 /// and re-derived on validation; see `docs/dfa.md`.
 pub(crate) const DFA: u32 = 1 << 25;
+/// Word 7 flag: the entire program is a bounded, capture-free start-anchored
+/// literal run. Re-derived from the instructions during validation.
+pub(crate) const LITERAL_PREFIX: u32 = 1 << 26;
 /// Largest repeat bound the automaton counts to: a maximum, or the minimum of
 /// an unbounded repeat.
 pub(crate) const DFA_COUNT_MAX: u32 = 1023;
@@ -632,7 +635,7 @@ impl<'a> Program<'a> {
         // semantic guarantee belongs to the compiler.
         for (index, &candidate) in words[7..9].iter().enumerate() {
             let descriptor = candidate & DESCRIPTOR;
-            if index == 0 && candidate & !(DESCRIPTOR | ANCHORED | DFA) != 0 {
+            if index == 0 && candidate & !(DESCRIPTOR | ANCHORED | DFA | LITERAL_PREFIX) != 0 {
                 return Err(bad);
             }
             let lo = (descriptor >> 8) & 255;
@@ -867,7 +870,9 @@ impl<'a> Program<'a> {
         budget
             .charge(p.instructions() / 8 + 1)
             .map_err(|_| ProgramError::WorkLimit)?;
-        if (words[7] & DFA != 0) != derive_dfa(p) {
+        if (words[7] & LITERAL_PREFIX != 0) != crate::literal::eligible(p)
+            || (words[7] & DFA != 0) != derive_dfa(p)
+        {
             return Err(bad);
         }
         Ok(p)
