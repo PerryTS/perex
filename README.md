@@ -107,6 +107,8 @@ the current offset when it shortens the seek. Adjacent reads need no prefix
 rescan or subject index. Seeking still consumes the caller's cumulative work
 budget in bounded steps; retargeting cannot revive a failed reader.
 
+Release notes are in [the changelog](CHANGELOG.md).
+
 ## Development
 
 ```sh
