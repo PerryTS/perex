@@ -9,6 +9,7 @@ use crate::{
 mod admission;
 mod atom;
 pub(crate) mod candidate;
+mod literals;
 mod state;
 use state::*;
 const UNSET: usize = usize::MAX;
@@ -779,6 +780,7 @@ impl Vm<'_, '_, '_, '_> {
     fn charge(&mut self, n: usize) -> Result<(), ExecError> {
         self.budget.charge(n).map_err(|_| ExecError::WorkLimit)
     }
+    #[inline(always)]
     fn store(&mut self, slot: usize, value: usize) -> Result<(), ExecError> {
         let old = *self
             .scratch
@@ -1373,7 +1375,15 @@ impl Vm<'_, '_, '_, '_> {
             } else {
                 usize::MAX
             };
-            match self.instruction(op, a, b, available) {
+            let step = if matches!(op, CHAR | SAVE)
+                && !self.state.reverse
+                && let Some(bytes) = self.input.ascii_bytes()
+            {
+                self.literal_run::<PAUSABLE>(op, a, bytes, initial, quantum)
+            } else {
+                self.instruction(op, a, b, available)
+            };
+            match step {
                 Ok(Step::Next) => {}
                 Ok(Step::Fail) => {
                     self.state.phase = Phase::Fail;
@@ -1406,7 +1416,9 @@ impl Vm<'_, '_, '_, '_> {
                     }
                 }
                 Err(error) => {
-                    if matches!(error, ExecError::Frames | ExecError::Undo) {
+                    if matches!(error, ExecError::Frames | ExecError::Undo)
+                        && !matches!(self.state.phase, Phase::Execute { .. })
+                    {
                         self.state.phase = Phase::Execute { op, a, b };
                     }
                     return Err(error);
