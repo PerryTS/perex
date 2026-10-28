@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.15 — 2026-10-28
+
+- Reduce repeated work when matching character repetitions and reading compiled programs.
+- Read ASCII character classes directly from validated program storage.
+- Preserve program format 16, complete captures, work limits and resumable searches across storage relocation.
+
 ## 0.1.14 — 2026-10-18
 
 - Execute bounded start-anchored literal runs directly from immutable program data, without DFA storage or evaluator scratch.

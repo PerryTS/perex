@@ -85,8 +85,8 @@ impl Patches {
         Ok(())
     }
     fn take(&mut self, other: &mut Patches) -> Result<(), EmitError> {
-        for index in 0..other.count {
-            self.push(other.list[index])?;
+        for &patch in &other.list[..other.count] {
+            self.push(patch)?;
         }
         Ok(())
     }
@@ -687,8 +687,7 @@ fn generate<M: Machine>(program: Program<'_>, asm: &mut M) -> Result<usize, Emit
                     give_up(&mut next_start, &mut repeats, depth, asm.branch())?;
                     asm.bind(accepted);
                 } else {
-                    for index in 0..absent.count {
-                        let patch = absent.list[index];
+                    for &patch in &absent.list[..absent.count] {
                         give_up(&mut next_start, &mut repeats, depth, patch)?;
                     }
                 }

@@ -120,7 +120,7 @@ impl Vm<'_, '_, '_, '_> {
         let mut pc = self.program.leading_pc();
         loop {
             self.charge(1)?;
-            if let Some((first, second)) = branch_arms(pc, self.program.instruction(pc)) {
+            if let Some((first, second)) = branch_arms(pc, self.opcode(pc)) {
                 // The derivation proved the branch count fits.
                 if depth == pending.len() {
                     return Ok(true);
@@ -132,9 +132,9 @@ impl Vm<'_, '_, '_, '_> {
             }
             let mut matched = true;
             let mut next = pc;
-            while self.program.instruction(next)[0] == CHAR {
+            while self.opcode(next)[0] == CHAR {
                 self.charge(1)?;
-                let want = self.program.instruction(next)[1];
+                let want = self.opcode(next)[1];
                 match bytes.get(at + (next - pc)) {
                     Some(&byte) if u32::from(byte) == want => next += 1,
                     _ => {
@@ -176,7 +176,7 @@ impl Vm<'_, '_, '_, '_> {
         // ASCII-insensitive comparison is exact for a folded run there.
         let fold = self.program.leading_fold();
         for (i, &byte) in window.iter().enumerate() {
-            let want = self.program.instruction(pc + i)[1];
+            let want = self.opcode(pc + i)[1];
             let same = if fold {
                 byte.eq_ignore_ascii_case(&(want as u8))
             } else {

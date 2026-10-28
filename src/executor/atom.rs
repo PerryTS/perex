@@ -4,7 +4,7 @@ use super::*;
 
 /// What a fixed-charge atom accepts, as a predicate over original ASCII bytes.
 #[derive(Clone, Copy)]
-enum AtomBytes {
+enum AtomBytes<'p> {
     /// Inside an inclusive range, as a plain single-range class.
     Inside(u8, u8),
     /// Outside one, as that class negated.
@@ -15,21 +15,24 @@ enum AtomBytes {
     /// Anything, as `.` with the `s` flag.
     Every,
     /// Inside any of several inclusive ranges, or outside all of them when
-    /// negated. Only ranges an ASCII subject can reach are kept.
-    Ranges([(u8, u8); ATOM_CLASS_RANGES as usize], u8, bool),
+    /// negated. Borrow the original class records for this active view.
+    Ranges(&'p [[u32; 2]], bool),
+    /// Either ASCII case of a letter in a continuation probe.
+    Either(u8, u8),
 }
 
-impl AtomBytes {
+impl AtomBytes<'_> {
     fn holds(self, byte: u8) -> bool {
         match self {
             Self::Inside(lo, hi) => byte >= lo && byte <= hi,
             Self::Outside(lo, hi) => byte < lo || byte > hi,
             Self::Unlined => byte != b'\n' && byte != b'\r',
             Self::Every => true,
-            Self::Ranges(ranges, count, negated) => {
-                let inside = ranges[..count as usize]
+            Self::Either(a, b) => byte == a || byte == b,
+            Self::Ranges(ranges, negated) => {
+                let inside = ranges
                     .iter()
-                    .any(|&(lo, hi)| byte >= lo && byte <= hi);
+                    .any(|&[lo, hi]| u32::from(byte) >= lo && u32::from(byte) <= hi);
                 inside != negated
             }
         }
@@ -54,7 +57,7 @@ const RETREAT_SCAN: usize = 8;
 /// classes ordinary patterns repeat.
 const ATOM_CLASS_RANGES: u32 = 16;
 
-impl Vm<'_, '_, '_, '_> {
+impl<'p> Vm<'_, 'p, '_, '_> {
     fn atom_state(&self) -> Result<AtomState, ExecError> {
         match self.state.work {
             Work::Atom(state) => Ok(state),
@@ -62,14 +65,14 @@ impl Vm<'_, '_, '_, '_> {
         }
     }
     fn atom_record(&self) -> Result<[u32; 8], ExecError> {
-        if self.state.pc >= self.program.instructions() {
+        if self.state.pc >= self.instruction_count() {
             return Err(ExecError::InvalidProgram);
         }
-        let [op, id, _] = self.program.instruction(self.state.pc);
+        let [op, id, _] = self.opcode(self.state.pc);
         if op != ATOM_REPEAT {
             return Err(ExecError::InvalidProgram);
         }
-        Ok(self.program.repeat(id as usize))
+        Ok(self.repeat_record(id as usize))
     }
     /// Whether this atom can be decided without the resumable class phase.
     fn inline_atom(&self, op: u32, b: u32) -> bool {
@@ -97,7 +100,7 @@ impl Vm<'_, '_, '_, '_> {
             _ => {
                 let mut found = false;
                 for index in a..a + (b & !NEGATED) {
-                    let [lo, hi] = self.program.range(index as usize);
+                    let [lo, hi] = self.class_range(index as usize);
                     found = if lo & PROPERTY != 0 {
                         if hi == 2 {
                             !properties::contains(lo & !PROPERTY, c)
@@ -122,7 +125,7 @@ impl Vm<'_, '_, '_, '_> {
     /// The charge one character of this atom always costs, when that is the
     /// same whatever the character is, with the predicate to walk it by. `None`
     /// when the charge is data-dependent, which a byte scan cannot reproduce.
-    fn fixed_atom_charge(&self, op: u32, a: u32, b: u32) -> Option<(usize, AtomBytes)> {
+    fn fixed_atom_charge(&self, op: u32, a: u32, b: u32) -> Option<(usize, AtomBytes<'p>)> {
         match op {
             // One unit for the character; `equal` charges nothing.
             CHAR if a < 128 => Some((1, AtomBytes::Inside(a as u8, a as u8))),
@@ -132,28 +135,26 @@ impl Vm<'_, '_, '_, '_> {
             // which is the same whether or not it matches.
             CLASS if b & !NEGATED <= ATOM_CLASS_RANGES && b & !NEGATED != 0 => {
                 let count = b & !NEGATED;
-                let mut ranges = [(0, 0); ATOM_CLASS_RANGES as usize];
-                let mut kept = 0;
-                for index in a..a + count {
-                    let [lo, hi] = self.program.range(index as usize);
+                // Borrow the already validated class records for this view.
+                // Do not zero, fill and return a maximum-sized predicate array
+                // at every repeat. No reference enters resumable state.
+                let records = self.sections.ranges;
+                let ranges = records.get(a as usize..(a + count) as usize)?;
+                for &[lo, hi] in ranges {
                     if lo & PROPERTY != 0 || lo > hi {
                         return None;
                     }
-                    // A range beyond ASCII can never match this storage, so it
-                    // is dropped rather than making the class ineligible.
-                    if lo < 128 {
-                        ranges[kept] = (lo as u8, hi.min(127) as u8);
-                        kept += 1;
-                    }
                 }
                 let negated = b & NEGATED != 0;
-                // One range keeps its own predicate: the general form walks a
-                // slice per word, which costs more than the single comparison
-                // the common case needs.
-                let accepts = match (kept, negated) {
-                    (1, false) => AtomBytes::Inside(ranges[0].0, ranges[0].1),
-                    (1, true) => AtomBytes::Outside(ranges[0].0, ranges[0].1),
-                    _ => AtomBytes::Ranges(ranges, kept as u8, negated),
+                let accepts = match ranges {
+                    &[[lo, hi]] if lo < 128 => {
+                        if negated {
+                            AtomBytes::Outside(lo as u8, hi.min(127) as u8)
+                        } else {
+                            AtomBytes::Inside(lo as u8, hi.min(127) as u8)
+                        }
+                    }
+                    _ => AtomBytes::Ranges(ranges, negated),
                 };
                 Some((1 + count as usize, accepts))
             }
@@ -172,16 +173,20 @@ impl Vm<'_, '_, '_, '_> {
     /// and rebuilding its comparison words there, costs more than the
     /// comparison itself; decided once, each loop is a fixed sequence over a
     /// word the compiler can widen further where the target allows.
-    fn byte_run(bytes: &[u8], start: usize, accepts: AtomBytes, limit: usize) -> usize {
+    fn byte_run(bytes: &[u8], start: usize, accepts: AtomBytes<'_>, limit: usize) -> usize {
         let end = bytes.len().min(start + limit);
         match accepts {
             AtomBytes::Every => end - start,
             AtomBytes::Inside(lo, hi) => Self::run_range(bytes, start, end, lo, hi, false),
             AtomBytes::Outside(lo, hi) => Self::run_range(bytes, start, end, lo, hi, true),
             AtomBytes::Unlined => Self::run_unlined(bytes, start, end),
-            AtomBytes::Ranges(ranges, count, negated) => {
-                Self::run_ranges(bytes, start, end, ranges, count as usize, negated)
+            AtomBytes::Ranges(ranges, negated) => {
+                Self::run_ranges(bytes, start, end, ranges, negated)
             }
+            AtomBytes::Either(a, b) => bytes[start..end]
+                .iter()
+                .take_while(|&&byte| byte == a || byte == b)
+                .count(),
         }
     }
 
@@ -236,11 +241,10 @@ impl Vm<'_, '_, '_, '_> {
         bytes: &[u8],
         start: usize,
         end: usize,
-        ranges: [(u8, u8); ATOM_CLASS_RANGES as usize],
-        count: usize,
+        ranges: &[[u32; 2]],
         negated: bool,
     ) -> usize {
-        let ranges = &ranges[..count];
+        let count = ranges.len();
         // Past a few blocks, testing each range against every lane of a block
         // widens into vector comparisons where the target has them. Below that
         // the block's own setup costs more than the lane arithmetic it
@@ -251,9 +255,10 @@ impl Vm<'_, '_, '_, '_> {
             while base + LANES <= end {
                 let block: [u8; LANES] = bytes[base..base + LANES].try_into().unwrap();
                 let mut inside = [0u8; LANES];
-                for &(lo, hi) in ranges {
+                for &[lo, hi] in ranges {
                     for lane in 0..LANES {
-                        inside[lane] |= u8::from(block[lane] >= lo && block[lane] <= hi);
+                        inside[lane] |=
+                            u8::from(u32::from(block[lane]) >= lo && u32::from(block[lane]) <= hi);
                     }
                 }
                 // Find the lane the run stops at through the word it lands
@@ -277,8 +282,12 @@ impl Vm<'_, '_, '_, '_> {
         // matches, so it does not build them either.
         if base + 8 <= end {
             let mut bounds = [(0u64, 0u64); ATOM_CLASS_RANGES as usize];
-            for (bound, &(lo, hi)) in bounds.iter_mut().zip(ranges) {
-                *bound = (u64::from(lo) * ONES, u64::from(hi) * ONES);
+            for (bound, &[lo, hi]) in bounds.iter_mut().zip(ranges) {
+                *bound = if lo < 128 {
+                    (u64::from(lo) * ONES, u64::from(hi.min(127)) * ONES)
+                } else {
+                    (ONES, 0)
+                };
             }
             let bounds = &bounds[..count];
             while base + 8 <= end {
@@ -297,7 +306,7 @@ impl Vm<'_, '_, '_, '_> {
         while base < end
             && (ranges
                 .iter()
-                .any(|&(lo, hi)| bytes[base] >= lo && bytes[base] <= hi)
+                .any(|&[lo, hi]| u32::from(bytes[base]) >= lo && u32::from(bytes[base]) <= hi)
                 != negated)
         {
             base += 1;
@@ -316,7 +325,7 @@ impl Vm<'_, '_, '_, '_> {
         if extend && (atom.needed != 0 || (!infinite && atom.remaining == 0)) {
             return Err(ExecError::InvalidProgram);
         }
-        let [op, a, b] = self.program.instruction(self.state.pc + 3);
+        let [op, a, b] = self.opcode(self.state.pc + 3);
         // Characters this scan may consume before anything but the atom itself
         // decides: the minimum still owed, then, for a greedy repeat, its
         // remaining allowance (unbounded when it has none). A lazy repeat stops
@@ -585,22 +594,19 @@ impl Vm<'_, '_, '_, '_> {
     fn continuation_probe(&self, at: usize) -> Option<[u32; 3]> {
         let mut at = at;
         let mut skipped = 0;
-        while skipped < RETREAT_SCAN
-            && at < self.program.instructions()
-            && self.program.instruction(at)[0] == SAVE
+        while skipped < RETREAT_SCAN && at < self.instruction_count() && self.opcode(at)[0] == SAVE
         {
             at += 1;
             skipped += 1;
         }
-        if at >= self.program.instructions() {
+        if at >= self.instruction_count() {
             return None;
         }
-        let [next, value, third] = self.program.instruction(at);
+        let [next, value, third] = self.opcode(at);
         let probe = if next == ATOM_REPEAT {
-            let inner = self.program.repeat(value as usize);
+            let inner = self.repeat_record(value as usize);
             let body = at + 3;
-            (inner[0] >= 1 && body < self.program.instructions())
-                .then(|| self.program.instruction(body))?
+            (inner[0] >= 1 && body < self.instruction_count()).then(|| self.opcode(body))?
         } else {
             [next, value, third]
         };
@@ -631,7 +637,7 @@ impl Vm<'_, '_, '_, '_> {
     /// sends the endpoint to the ordinary commit.
     #[inline(never)]
     fn lazy_skip(&mut self, r: [u32; 8], available: usize) -> Result<bool, ExecError> {
-        let [op, a, b] = self.program.instruction(self.state.pc + 3);
+        let [op, a, b] = self.opcode(self.state.pc + 3);
         if !self.inline_atom(op, b) {
             return Ok(false);
         }
@@ -660,16 +666,7 @@ impl Vm<'_, '_, '_, '_> {
                     let byte = value as u8;
                     let folded = next == CHAR_I && byte.is_ascii_alphabetic();
                     Some(if folded {
-                        AtomBytes::Ranges(
-                            {
-                                let mut ranges = [(0, 0); ATOM_CLASS_RANGES as usize];
-                                ranges[0] = (byte | 32, byte | 32);
-                                ranges[1] = (byte & !32, byte & !32);
-                                ranges
-                            },
-                            2,
-                            false,
-                        )
+                        AtomBytes::Either(byte | 32, byte & !32)
                     } else {
                         AtomBytes::Inside(byte, byte)
                     })
@@ -782,17 +779,15 @@ impl Vm<'_, '_, '_, '_> {
         // The scan is bounded, so it cannot outrun a budget it does not charge.
         let mut at = r[4] as usize;
         let mut skipped = 0;
-        while skipped < RETREAT_SCAN
-            && at < self.program.instructions()
-            && self.program.instruction(at)[0] == SAVE
+        while skipped < RETREAT_SCAN && at < self.instruction_count() && self.opcode(at)[0] == SAVE
         {
             at += 1;
             skipped += 1;
         }
-        if at >= self.program.instructions() {
+        if at >= self.instruction_count() {
             return Err(ExecError::InvalidProgram);
         }
-        let [next, value, third] = self.program.instruction(at);
+        let [next, value, third] = self.opcode(at);
         if matches!(next, CHAR | CHAR_I) {
             return self.retreat_literal(atom.minimum_end, value, next == CHAR_I, available);
         }
@@ -801,10 +796,9 @@ impl Vm<'_, '_, '_, '_> {
         // needs no retry frame either. A repeat that can match nothing consumes
         // no character and so states no condition.
         let probe = if next == ATOM_REPEAT {
-            let inner = self.program.repeat(value as usize);
+            let inner = self.repeat_record(value as usize);
             let body = at + 3;
-            (inner[0] >= 1 && body < self.program.instructions())
-                .then(|| self.program.instruction(body))
+            (inner[0] >= 1 && body < self.instruction_count()).then(|| self.opcode(body))
         } else {
             Some([next, value, third])
         };

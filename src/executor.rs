@@ -370,6 +370,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
             }
             let mut vm = Vm {
                 program,
+                sections: program.sections(),
                 input,
                 cursor: input.cursor(),
                 scratch: &mut scratch,
@@ -579,6 +580,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
                 }
                 let mut vm = Vm {
                     program,
+                    sections: program.sections(),
                     input,
                     cursor,
                     scratch: &mut scratch,
@@ -737,6 +739,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
 
 struct Vm<'a, 'p, 's, 'w> {
     program: Program<'p>,
+    sections: ProgramSections<'p>,
     input: Input<'a>,
     cursor: Cursor<'a>,
     scratch: &'w mut Scratch<'s>,
@@ -756,6 +759,23 @@ enum Step {
     Phase,
 }
 impl Vm<'_, '_, '_, '_> {
+    #[inline]
+    fn instruction_count(&self) -> usize {
+        self.sections.instructions.len()
+    }
+    #[inline]
+    fn opcode(&self, pc: usize) -> [u32; 3] {
+        self.sections.instructions[pc]
+    }
+    #[inline]
+    fn class_range(&self, index: usize) -> [u32; 2] {
+        self.sections.ranges[index]
+    }
+    #[inline]
+    fn repeat_record(&self, index: usize) -> [u32; 8] {
+        self.sections.repeats[index]
+    }
+
     fn charge(&mut self, n: usize) -> Result<(), ExecError> {
         self.budget.charge(n).map_err(|_| ExecError::WorkLimit)
     }
@@ -883,7 +903,7 @@ impl Vm<'_, '_, '_, '_> {
                     // The saved next PC still identifies the initiating
                     // backreference after a paused seek or named-group scan.
                     fold: matches!(
-                        self.program.instruction(self.state.pc - 1)[0],
+                        self.opcode(self.state.pc - 1)[0],
                         BACKREF_I | NAMED_BACKREF_I
                     ),
                 };
@@ -1143,7 +1163,7 @@ impl Vm<'_, '_, '_, '_> {
             while low < high {
                 self.charge(1)?;
                 let middle = low + (high - low) / 2;
-                let [lo, hi] = self.program.range(middle as usize);
+                let [lo, hi] = self.class_range(middle as usize);
                 if c < lo {
                     high = middle;
                 } else if c > hi {
@@ -1159,7 +1179,7 @@ impl Vm<'_, '_, '_, '_> {
         }
         for index in index..end {
             self.charge(1)?;
-            let [lo, hi] = self.program.range(index as usize);
+            let [lo, hi] = self.class_range(index as usize);
             let found = if lo & PROPERTY != 0 {
                 let inside = properties::contains(lo & !PROPERTY, c);
                 // A `v` complement (kind 2): see `class_step`.
@@ -1204,7 +1224,7 @@ impl Vm<'_, '_, '_, '_> {
                 while low < high {
                     self.charge(1)?;
                     let middle = low + (high - low) / 2;
-                    let [lo, hi] = self.program.range(middle as usize);
+                    let [lo, hi] = self.class_range(middle as usize);
                     if value < lo {
                         high = middle;
                     } else if value > hi {
@@ -1223,7 +1243,7 @@ impl Vm<'_, '_, '_, '_> {
         let stop = end.min(index.saturating_add(available.min(256) as u32));
         for index in index..stop {
             self.charge(1)?;
-            let [lo, hi] = self.program.range(index as usize);
+            let [lo, hi] = self.class_range(index as usize);
             // A `v` complement (kind 2) negates membership of the whole case
             // closure, not of each equivalent separately. Under `i` those give
             // different answers: `[\P{Ll}]` excludes `A`, because `a` folds
@@ -1278,7 +1298,7 @@ impl Vm<'_, '_, '_, '_> {
         self.charge(entry + verified)?;
         let position = self.cursor.position();
         for pc in 0..entry {
-            let [op, a, _] = self.program.instruction(pc);
+            let [op, a, _] = self.opcode(pc);
             if op != SAVE {
                 return Err(ExecError::InvalidProgram);
             }
@@ -1299,15 +1319,15 @@ impl Vm<'_, '_, '_, '_> {
         let body = self.state.pc;
         let end = after.checked_sub(1)?;
         let length = end.checked_sub(body)?;
-        if length < 1 || length > LEADING_MAX as usize || end >= self.program.instructions() {
+        if length < 1 || length > LEADING_MAX as usize || end >= self.instruction_count() {
             return None;
         }
-        if self.program.instruction(end)[0] != ASSERT_END {
+        if self.opcode(end)[0] != ASSERT_END {
             return None;
         }
         (body..end)
             .all(|pc| {
-                let [op, a, _] = self.program.instruction(pc);
+                let [op, a, _] = self.opcode(pc);
                 op == CHAR && a < 128
             })
             .then_some(length)
@@ -1341,10 +1361,10 @@ impl Vm<'_, '_, '_, '_> {
                 opcode
             } else {
                 self.charge(1)?;
-                if self.state.pc >= self.program.instructions() {
+                if self.state.pc >= self.instruction_count() {
                     return Err(ExecError::InvalidProgram);
                 }
-                let opcode = self.program.instruction(self.state.pc);
+                let opcode = self.opcode(self.state.pc);
                 self.state.pc += 1;
                 opcode
             };
@@ -1359,7 +1379,32 @@ impl Vm<'_, '_, '_, '_> {
                     self.state.phase = Phase::Fail;
                     return Ok(());
                 }
-                Ok(Step::Phase) => return Ok(()),
+                Ok(Step::Phase) => {
+                    // Repeated atoms hand off between scan and commit before
+                    // continuing ordinary bytecode. Keep those transitions in
+                    // this trial, with exactly the outer loop's budget/quantum
+                    // boundary before every phase. No view or derived state
+                    // survives an advance, and capacity errors retain the
+                    // phase that must be retried rather than replaying an op.
+                    loop {
+                        let used = initial - self.budget.remaining();
+                        if PAUSABLE && used >= quantum {
+                            return Ok(());
+                        }
+                        let available = if PAUSABLE { quantum - used } else { usize::MAX };
+                        match self.state.phase {
+                            Phase::AtomScan => self.atom_scan(false, available)?,
+                            Phase::AtomExtend => self.atom_scan(true, available)?,
+                            Phase::AtomResult { matched, extend } => {
+                                self.atom_result(matched, extend)?
+                            }
+                            Phase::AtomCommit => self.atom_commit(available)?,
+                            Phase::AtomRetreat => self.atom_retreat(available)?,
+                            Phase::Trial => break,
+                            _ => return Ok(()),
+                        }
+                    }
+                }
                 Err(error) => {
                     if matches!(error, ExecError::Frames | ExecError::Undo) {
                         self.state.phase = Phase::Execute { op, a, b };
@@ -1687,10 +1732,10 @@ impl Vm<'_, '_, '_, '_> {
                                 // the set, its group and its filter come from
                                 // the program rather than from saved state.
                                 let pc = self.state.pc;
-                                if pc >= self.program.instructions() {
+                                if pc >= self.instruction_count() {
                                     return Err(ExecError::InvalidProgram);
                                 }
-                                let [op, a, filter] = self.program.instruction(pc);
+                                let [op, a, filter] = self.opcode(pc);
                                 if !matches!(op, SEQUENCE | SEQUENCE_I) {
                                     return Err(ExecError::InvalidProgram);
                                 }
@@ -1861,7 +1906,7 @@ impl Vm<'_, '_, '_, '_> {
                 // next branch as it takes any instruction.
                 let (mut mask, mut right, mut chained) = (a, b as usize, 1);
                 while mask & bucket == 0 {
-                    let [op, a, b] = self.program.instruction(right);
+                    let [op, a, b] = self.opcode(right);
                     if op != BRANCH || chained >= available {
                         self.state.pc = right;
                         return Ok(Step::Next);
@@ -1926,8 +1971,7 @@ impl Vm<'_, '_, '_, '_> {
                     let body = self.state.pc;
                     let held = at >= length
                         && (0..length).all(|offset| {
-                            u32::from(bytes[at - 1 - offset])
-                                == self.program.instruction(body + offset)[1]
+                            u32::from(bytes[at - 1 - offset]) == self.opcode(body + offset)[1]
                         });
                     // `b & 1` is the negative form, which succeeds when the
                     // text it describes is not there.
@@ -1971,7 +2015,7 @@ impl Vm<'_, '_, '_, '_> {
                 self.store(slot + 1, UNSET)?;
             }
             ATOM_REPEAT => {
-                let r = self.program.repeat(a as usize);
+                let r = self.repeat_record(a as usize);
                 self.state.pc -= 1;
                 self.state.work = Work::Atom(AtomState {
                     minimum_end: self.cursor.position(),
@@ -1983,7 +2027,7 @@ impl Vm<'_, '_, '_, '_> {
                 return Ok(Step::Phase);
             }
             REPEAT_CHOICE => {
-                let r = self.program.repeat(a as usize);
+                let r = self.repeat_record(a as usize);
                 let slot = self.program.capture_count() * 2 + a as usize * 2;
                 let count = self.scratch.registers[slot];
                 if r[2] & 1 == 0 && count >= r[1] as usize {
@@ -1998,7 +2042,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
             }
             REPEAT_BODY => {
-                let r = self.program.repeat(a as usize);
+                let r = self.repeat_record(a as usize);
                 let slot = self.program.capture_count() * 2 + a as usize * 2 + 1;
                 if r[5] == r[6] {
                     self.store(slot, self.cursor.position())?;
@@ -2012,7 +2056,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
             }
             REPEAT_NEXT => {
-                let r = self.program.repeat(a as usize);
+                let r = self.repeat_record(a as usize);
                 let slot = self.program.capture_count() * 2 + a as usize * 2;
                 let count = self.scratch.registers[slot];
                 if self.cursor.position() == self.scratch.registers[slot + 1]
@@ -2079,6 +2123,7 @@ pub fn find(
     let mut state = State::new(start_utf16, input.len_utf16());
     let mut vm = Vm {
         program,
+        sections: program.sections(),
         input,
         cursor: input.cursor(),
         scratch: &mut scratch,
@@ -2119,6 +2164,7 @@ pub fn is_match(
     state.boolean = true;
     let mut vm = Vm {
         program,
+        sections: program.sections(),
         input,
         cursor: input.cursor(),
         scratch: &mut scratch,

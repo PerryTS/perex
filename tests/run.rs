@@ -91,6 +91,12 @@ impl ScratchOwner for Buffers {
 }
 
 const PATTERNS: &[(&str, &str)] = &[
+    ("(?<word>[a-z0-9_]+)([0-9]*?)(?:!|$)", ""),
+    ("([a-z]+?)([a-z]*)z", ""),
+    ("([^b]+)(b+)", "u"),
+    ("(?<=([a-z]+))b", ""),
+    ("[a-z]*?A", "i"),
+    ("[a-z\\u0080-\\uffff]+", "u"),
     ("a", ""),
     ("z", ""),
     ("needle", ""),
