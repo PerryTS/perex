@@ -8,8 +8,7 @@ impl Vm<'_, '_, '_, '_> {
         mut op: u32,
         mut operand: u32,
         bytes: &[u8],
-        initial: usize,
-        quantum: usize,
+        quantum_end: usize,
     ) -> Result<Step, ExecError> {
         let mut position = self.cursor.position();
         let mut pc = self.state.pc;
@@ -38,7 +37,10 @@ impl Vm<'_, '_, '_, '_> {
                 }
                 return Err(error);
             }
-            if PAUSABLE && initial - remaining >= quantum {
+            // Each opcode in this loop charges exactly one. Its paid entry
+            // was inside the trial window, so it reaches (never skips) this
+            // boundary; a larger-than-budget quantum uses the unpaused path.
+            if PAUSABLE && remaining == quantum_end {
                 return Ok(Step::Next);
             }
             let Some(&[next @ (CHAR | SAVE), argument, _]) = instructions.get(pc) else {

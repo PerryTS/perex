@@ -67,7 +67,11 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         initial: usize,
         quantum: usize,
     ) -> Result<(), ExecError> {
-        if PAUSABLE && initial - self.budget.remaining() >= quantum {
+        if PAUSABLE && quantum > initial {
+            return self.atom_chain::<false>(initial, usize::MAX);
+        }
+        let quantum_end = initial.wrapping_sub(quantum);
+        if PAUSABLE && self.budget.remaining() <= quantum_end {
             return Ok(());
         }
         if !matches!(
@@ -82,11 +86,15 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         }
         let record = self.atom_record()?;
         loop {
-            let used = initial - self.budget.remaining();
-            if PAUSABLE && used >= quantum {
+            let remaining = self.budget.remaining();
+            if PAUSABLE && remaining <= quantum_end {
                 return Ok(());
             }
-            let available = if PAUSABLE { quantum - used } else { usize::MAX };
+            let available = if PAUSABLE {
+                remaining - quantum_end
+            } else {
+                usize::MAX
+            };
             match self.state.phase {
                 Phase::AtomScan => self.atom_scan(record, false, available)?,
                 Phase::AtomExtend => self.atom_scan(record, true, available)?,

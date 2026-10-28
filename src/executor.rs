@@ -1350,13 +1350,20 @@ impl Vm<'_, '_, '_, '_> {
     // This is the same instruction implementation for both entry points.
     fn trial<const PAUSABLE: bool>(&mut self, quantum: usize) -> Result<(), ExecError> {
         let initial = self.budget.remaining();
+        // A quantum larger than all remaining work cannot be reached before
+        // the shared budget fails. Use the same unpaused evaluator in that
+        // exact case, not a heuristic threshold or a replenished allowance.
+        if PAUSABLE && quantum > initial {
+            return self.trial::<false>(usize::MAX);
+        }
+        let quantum_end = initial.wrapping_sub(quantum);
         let mut paid = match self.state.phase {
             Phase::Execute { op, a, b } => Some([op, a, b]),
             _ => None,
         };
         self.state.phase = Phase::Trial;
         loop {
-            if PAUSABLE && initial - self.budget.remaining() >= quantum {
+            if PAUSABLE && self.budget.remaining() <= quantum_end {
                 return Ok(());
             }
             let [op, a, b] = if let Some(opcode) = paid.take() {
@@ -1370,18 +1377,13 @@ impl Vm<'_, '_, '_, '_> {
                 self.state.pc += 1;
                 opcode
             };
-            let available = if PAUSABLE {
-                quantum.saturating_sub(initial - self.budget.remaining())
-            } else {
-                usize::MAX
-            };
             let step = if op == CHAR
                 && !self.state.reverse
                 && let Some(bytes) = self.input.ascii_bytes()
             {
-                self.literal_run::<PAUSABLE>(op, a, bytes, initial, quantum)
+                self.literal_run::<PAUSABLE>(op, a, bytes, quantum_end)
             } else {
-                self.instruction(op, a, b, available)
+                self.instruction::<PAUSABLE>(op, a, b, quantum_end)
             };
             match step {
                 Ok(Step::Next) => {}
@@ -1818,13 +1820,24 @@ impl Vm<'_, '_, '_, '_> {
         }
     }
     #[inline(always)]
-    fn instruction(
+    fn instruction<const PAUSABLE: bool>(
         &mut self,
         op: u32,
         a: u32,
         b: u32,
-        available: usize,
+        quantum_end: usize,
     ) -> Result<Step, ExecError> {
+        // Fetch paid one unit only after the trial boundary check, so this
+        // entry is still inside its work window. Snapshot before any opcode
+        // charges more; only long operations need the remaining quantum.
+        let remaining = self.budget.remaining();
+        let available = || {
+            if PAUSABLE {
+                remaining.wrapping_sub(quantum_end)
+            } else {
+                usize::MAX
+            }
+        };
         let mut success = true;
         match op {
             MATCH => {
@@ -1853,7 +1866,7 @@ impl Vm<'_, '_, '_, '_> {
                 if let Some(c) = self.read() {
                     if matches!(op, CLASS | CLASS_SORTED)
                         && let Some(found) =
-                            self.class_decide(a, b, c, op == CLASS_SORTED, available)?
+                            self.class_decide(a, b, c, op == CLASS_SORTED, available())?
                     {
                         return Ok(if found { Step::Next } else { Step::Fail });
                     }
@@ -1865,7 +1878,7 @@ impl Vm<'_, '_, '_, '_> {
                         matches!(op, CLASS_I | CLASS_SORTED_I),
                         matches!(op, CLASS_SORTED | CLASS_SORTED_I),
                     );
-                    self.class_step(available)?;
+                    self.class_step(available())?;
                     return Ok(match self.state.phase {
                         Phase::Trial => Step::Next,
                         Phase::Fail => Step::Fail,
@@ -1877,7 +1890,7 @@ impl Vm<'_, '_, '_, '_> {
             SEQUENCE | SEQUENCE_I => {
                 let (set, group) = sequence_group(a);
                 self.begin_sequence(set, group, b, op == SEQUENCE_I);
-                self.sequence_step(available)?;
+                self.sequence_step(available())?;
                 return Ok(match self.state.phase {
                     Phase::Trial => Step::Next,
                     Phase::Fail => Step::Fail,
@@ -1905,7 +1918,7 @@ impl Vm<'_, '_, '_, '_> {
                 let (mut mask, mut right, mut chained) = (a, b as usize, 1);
                 while mask & bucket == 0 {
                     let [op, a, b] = self.opcode(right);
-                    if op != BRANCH || chained >= available {
+                    if op != BRANCH || chained >= available() {
                         self.state.pc = right;
                         return Ok(Step::Next);
                     }
@@ -1944,7 +1957,7 @@ impl Vm<'_, '_, '_, '_> {
                     != (a != 0);
             }
             BACKREF | BACKREF_I => {
-                self.backref(a as usize, available)?;
+                self.backref(a as usize, available())?;
                 return Ok(Step::Phase);
             }
             NAMED_BACKREF | NAMED_BACKREF_I => {
