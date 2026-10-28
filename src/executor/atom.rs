@@ -58,13 +58,55 @@ const RETREAT_SCAN: usize = 8;
 const ATOM_CLASS_RANGES: u32 = 16;
 
 impl<'p> Vm<'_, 'p, '_, '_> {
+    /// One repeat record for the active sequence of atom phases. The
+    /// reference belongs to this advance's immutable program view only;
+    /// pauses and capacity requests retain the original offset state.
+    #[inline(always)]
+    pub(super) fn atom_chain<const PAUSABLE: bool>(
+        &mut self,
+        initial: usize,
+        quantum: usize,
+    ) -> Result<(), ExecError> {
+        if PAUSABLE && initial - self.budget.remaining() >= quantum {
+            return Ok(());
+        }
+        if !matches!(
+            self.state.phase,
+            Phase::AtomScan
+                | Phase::AtomExtend
+                | Phase::AtomResult { .. }
+                | Phase::AtomCommit
+                | Phase::AtomRetreat
+        ) {
+            return Ok(());
+        }
+        let record = self.atom_record()?;
+        loop {
+            let used = initial - self.budget.remaining();
+            if PAUSABLE && used >= quantum {
+                return Ok(());
+            }
+            let available = if PAUSABLE { quantum - used } else { usize::MAX };
+            match self.state.phase {
+                Phase::AtomScan => self.atom_scan(record, false, available)?,
+                Phase::AtomExtend => self.atom_scan(record, true, available)?,
+                Phase::AtomResult { matched, extend } => {
+                    self.atom_result(record, matched, extend)?
+                }
+                Phase::AtomCommit => self.atom_commit(record, available)?,
+                Phase::AtomRetreat => self.atom_retreat(record, available)?,
+                _ => return Ok(()),
+            }
+        }
+    }
+
     fn atom_state(&self) -> Result<AtomState, ExecError> {
         match self.state.work {
             Work::Atom(state) => Ok(state),
             _ => Err(ExecError::InvalidProgram),
         }
     }
-    fn atom_record(&self) -> Result<[u32; 8], ExecError> {
+    fn atom_record(&self) -> Result<&'p [u32; 8], ExecError> {
         if self.state.pc >= self.instruction_count() {
             return Err(ExecError::InvalidProgram);
         }
@@ -72,7 +114,8 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         if op != ATOM_REPEAT {
             return Err(ExecError::InvalidProgram);
         }
-        Ok(self.repeat_record(id as usize))
+        let records = self.sections.repeats;
+        records.get(id as usize).ok_or(ExecError::InvalidProgram)
     }
     /// Whether this atom can be decided without the resumable class phase.
     fn inline_atom(&self, op: u32, b: u32) -> bool {
@@ -314,9 +357,8 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         base - start
     }
 
-    pub(super) fn atom_scan(&mut self, extend: bool, available: usize) -> Result<(), ExecError> {
+    fn atom_scan(&mut self, r: &[u32; 8], extend: bool, available: usize) -> Result<(), ExecError> {
         let mut atom = self.atom_state()?;
-        let r = self.atom_record()?;
         let infinite = r[2] & 1 != 0;
         if !extend && atom.needed == 0 && (r[2] & 2 != 0 || (!infinite && atom.remaining == 0)) {
             self.state.phase = Phase::AtomCommit;
@@ -517,12 +559,11 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         } else {
             false
         };
-        self.atom_result(matched, extend)
+        self.atom_result(r, matched, extend)
     }
 
-    pub(super) fn atom_result(&mut self, matched: bool, extend: bool) -> Result<(), ExecError> {
+    fn atom_result(&mut self, r: &[u32; 8], matched: bool, extend: bool) -> Result<(), ExecError> {
         let mut atom = self.atom_state()?;
-        let r = self.atom_record()?;
         if matched {
             if atom.needed > 0 {
                 atom.needed -= 1;
@@ -555,9 +596,8 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         Ok(())
     }
 
-    pub(super) fn atom_commit(&mut self, available: usize) -> Result<(), ExecError> {
+    fn atom_commit(&mut self, r: &[u32; 8], available: usize) -> Result<(), ExecError> {
         let atom = self.atom_state()?;
-        let r = self.atom_record()?;
         if atom.needed != 0 {
             return Err(ExecError::InvalidProgram);
         }
@@ -636,7 +676,7 @@ impl<'p> Vm<'_, 'p, '_, '_> {
     /// phase decided (a failure, or more to walk on a later round); `false`
     /// sends the endpoint to the ordinary commit.
     #[inline(never)]
-    fn lazy_skip(&mut self, r: [u32; 8], available: usize) -> Result<bool, ExecError> {
+    fn lazy_skip(&mut self, r: &[u32; 8], available: usize) -> Result<bool, ExecError> {
         let [op, a, b] = self.opcode(self.state.pc + 3);
         if !self.inline_atom(op, b) {
             return Ok(false);
@@ -758,9 +798,8 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         }
     }
 
-    pub(super) fn atom_retreat(&mut self, available: usize) -> Result<(), ExecError> {
+    fn atom_retreat(&mut self, r: &[u32; 8], available: usize) -> Result<(), ExecError> {
         let atom = self.atom_state()?;
-        let r = self.atom_record()?;
         let position = self.cursor.position();
         if r[2] & 2 != 0
             || if self.state.reverse {
