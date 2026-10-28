@@ -1,12 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.15 — 2026-10-28
 
-- Chain repeated-atom phases within bytecode trials while retaining every work and quantum boundary.
-- Borrow ASCII atom class predicates from validated record storage instead of constructing a maximum-sized temporary array on each scan.
-
-- Borrow the immutable instruction, class-range and repeat records once per evaluator view, avoiding repeated layout decoding and whole-word bounds checks in dispatch and atom execution.
-- Preserve program format 16, complete captures, work accounting, resource rebinding and offset-only resumable state. Record views do not survive an advance.
+- Reduce repeated work when matching character repetitions and reading compiled programs.
+- Read ASCII character classes directly from validated program storage.
+- Preserve program format 16, complete captures, work limits and resumable searches across storage relocation.
 
 ## 0.1.14 — 2026-10-18
 
