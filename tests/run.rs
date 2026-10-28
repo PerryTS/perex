@@ -91,6 +91,9 @@ impl ScratchOwner for Buffers {
 }
 
 const PATTERNS: &[(&str, &str)] = &[
+    ("^(abc)(def)$", ""),
+    ("^(ab|abc)(def)$", "u"),
+    ("(?<=(abc))(def)", ""),
     ("(?<word>[a-z0-9_]+)([0-9]*?)(?:!|$)", ""),
     ("([a-z]+?)([a-z]*)z", ""),
     ("([^b]+)(b+)", "u"),
@@ -485,5 +488,70 @@ fn a_failed_run_reports_its_work_and_returns_its_scratch() {
         assert_eq!(failed.remaining_work, remaining, "{context}");
         assert_eq!(failed.buffers.frames.len(), 1024, "{context}");
         assert_eq!(failed.buffers.undo.len(), 4096, "{context}");
+    }
+}
+
+#[test]
+fn literal_save_runs_resume_the_paid_save_after_undo_growth() {
+    for subject in ["abcdef", "abcxyz", "abczzz"] {
+        for quantum in [1, 2, 3, 7, 17, usize::MAX] {
+            let owner = Owner::new("^(?:(abc)(def)|(abc)(xyz))$", "", subject);
+            let program = BoundProgram::new(&owner, &mut Budget::new(WORK)).unwrap();
+            let bound = BoundSubject::new(&owner).unwrap();
+            let resources = BoundResources {
+                program: &program,
+                subject: &bound,
+            };
+            let reference = finish(
+                &owner,
+                Search::new(&resources, 0, Buffers::new(128, 1024), Budget::new(WORK)).unwrap(),
+                usize::MAX,
+                false,
+            );
+            assert_eq!(reference.outcome, Ok(subject != "abczzz"));
+            let mut search =
+                Search::new(&resources, 0, Buffers::new(0, 0), Budget::new(WORK)).unwrap();
+            let mut undo_requests = 0;
+            let mut frame_requests = 0;
+            loop {
+                match search.advance(quantum) {
+                    Ok(Progress::Pending) => owner.relocate(),
+                    Err(SearchError::Execution(error @ (ExecError::Undo | ExecError::Frames))) => {
+                        undo_requests += usize::from(error == ExecError::Undo);
+                        frame_requests += usize::from(error == ExecError::Frames);
+                        let remaining = search.remaining_work();
+                        assert!(
+                            matches!(search.advance(quantum), Err(SearchError::Execution(e)) if e == error)
+                        );
+                        assert_eq!(search.remaining_work(), remaining);
+                        let need = search.required_scratch();
+                        search = search
+                            .rebuffer(Buffers::new(need.frames.max(1), need.undo))
+                            .unwrap_or_else(|e| panic!("{:?}", e.error));
+                        owner.relocate();
+                        assert_eq!(search.remaining_work(), remaining);
+                    }
+                    Ok(done) => {
+                        assert_eq!(Ok(done == Progress::Matched), reference.outcome);
+                        let mut captures = vec![None; search.capture_count()];
+                        if done == Progress::Matched {
+                            search.copy_captures(&mut captures).unwrap();
+                        }
+                        assert_eq!(captures, reference.captures, "{subject} quantum={quantum}");
+                        assert_eq!(
+                            search.remaining_work(),
+                            reference.remaining,
+                            "{subject} quantum={quantum}: replayed opcode"
+                        );
+                        break;
+                    }
+                    Err(error) => panic!("{error:?}"),
+                }
+            }
+            assert!(
+                undo_requests > 0 && frame_requests > 0,
+                "growth path not exercised: {subject} quantum={quantum}"
+            );
+        }
     }
 }
