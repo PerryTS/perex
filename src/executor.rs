@@ -1375,7 +1375,7 @@ impl Vm<'_, '_, '_, '_> {
             } else {
                 usize::MAX
             };
-            let step = if matches!(op, CHAR | SAVE)
+            let step = if op == CHAR
                 && !self.state.reverse
                 && let Some(bytes) = self.input.ascii_bytes()
             {
