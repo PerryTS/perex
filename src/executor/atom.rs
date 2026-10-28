@@ -62,14 +62,14 @@ impl Vm<'_, '_, '_, '_> {
         }
     }
     fn atom_record(&self) -> Result<[u32; 8], ExecError> {
-        if self.state.pc >= self.program.instructions() {
+        if self.state.pc >= self.instruction_count() {
             return Err(ExecError::InvalidProgram);
         }
-        let [op, id, _] = self.program.instruction(self.state.pc);
+        let [op, id, _] = self.opcode(self.state.pc);
         if op != ATOM_REPEAT {
             return Err(ExecError::InvalidProgram);
         }
-        Ok(self.program.repeat(id as usize))
+        Ok(self.repeat_record(id as usize))
     }
     /// Whether this atom can be decided without the resumable class phase.
     fn inline_atom(&self, op: u32, b: u32) -> bool {
@@ -97,7 +97,7 @@ impl Vm<'_, '_, '_, '_> {
             _ => {
                 let mut found = false;
                 for index in a..a + (b & !NEGATED) {
-                    let [lo, hi] = self.program.range(index as usize);
+                    let [lo, hi] = self.class_range(index as usize);
                     found = if lo & PROPERTY != 0 {
                         if hi == 2 {
                             !properties::contains(lo & !PROPERTY, c)
@@ -135,7 +135,7 @@ impl Vm<'_, '_, '_, '_> {
                 let mut ranges = [(0, 0); ATOM_CLASS_RANGES as usize];
                 let mut kept = 0;
                 for index in a..a + count {
-                    let [lo, hi] = self.program.range(index as usize);
+                    let [lo, hi] = self.class_range(index as usize);
                     if lo & PROPERTY != 0 || lo > hi {
                         return None;
                     }
@@ -316,7 +316,7 @@ impl Vm<'_, '_, '_, '_> {
         if extend && (atom.needed != 0 || (!infinite && atom.remaining == 0)) {
             return Err(ExecError::InvalidProgram);
         }
-        let [op, a, b] = self.program.instruction(self.state.pc + 3);
+        let [op, a, b] = self.opcode(self.state.pc + 3);
         // Characters this scan may consume before anything but the atom itself
         // decides: the minimum still owed, then, for a greedy repeat, its
         // remaining allowance (unbounded when it has none). A lazy repeat stops
@@ -585,22 +585,19 @@ impl Vm<'_, '_, '_, '_> {
     fn continuation_probe(&self, at: usize) -> Option<[u32; 3]> {
         let mut at = at;
         let mut skipped = 0;
-        while skipped < RETREAT_SCAN
-            && at < self.program.instructions()
-            && self.program.instruction(at)[0] == SAVE
+        while skipped < RETREAT_SCAN && at < self.instruction_count() && self.opcode(at)[0] == SAVE
         {
             at += 1;
             skipped += 1;
         }
-        if at >= self.program.instructions() {
+        if at >= self.instruction_count() {
             return None;
         }
-        let [next, value, third] = self.program.instruction(at);
+        let [next, value, third] = self.opcode(at);
         let probe = if next == ATOM_REPEAT {
-            let inner = self.program.repeat(value as usize);
+            let inner = self.repeat_record(value as usize);
             let body = at + 3;
-            (inner[0] >= 1 && body < self.program.instructions())
-                .then(|| self.program.instruction(body))?
+            (inner[0] >= 1 && body < self.instruction_count()).then(|| self.opcode(body))?
         } else {
             [next, value, third]
         };
@@ -631,7 +628,7 @@ impl Vm<'_, '_, '_, '_> {
     /// sends the endpoint to the ordinary commit.
     #[inline(never)]
     fn lazy_skip(&mut self, r: [u32; 8], available: usize) -> Result<bool, ExecError> {
-        let [op, a, b] = self.program.instruction(self.state.pc + 3);
+        let [op, a, b] = self.opcode(self.state.pc + 3);
         if !self.inline_atom(op, b) {
             return Ok(false);
         }
@@ -782,17 +779,15 @@ impl Vm<'_, '_, '_, '_> {
         // The scan is bounded, so it cannot outrun a budget it does not charge.
         let mut at = r[4] as usize;
         let mut skipped = 0;
-        while skipped < RETREAT_SCAN
-            && at < self.program.instructions()
-            && self.program.instruction(at)[0] == SAVE
+        while skipped < RETREAT_SCAN && at < self.instruction_count() && self.opcode(at)[0] == SAVE
         {
             at += 1;
             skipped += 1;
         }
-        if at >= self.program.instructions() {
+        if at >= self.instruction_count() {
             return Err(ExecError::InvalidProgram);
         }
-        let [next, value, third] = self.program.instruction(at);
+        let [next, value, third] = self.opcode(at);
         if matches!(next, CHAR | CHAR_I) {
             return self.retreat_literal(atom.minimum_end, value, next == CHAR_I, available);
         }
@@ -801,10 +796,9 @@ impl Vm<'_, '_, '_, '_> {
         // needs no retry frame either. A repeat that can match nothing consumes
         // no character and so states no condition.
         let probe = if next == ATOM_REPEAT {
-            let inner = self.program.repeat(value as usize);
+            let inner = self.repeat_record(value as usize);
             let body = at + 3;
-            (inner[0] >= 1 && body < self.program.instructions())
-                .then(|| self.program.instruction(body))
+            (inner[0] >= 1 && body < self.instruction_count()).then(|| self.opcode(body))
         } else {
             Some([next, value, third])
         };

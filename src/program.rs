@@ -605,6 +605,16 @@ pub(crate) fn derive_run_skip(words: &[u32], p: Program<'_>) -> u32 {
     if packed & !RUN_SKIP != 0 { 0 } else { packed }
 }
 
+/// Borrowed record slices of the program's existing immutable word storage.
+/// Constructed for one active evaluator borrow, never retained across advances.
+/// No records are copied, decoded into another table, or attached to an owner.
+#[derive(Clone, Copy)]
+pub(crate) struct ProgramSections<'a> {
+    pub instructions: &'a [[u32; 3]],
+    pub ranges: &'a [[u32; 2]],
+    pub repeats: &'a [[u32; 8]],
+}
+
 /// A validated immutable view. All persistent data is in `words`, with no
 /// pointers, reference counts, source borrow, or separate owning allocation.
 /// Release this borrow before moving the storage and validate its new borrow.
@@ -614,6 +624,20 @@ pub struct Program<'a> {
 }
 
 impl<'a> Program<'a> {
+    /// The validated header fixes these section extents for this borrow.
+    /// Taking each slice once lets the evaluator index records against their
+    /// own bounds instead of rebuilding an offset into all words per opcode.
+    pub(crate) fn sections(self) -> ProgramSections<'a> {
+        let (instructions, tail) = self.words[HEADER..].split_at(self.instructions() * 3);
+        let (ranges, tail) = tail.split_at(self.words[5] as usize * 2);
+        let repeats = &tail[..self.words[6] as usize * 8];
+        ProgramSections {
+            instructions: instructions.as_chunks::<3>().0,
+            ranges: ranges.as_chunks::<2>().0,
+            repeats: repeats.as_chunks::<8>().0,
+        }
+    }
+
     /// Validate the entire format, including every opcode, target and table range.
     /// The experimental native-u32 format requires four-byte alignment; it is
     /// not a stable wire format or a cross-endian serialization format.

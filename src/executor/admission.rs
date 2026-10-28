@@ -36,7 +36,7 @@ impl Vm<'_, '_, '_, '_> {
     }
     fn required(&self, index: usize) -> u32 {
         let (pc, reverse) = self.program.admission().unwrap();
-        self.program.instruction(
+        self.opcode(
             pc + if reverse {
                 self.needle().len() - 1 - index
             } else {
@@ -48,7 +48,7 @@ impl Vm<'_, '_, '_, '_> {
     /// character is ASCII, which is what permits the original-byte search.
     fn build_needle(&mut self) -> Result<bool, ExecError> {
         let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
-        let op = self.program.instruction(pc)[0];
+        let op = self.opcode(pc)[0];
         let len = self.program.literal_run(pc);
         self.charge(len)?;
         self.state.work = Work::Needle {
@@ -140,10 +140,10 @@ impl Vm<'_, '_, '_, '_> {
                     return Ok(());
                 }
                 let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
-                let [op, a, b] = self.program.instruction(pc);
+                let [op, a, b] = self.opcode(pc);
                 if matches!(op, CLASS | CLASS_I | CLASS_SORTED | CLASS_SORTED_I) {
                     if b == 1 && op == CLASS {
-                        let [lo, hi] = self.program.range(a as usize);
+                        let [lo, hi] = self.class_range(a as usize);
                         if hi < 128 && lo <= hi && self.input.original_bytes().is_some() {
                             self.state.phase = Phase::AdmitByteClass {
                                 offset: 0,
@@ -252,7 +252,7 @@ impl Vm<'_, '_, '_, '_> {
                 if let Some(c) = read(&mut self.cursor, self.program.unicode(), false) {
                     self.charge(1)?;
                     let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
-                    let [op, a, b] = self.program.instruction(pc);
+                    let [op, a, b] = self.opcode(pc);
                     self.begin_class(
                         a,
                         b,
