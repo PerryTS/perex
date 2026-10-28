@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.16 — 2026-10-28
+
+- Execute adjacent exact literal and capture-save bytecodes directly over original ASCII storage, preserving each opcode work charge and paid SAVE retry after undo growth.
+- Reuse a repeat record within an active atom execution chain without retaining pointers across pauses or storage relocation.
+- Derive exact quantum endpoints once per evaluator run and compute opcode allowances only when used, preserving finite budgets and every pause boundary.
+- Preserve program format 16, complete captures, original-input traversal and the existing evaluator for other storage and reverse searches.
+
 ## 0.1.15 — 2026-10-28
 
 - Reduce repeated work when matching character repetitions and reading compiled programs.
