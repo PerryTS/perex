@@ -1379,7 +1379,32 @@ impl Vm<'_, '_, '_, '_> {
                     self.state.phase = Phase::Fail;
                     return Ok(());
                 }
-                Ok(Step::Phase) => return Ok(()),
+                Ok(Step::Phase) => {
+                    // Repeated atoms hand off between scan and commit before
+                    // continuing ordinary bytecode. Keep those transitions in
+                    // this trial, with exactly the outer loop's budget/quantum
+                    // boundary before every phase. No view or derived state
+                    // survives an advance, and capacity errors retain the
+                    // phase that must be retried rather than replaying an op.
+                    loop {
+                        let used = initial - self.budget.remaining();
+                        if PAUSABLE && used >= quantum {
+                            return Ok(());
+                        }
+                        let available = if PAUSABLE { quantum - used } else { usize::MAX };
+                        match self.state.phase {
+                            Phase::AtomScan => self.atom_scan(false, available)?,
+                            Phase::AtomExtend => self.atom_scan(true, available)?,
+                            Phase::AtomResult { matched, extend } => {
+                                self.atom_result(matched, extend)?
+                            }
+                            Phase::AtomCommit => self.atom_commit(available)?,
+                            Phase::AtomRetreat => self.atom_retreat(available)?,
+                            Phase::Trial => break,
+                            _ => return Ok(()),
+                        }
+                    }
+                }
                 Err(error) => {
                     if matches!(error, ExecError::Frames | ExecError::Undo) {
                         self.state.phase = Phase::Execute { op, a, b };
