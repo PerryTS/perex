@@ -428,7 +428,30 @@ pub fn find(
 /// and the evaluator answers. The first such transition marks the cache, and
 /// every later call on it declines before walking until the cache is reset.
 /// The cache contract is [`is_match`]'s.
+#[inline]
 pub fn captures(
+    program: Program<'_>,
+    input: Input<'_>,
+    start_utf16: usize,
+    cache: &mut [u32],
+    budget: &mut Budget,
+    out: &mut [Option<Span>],
+) -> Result<Found, ExecError> {
+    // A marked cache declines before anything else is read.
+    if captures_declined(cache)
+        && out.len() >= program.capture_count()
+        && program
+            .words
+            .first_chunk::<HEADER>()
+            .is_some_and(|words| built_for(words, program.words.len(), cache))
+    {
+        return Ok(Found::Declined(Decline::Captures));
+    }
+    capture_search(program, input, start_utf16, cache, budget, out)
+}
+
+#[inline(never)]
+fn capture_search(
     program: Program<'_>,
     input: Input<'_>,
     start_utf16: usize,
@@ -443,13 +466,13 @@ pub fn captures(
     if out.len() < count {
         return Err(ExecError::Captures);
     }
-    let Some(bytes) = input.ascii_bytes().filter(|b| b.len() < 1 << 30) else {
-        return Ok(Found::Declined(Decline::Captures));
-    };
     let built = program
         .words
         .first_chunk::<HEADER>()
         .is_some_and(|words| built_for(words, program.words.len(), cache));
+    let Some(bytes) = input.ascii_bytes().filter(|b| b.len() < 1 << 30) else {
+        return Ok(Found::Declined(Decline::Captures));
+    };
     if !built {
         if no_start(program, bytes, start_utf16, true, budget) {
             return Ok(Found::NoMatch);
@@ -460,9 +483,6 @@ pub fn captures(
     }
     if cache[H_STATUS] != 0 {
         return Ok(Found::Declined(Decline::Disabled));
-    }
-    if cache[H_NO_CAPTURES] != 0 {
-        return Ok(Found::Declined(Decline::Captures));
     }
     if start_utf16 > bytes.len() {
         return Ok(Found::NoMatch);
