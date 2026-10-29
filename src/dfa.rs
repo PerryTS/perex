@@ -35,8 +35,9 @@ pub enum Decline {
     /// classes, than this cache holds.
     Capacity,
     /// The automaton cannot yield this search's captures: a transition it
-    /// reached keeps more than one path alive, or the subject is not wholly
-    /// ASCII storage. The evaluator answers.
+    /// reached keeps more than one path alive (which marks the cache, see
+    /// [`captures_declined`]), or the subject is not wholly ASCII storage.
+    /// The evaluator answers.
     Captures,
 }
 
@@ -75,6 +76,9 @@ pub struct CacheStats {
     /// automaton for a program that thrashes reallocates the cache at this
     /// size, resets it and searches again.
     pub required_words: usize,
+    /// Whether a capture search reached a transition that keeps two paths
+    /// alive, so [`captures`] declines every search until the cache is reset.
+    pub captures_declined: bool,
 }
 
 const MAGIC: u32 = 0x5058_4446;
@@ -141,6 +145,11 @@ const H_TOUT: usize = 57;
 /// The newest tag record, chained through each record's first word.
 const H_TAGS: usize = 58;
 const H_REQUIRED: usize = 59;
+/// Nonzero once a capture search reached an `AMBIGUOUS` transition: this
+/// program's captures are not read off one path, so every later capture
+/// search declines before walking. Part of the cache, so `reset` and every
+/// rebuild forget it with the states; a clear keeps it.
+const H_NO_CAPTURES: usize = 60;
 
 const ASCII: usize = HEADER_WORDS;
 const SLOTS: usize = ASCII + 128;
@@ -236,6 +245,87 @@ pub fn minimum_words(program: Program<'_>) -> Option<usize> {
     )
 }
 
+/// The storage, in words, a host gives `program`'s cache when it first needs
+/// one, or `None` when the program is not eligible: its minimum, with a state
+/// hash and region planned for one state per instruction, each a first-width
+/// row with its tag row and one thread. This is a size read off the program,
+/// not a bound on its automaton: a program that needs more reports it once
+/// its cache fills ([`CacheStats::required_words`]). Zero for an exact literal
+/// prefix, which needs no automaton storage.
+pub fn initial_words(program: Program<'_>) -> Option<usize> {
+    if program.literal_prefix().is_some() {
+        return Some(0);
+    }
+    if !eligible(program) {
+        return None;
+    }
+    let (edges, consuming) = census(program);
+    let n = program.instructions();
+    let repeats = program.words[6] as usize;
+    let captures = program.capture_count();
+    let minimum = plan(n, repeats, consuming, edges, captures, 0, true).required;
+    let states = n + 1;
+    // A state is its row, its header and count, one thread (two words), and
+    // in capture mode a row of tag references (`Dfa::intern`).
+    let words = states * (2 * FIRST_COLUMNS + 4);
+    let fits = |cap: usize| {
+        let p = plan(n, repeats, consuming, edges, captures, cap, false);
+        cap >= p.required && p.region + words <= cap && p.hash_slots / 2 > states
+    };
+    let mut high = minimum.max(1024);
+    while !fits(high) {
+        if high >= MAX_WORDS / 2 {
+            return Some(MAX_WORDS - 1);
+        }
+        high *= 2;
+    }
+    let mut low = high / 2;
+    while low + 1 < high {
+        let middle = low + (high - low) / 2;
+        if fits(middle) {
+            high = middle;
+        } else {
+            low = middle;
+        }
+    }
+    Some(high)
+}
+
+/// Whether no match can begin at `start` (with `one_start`) or at any position
+/// at or after it, in wholly ASCII storage: the program's first-character
+/// descriptor admits none of those bytes. That is the evaluator's own candidate
+/// decision, made before any state is built, so a search it decides needs no
+/// cache. It charges the positions it inspected, as the automaton's scan of
+/// them would; with less budget than that it decides nothing.
+fn no_start(
+    program: Program<'_>,
+    bytes: &[u8],
+    start: usize,
+    one_start: bool,
+    budget: &mut Budget,
+) -> bool {
+    let descriptor = program.first_descriptor();
+    if descriptor == 0 || start > bytes.len() {
+        return false;
+    }
+    let rest = &bytes[start..];
+    let inspected = if one_start { 1 } else { rest.len().max(1) };
+    if budget.remaining() < inspected {
+        return false;
+    }
+    let none = if descriptor == 1 || rest.is_empty() {
+        true
+    } else {
+        let (lo, hi) = ((descriptor >> 8) as u8, (descriptor >> 16) as u8);
+        if one_start {
+            !(lo..=hi).contains(&rest[0])
+        } else {
+            scan_range::<false, false>(rest, lo, hi).is_none()
+        }
+    };
+    none && budget.charge(inspected).is_ok()
+}
+
 /// The program's epsilon edges and consuming instructions.
 fn census(program: Program<'_>) -> (usize, usize) {
     let mut edges = 0;
@@ -248,6 +338,9 @@ fn census(program: Program<'_>) -> (usize, usize) {
 }
 
 /// Forget everything the cache holds. The next search rebuilds it.
+///
+/// This is all a host does to new storage: the automaton writes every word
+/// before it reads it, so storage need not be zeroed, only reset.
 pub fn reset(cache: &mut [u32]) {
     if let Some(first) = cache.first_mut() {
         *first = 0;
@@ -268,7 +361,17 @@ pub fn stats(cache: &[u32]) -> Option<CacheStats> {
         clears: cache[H_CLEARS] as usize,
         disabled: cache[H_STATUS] != 0,
         required_words: cache[H_REQUIRED] as usize,
+        captures_declined: cache[H_NO_CAPTURES] != 0,
     })
+}
+
+/// Whether [`captures`] declines every search on `cache`: a built cache whose
+/// capture search reached a transition that keeps two paths alive. The host
+/// then asks the evaluator for the groups without a capture pass. False for
+/// storage that holds no built cache.
+#[inline]
+pub fn captures_declined(cache: &[u32]) -> bool {
+    cache.len() >= FRONT && cache[H_MAGIC] == MAGIC && cache[H_NO_CAPTURES] != 0
 }
 
 /// Whether `program` matches `input` at or after `start_utf16`, answered by
@@ -322,7 +425,9 @@ pub fn find(
 /// start; for any other, pass the start [`find`] reported. A transition that
 /// keeps more than one path alive, a subject that is not wholly ASCII storage,
 /// and everything else [`find`] declines are declined with `out` untouched,
-/// and the evaluator answers. The cache contract is [`is_match`]'s.
+/// and the evaluator answers. The first such transition marks the cache, and
+/// every later call on it declines before walking until the cache is reset.
+/// The cache contract is [`is_match`]'s.
 pub fn captures(
     program: Program<'_>,
     input: Input<'_>,
@@ -345,11 +450,19 @@ pub fn captures(
         .words
         .first_chunk::<HEADER>()
         .is_some_and(|words| built_for(words, program.words.len(), cache));
-    if !built && let Err(why) = build(program, cache) {
-        return Ok(Found::Declined(why));
+    if !built {
+        if no_start(program, bytes, start_utf16, true, budget) {
+            return Ok(Found::NoMatch);
+        }
+        if let Err(why) = build(program, cache) {
+            return Ok(Found::Declined(why));
+        }
     }
     if cache[H_STATUS] != 0 {
         return Ok(Found::Declined(Decline::Disabled));
+    }
+    if cache[H_NO_CAPTURES] != 0 {
+        return Ok(Found::Declined(Decline::Captures));
     }
     if start_utf16 > bytes.len() {
         return Ok(Found::NoMatch);
@@ -538,8 +651,16 @@ fn general(
         .words
         .first_chunk::<HEADER>()
         .is_some_and(|words| built_for(words, program.words.len(), cache));
-    if !built && let Err(why) = build(program, cache) {
-        return Ok(Outcome::Declined(why));
+    if !built {
+        if let Some(bytes) = input.ascii_bytes() {
+            let one_start = program.words[2] & Y != 0 || program.words[7] & ANCHORED != 0;
+            if no_start(program, bytes, start_utf16, one_start, budget) {
+                return Ok(Outcome::NoMatch);
+            }
+        }
+        if let Err(why) = build(program, cache) {
+            return Ok(Outcome::Declined(why));
+        }
     }
     if cache[H_STATUS] != 0 {
         return Ok(Outcome::Declined(Decline::Disabled));
@@ -1805,6 +1926,7 @@ impl Dfa<'_, '_> {
                 entry = self.step_slow(&mut s, bytes.get(i).map(|&b| u32::from(b)))?;
             }
             if entry == AMBIGUOUS {
+                self.m[H_NO_CAPTURES] = 1;
                 return Err(Stop::Declined(Decline::Captures));
             }
             // The step may have classified the byte.

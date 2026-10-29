@@ -359,3 +359,122 @@ fn required_words_is_enough() {
     let stats = dfa::stats(&cache).unwrap();
     assert_eq!(stats.clears, 0, "{stats:?}");
 }
+
+/// A capture search that reaches a transition keeping two paths alive marks
+/// the cache: every later capture search declines before it walks, with `out`
+/// untouched, until the cache is reset. A clear keeps the mark.
+#[test]
+fn a_declined_program_stays_declined_until_reset() {
+    // One-pass on a `y` line, two paths alive on an `x` line.
+    let words = program("x(a|ab)(c|bcd)(d*)|y(\\d+)", "").unwrap();
+    let p = view(&words);
+    let minimum = dfa::minimum_words(p).unwrap();
+    let capture = |cache: &mut Vec<u32>, subject: &str, out: &mut Vec<Option<Span>>| {
+        dfa::captures(
+            p,
+            Input::utf8(subject),
+            0,
+            cache,
+            &mut Budget::new(1 << 20),
+            out,
+        )
+        .unwrap()
+    };
+    for size in [minimum, 1 << 16] {
+        let mut cache = vec![0u32; size];
+        let mut out = vec![None; p.capture_count()];
+        assert!(matches!(
+            capture(&mut cache, "y12", &mut out),
+            Found::Match(_)
+        ));
+        assert!(!dfa::captures_declined(&cache));
+        assert_eq!(
+            capture(&mut cache, "xabcd", &mut out),
+            Found::Declined(Decline::Captures)
+        );
+        assert!(dfa::captures_declined(&cache));
+        assert!(dfa::stats(&cache).unwrap().captures_declined);
+        // The bounds automaton still answers, and builds, on the same cache.
+        for subject in ["zzxabcd", "zz y1 abcdd", "nothing here", "xab xac yabd"] {
+            let _ = dfa::find(
+                p,
+                Input::utf8(subject),
+                0,
+                &mut cache,
+                &mut Budget::new(1 << 20),
+            )
+            .unwrap();
+        }
+        // Even the line it answered before declines now, before walking.
+        for subject in ["y12", "xabcd", "y7"] {
+            out.fill(None);
+            assert_eq!(
+                capture(&mut cache, subject, &mut out),
+                Found::Declined(Decline::Captures)
+            );
+            assert!(out.iter().all(Option::is_none));
+        }
+        // A reset forgets the mark with everything else.
+        dfa::reset(&mut cache);
+        assert!(!dfa::captures_declined(&cache));
+        assert!(matches!(
+            capture(&mut cache, "y12", &mut out),
+            Found::Match(_)
+        ));
+        assert!(!dfa::captures_declined(&cache));
+    }
+}
+
+/// The first storage a host gives a program holds at least the minimum, and
+/// holds the one-pass log-line automaton without a clear.
+#[test]
+fn initial_words_holds_the_minimum_and_the_log_line_automaton() {
+    for &(pattern, flags) in CASES {
+        let Some(words) = program(pattern, flags) else {
+            continue;
+        };
+        let p = view(&words);
+        assert_eq!(
+            dfa::initial_words(p).is_some(),
+            dfa::minimum_words(p).is_some(),
+            "/{pattern}/{flags}"
+        );
+        if let (Some(initial), Some(minimum)) = (dfa::initial_words(p), dfa::minimum_words(p)) {
+            assert!(
+                initial >= minimum,
+                "/{pattern}/{flags}: {initial} < {minimum}"
+            );
+        }
+    }
+    let pattern = "^(\\d{4})-(\\d{2})-(\\d{2})T[\\d:]+ \\[(\\w+)\\] user=(\\d+) action=(\\w+) latency=(\\d+)ms$";
+    let words = program(pattern, "").unwrap();
+    let p = view(&words);
+    let mut cache = vec![0u32; dfa::initial_words(p).unwrap()];
+    let mut out = vec![None; p.capture_count()];
+    for k in 0..2000usize {
+        let subject = format!(
+            "20{:02}-{:02}-{:02}T{:02}:{:02}:{:02} [{}] user={} action={} latency={}ms",
+            10 + k % 15,
+            1 + k % 12,
+            1 + k % 28,
+            k % 24,
+            k % 60,
+            (k * 7) % 60,
+            ["info", "warn", "error", "debug"][k % 4],
+            k * 31,
+            ["login", "logout", "view", "buy_item"][k % 4],
+            k * 3
+        );
+        let found = dfa::captures(
+            p,
+            Input::utf8(&subject),
+            0,
+            &mut cache,
+            &mut Budget::new(1 << 24),
+            &mut out,
+        );
+        assert!(matches!(found, Ok(Found::Match(_))), "{found:?}");
+    }
+    let stats = dfa::stats(&cache).unwrap();
+    assert_eq!(stats.clears, 0, "{stats:?}");
+}

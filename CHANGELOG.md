@@ -5,6 +5,10 @@
 - Read capture groups off the lazy automaton: `dfa::captures` returns the match that begins at a position with every group when each transition on the way keeps one path alive, recording each transition's capture effects (writes, and the per-iteration reset of captures inside a repeat) as interned tag records in the cache. A transition that keeps two paths alive is marked ambiguous in the automaton's own state and the search is declined to the evaluator, as before.
 - Report the storage a thrashing program needs: `CacheStats::required_words`, derived from the states the cache held when it filled, so a host can allocate automaton storage on demand and grow it.
 - Add `Decline::Captures`. The cache layout number advances to 2; older caches are rebuilt.
+- A capture search that reaches an ambiguous transition marks the cache (`CacheStats::captures_declined`, `dfa::captures_declined`): every later capture search on it declines before walking, until the cache is reset, so a host asks the evaluator directly.
+- Decide searches whose first-character descriptor admits no start before building any state: over wholly ASCII storage they answer no match without a cache, even over empty storage, which otherwise declines with `Decline::Storage`. A host can therefore allocate automaton storage only when a search needs states.
+- Add `dfa::initial_words`, the size a host gives a program's first storage: its minimum with a state hash and region for one state per instruction.
+- Document that storage need not be zeroed: a host only resets new storage (`dfa::reset`), since the automaton writes every word before reading it.
 - No program-format change; complete captures, work limits and resumable searches are unchanged.
 
 ## 0.1.16 — 2026-10-28

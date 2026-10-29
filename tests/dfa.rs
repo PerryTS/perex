@@ -553,3 +553,125 @@ fn random_patterns_agree_with_the_evaluator() {
         }
     }
 }
+
+/// Every pattern of the tests above, for the storage contract tests below.
+const STORAGE_CASES: &[(&str, &str)] = &[
+    ("a", ""),
+    ("ab|cd|ef|gh", ""),
+    ("[a-c]+", ""),
+    ("[^a]", ""),
+    ("a.c", "s"),
+    ("(a|ab)(c|bcd)", ""),
+    ("x*", ""),
+    ("(?:a|b)*?b", ""),
+    ("[😀-😁]", "u"),
+    ("\\p{L}+", "u"),
+    ("k", "iu"),
+    ("ß", "i"),
+    ("[a-z]+", "i"),
+    ("^a", ""),
+    ("^a", "m"),
+    ("b$", "m"),
+    ("\\ba\\w*\\b", ""),
+    ("(?:^|\\s)x", ""),
+    ("$|a", ""),
+    ("a{2,3}", ""),
+    ("(?:ab|a){1,3}?", ""),
+    ("(?:(?:a|)b?)*c", ""),
+    ("a", "y"),
+    ("b|ab", "y"),
+    (".", "uy"),
+    ("zq|qz|xj", ""),
+    ("^-[^-]$", ""),
+    ("[\\n][ \\t]*", ""),
+    ("\\d+", ""),
+];
+
+/// A search the first-character descriptor decides needs no states: with no
+/// storage at all, it answers no match exactly where the evaluator finds none,
+/// and every other search asks for storage.
+#[test]
+fn searches_decided_before_any_state_need_no_storage() {
+    let mut decided = 0;
+    for &(pattern, flags) in STORAGE_CASES {
+        let words = program(pattern, flags);
+        let p = view(&words);
+        for subject in SUBJECTS {
+            let len = subject.encode_utf16().count();
+            for start in 0..=len + 1 {
+                let input = Input::wtf8(subject.as_bytes()).unwrap();
+                let expected = evaluator(&words, subject.as_bytes(), start);
+                let found = dfa::find(p, input, start, &mut [], &mut Budget::new(1 << 20)).unwrap();
+                let tested =
+                    dfa::is_match(p, input, start, &mut [], &mut Budget::new(1 << 20)).unwrap();
+                match (found, tested) {
+                    (Found::NoMatch, Tested::NoMatch) => {
+                        assert_eq!(
+                            expected, None,
+                            "/{pattern}/{flags} on {subject:?} from {start}"
+                        );
+                        decided += 1;
+                    }
+                    // An exact literal prefix is answered without an automaton.
+                    (Found::Match(span), Tested::Match) => {
+                        assert_eq!(Some(span), expected, "/{pattern}/{flags}");
+                        assert_eq!(dfa::minimum_words(p), Some(0), "/{pattern}/{flags}");
+                    }
+                    (
+                        Found::Declined(Decline::Storage { .. }),
+                        Tested::Declined(Decline::Storage { .. }),
+                    ) => {}
+                    other => panic!("/{pattern}/{flags} on {subject:?} from {start}: {other:?}"),
+                }
+            }
+        }
+    }
+    assert!(decided > 200, "{decided}");
+}
+
+/// The host only resets new storage: whatever the words held before, a reset
+/// cache answers, and builds, exactly as zeroed storage does.
+#[test]
+fn storage_need_not_be_zeroed() {
+    let fills: [fn(usize) -> u32; 4] = [
+        |_| u32::MAX,
+        |_| 0xa5a5_a5a5,
+        |i| i as u32,
+        |i| (i as u32).wrapping_mul(0x9e37_79b9) ^ 0x8000_0001,
+    ];
+    for &(pattern, flags) in STORAGE_CASES {
+        let words = program(pattern, flags);
+        let p = view(&words);
+        let Some(minimum) = dfa::minimum_words(p).filter(|&m| m != 0) else {
+            continue;
+        };
+        for size in [minimum, minimum + 300, 1 << 15] {
+            let mut zeroed = vec![0u32; size];
+            let mut dirty: Vec<Vec<u32>> = fills
+                .iter()
+                .map(|fill| {
+                    let mut cache: Vec<u32> = (0..size).map(fill).collect();
+                    dfa::reset(&mut cache);
+                    cache
+                })
+                .collect();
+            for subject in SUBJECTS
+                .iter()
+                .chain(&["ababababababababababababababababababx"])
+            {
+                let len = subject.encode_utf16().count();
+                for start in 0..=len {
+                    let expected = automaton(&words, subject.as_bytes(), start, &mut zeroed);
+                    for cache in &mut dirty {
+                        let actual = automaton(&words, subject.as_bytes(), start, cache);
+                        assert_eq!(
+                            actual, expected,
+                            "/{pattern}/{flags} on {subject:?} from {start}, {size} words"
+                        );
+                        assert_eq!(dfa::stats(cache), dfa::stats(&zeroed), "/{pattern}/{flags}");
+                    }
+                }
+            }
+        }
+    }
+}

@@ -144,7 +144,11 @@ the whole header.
 
 The host decides its size, which is the hard cap; nothing grows.
 `dfa::minimum_words(program)` is the least storage the program can be searched
-in, and `dfa::stats(cache)` reports the storage, the words in use, the peak,
+in, and `dfa::initial_words(program)` the size a host gives a program's first
+storage: the minimum with a state hash and region planned for one state per
+instruction, a size read off the program rather than a bound on its automaton.
+New storage need not be zeroed; the host resets it (`dfa::reset`, one word),
+because the automaton writes every word before it reads it. `dfa::stats(cache)` reports the storage, the words in use, the peak,
 the states, classes and clears, and whether the cache disabled itself. A larger
 cache holds more states and a larger work area; the work area allows four
 threads per instruction, capped by a sixty-fourth of the storage.
@@ -159,6 +163,14 @@ transition that needs more threads than the work area holds, or a subject with
 more classes than the signature table holds, declines that search only.
 
 ## Answers
+
+A search over wholly ASCII storage whose remainder (or, for a program that
+tries one start, whose start) holds no byte the program's first-character
+descriptor admits has no match: that is the evaluator's own candidate
+decision. Before a cache is built the automaton makes it without building a
+state, so such a search needs no storage at all; over empty storage every
+other search declines with `Decline::Storage`, and a host allocates storage
+when a search first needs states.
 
 - `dfa::is_match(program, input, start, cache, budget)`: `Tested::Match`,
   `Tested::NoMatch` or `Tested::Declined(reason)`.
@@ -244,7 +256,12 @@ state's row of tag references follows its threads.
 A transition on which a second thread of the next state survives is not
 one-pass. It is stored as `AMBIGUOUS`, which is part of the automaton's own
 state, and a capture search that reaches it is declined with
-`Decline::Captures`: the evaluator answers, exactly as before. When `MATCH` is
+`Decline::Captures`: the evaluator answers, exactly as before. The search
+also marks the cache (`CacheStats::captures_declined`): the program's captures
+are not read off one path, so every later capture search on that cache
+declines before it walks, and `dfa::captures_declined(cache)` lets a host skip
+the pass. The mark is part of the cache: a clear keeps it, and a reset or
+rebuild forgets it with the states. When `MATCH` is
 reached after a thread was already produced (leftmost-first keeps the thread
 running), the transition also carries the match's masks; the walk snapshots the
 registers at that match and a later match replaces the snapshot.
