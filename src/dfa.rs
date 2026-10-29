@@ -3,9 +3,11 @@
 //! built from the program's instructions when a search first reaches them and
 //! kept in a cache the host allocates, sizes and may move. See `docs/dfa.md`.
 //!
-//! The backtracking evaluator remains the definition of every answer and the
-//! only source of captures. Programs the compiler did not mark eligible, and
-//! searches the cache cannot hold, are declined and left to it.
+//! The backtracking evaluator remains the definition of every answer. The
+//! automaton reads captures off a transition's single path when a program is
+//! one-pass at the match ([`captures`]); programs the compiler did not mark
+//! eligible, searches the cache cannot hold, and transitions that keep two
+//! paths alive are declined and left to the evaluator.
 use crate::{
     Budget, casefold,
     executor::{
@@ -32,6 +34,10 @@ pub enum Decline {
     /// One transition needed more threads, or the subject more character
     /// classes, than this cache holds.
     Capacity,
+    /// The automaton cannot yield this search's captures: a transition it
+    /// reached keeps more than one path alive, or the subject is not wholly
+    /// ASCII storage. The evaluator answers.
+    Captures,
 }
 
 /// The answer of [`is_match`].
@@ -63,10 +69,16 @@ pub struct CacheStats {
     pub classes: usize,
     pub clears: usize,
     pub disabled: bool,
+    /// The storage, in words, that holds twice the states the cache built
+    /// between its last clears, as this program's layout would plan it; zero
+    /// before any clear forced by a full cache. A host that wants the
+    /// automaton for a program that thrashes reallocates the cache at this
+    /// size, resets it and searches again.
+    pub required_words: usize,
 }
 
 const MAGIC: u32 = 0x5058_4446;
-const LAYOUT: u32 = 1;
+const LAYOUT: u32 = 2;
 const HEADER_WORDS: usize = 64;
 
 // Header words.
@@ -117,10 +129,22 @@ const H_PAIRS: usize = 47;
 /// Nonzero when no consuming instruction a search can reach from instruction
 /// zero without consuming accepts a non-ASCII character.
 const H_ASCII_START: usize = 52;
+/// Words of one capture-slot mask: `ceil(2 * captures / 32)`.
+const H_MASK: usize = 53;
+/// Capture registers (current, then the snapshot of a match that threads
+/// continue past), the capture-mode DFS masks, the mask of the entry being
+/// expanded, and the masks the transition being built records.
+const H_REGS: usize = 54;
+const H_TSTACK: usize = 55;
+const H_TCUR: usize = 56;
+const H_TOUT: usize = 57;
+/// The newest tag record, chained through each record's first word.
+const H_TAGS: usize = 58;
+const H_REQUIRED: usize = 59;
 
 const ASCII: usize = HEADER_WORDS;
 const SLOTS: usize = ASCII + 128;
-const FRONT: usize = SLOTS + 48;
+const FRONT: usize = SLOTS + 64;
 
 /// A transition not yet computed.
 const UNKNOWN: u32 = 0;
@@ -147,10 +171,22 @@ const PRED_BASE: usize = 4;
 
 const S_REVERSE: u32 = 1;
 const S_INJECT: u32 = 2;
+/// A capture-mode state: one thread, and a row of tag references after its
+/// threads. Such states intern apart from bounds states.
+const S_CAPTURE: u32 = 4;
 
 const MODE_UNANCHORED: usize = 0;
 const MODE_ANCHORED: usize = 1;
 const MODE_REVERSE: usize = 2;
+const MODE_CAPTURE: usize = 3;
+
+/// A capture-mode transition entry: bit 30 says a tag record applies to the
+/// capture registers; the entry's own offset is below 2^30. The entry with no
+/// offset at all marks a transition that kept more than one path alive.
+const TAG: u32 = 1 << 30;
+const AMBIGUOUS: u32 = TAG;
+/// A capture register no group has written.
+const NONE: u32 = u32::MAX;
 
 const MEMO_SLOTS: usize = 512;
 /// Storage at or above this many words is declined: a transition holds a
@@ -186,7 +222,18 @@ pub fn minimum_words(program: Program<'_>) -> Option<usize> {
     }
     let (edges, consuming) = census(program);
     let n = program.instructions();
-    Some(plan(n, program.words[6] as usize, consuming, edges, 0, true).required)
+    Some(
+        plan(
+            n,
+            program.words[6] as usize,
+            consuming,
+            edges,
+            program.capture_count(),
+            0,
+            true,
+        )
+        .required,
+    )
 }
 
 /// The program's epsilon edges and consuming instructions.
@@ -220,6 +267,7 @@ pub fn stats(cache: &[u32]) -> Option<CacheStats> {
         classes: cache[H_CLASSES] as usize,
         clears: cache[H_CLEARS] as usize,
         disabled: cache[H_STATUS] != 0,
+        required_words: cache[H_REQUIRED] as usize,
     })
 }
 
@@ -262,6 +310,69 @@ pub fn find(
             Outcome::Matched(span) => Found::Match(span.ok_or(ExecError::InvalidProgram)?),
         },
     )
+}
+
+/// The match of `program` that begins exactly at `start_utf16`, with every
+/// capture group, answered by the automaton in `cache` when it can read the
+/// captures off a single path. `out` receives the groups as the evaluator's
+/// [`find`](crate::executor::find) would return them.
+///
+/// The search is anchored: one thread starts at `start_utf16`. For a program
+/// that tries one start (sticky or start-anchored) that is the search's own
+/// start; for any other, pass the start [`find`] reported. A transition that
+/// keeps more than one path alive, a subject that is not wholly ASCII storage,
+/// and everything else [`find`] declines are declined with `out` untouched,
+/// and the evaluator answers. The cache contract is [`is_match`]'s.
+pub fn captures(
+    program: Program<'_>,
+    input: Input<'_>,
+    start_utf16: usize,
+    cache: &mut [u32],
+    budget: &mut Budget,
+    out: &mut [Option<Span>],
+) -> Result<Found, ExecError> {
+    if program.literal_prefix().is_some() || !eligible(program) {
+        return Ok(Found::Declined(Decline::Ineligible));
+    }
+    let count = program.capture_count();
+    if out.len() < count {
+        return Err(ExecError::Captures);
+    }
+    let Some(bytes) = input.ascii_bytes().filter(|b| b.len() < 1 << 30) else {
+        return Ok(Found::Declined(Decline::Captures));
+    };
+    let built = program
+        .words
+        .first_chunk::<HEADER>()
+        .is_some_and(|words| built_for(words, program.words.len(), cache));
+    if !built && let Err(why) = build(program, cache) {
+        return Ok(Found::Declined(why));
+    }
+    if cache[H_STATUS] != 0 {
+        return Ok(Found::Declined(Decline::Disabled));
+    }
+    if start_utf16 > bytes.len() {
+        return Ok(Found::NoMatch);
+    }
+    let mut dfa = Dfa {
+        program,
+        m: cache,
+        budget: *budget,
+        progress: 0,
+        flushed: 0,
+        unicode: program.unicode(),
+    };
+    let result = dfa.capture_forward(bytes, start_utf16, count, out);
+    dfa.flush_units();
+    *budget = dfa.budget;
+    match result {
+        Ok(Some(end)) => Ok(Found::Match(
+            Span::new(start_utf16, end).ok_or(ExecError::InvalidProgram)?,
+        )),
+        Ok(None) => Ok(Found::NoMatch),
+        Err(Stop::Declined(why)) => Ok(Found::Declined(why)),
+        Err(Stop::Error(error)) => Err(error),
+    }
 }
 
 enum Outcome {
@@ -910,6 +1021,11 @@ struct Plan {
     stack: usize,
     out: usize,
     saved: usize,
+    mask: usize,
+    regs: usize,
+    tstack: usize,
+    tcur: usize,
+    tout: usize,
     sig: usize,
     sigcap: usize,
     hash: usize,
@@ -924,6 +1040,7 @@ fn plan(
     repeats: usize,
     predicates: usize,
     edges: usize,
+    captures: usize,
     cap: usize,
     minimum: bool,
 ) -> Plan {
@@ -950,8 +1067,15 @@ fn plan(
     let stack = take(&mut at, 4 * threads);
     let out = take(&mut at, 2 * threads);
     let saved = take(&mut at, 2 * threads + 2);
+    // Capture mode: registers and their snapshot, the masks a path carries on
+    // every stack entry, and the masks of the transition being built.
+    let mask = (2 * captures).div_ceil(32).max(1);
+    let regs = take(&mut at, 4 * captures);
+    let tstack = take(&mut at, 4 * threads * mask);
+    let tcur = take(&mut at, 2 * mask);
+    let tout = take(&mut at, 1 + 4 * mask);
     let fixed = at;
-    let required = fixed + 16 * sigw + 64 + 8 * (FIRST_COLUMNS + 2 + 32);
+    let required = fixed + 16 * sigw + 64 + 8 * (2 * FIRST_COLUMNS + 2 + 32) + 8 * (2 + 4 * mask);
     let rest = cap.saturating_sub(fixed);
     let sigcap = (rest / 8 / sigw).clamp(16, MAX_CLASSES);
     let sig = take(&mut at, sigcap * sigw);
@@ -975,6 +1099,11 @@ fn plan(
         stack,
         out,
         saved,
+        mask,
+        regs,
+        tstack,
+        tcur,
+        tout,
         sig,
         sigcap,
         hash,
@@ -1038,10 +1167,27 @@ fn build(program: Program<'_>, m: &mut [u32]) -> Result<(), Decline> {
     // deduplicated count only shrinks the signature. A work area sized by the
     // storage is preferred, the smallest one accepted.
     let mut minimum = false;
-    let mut worst = plan(n, repeats, consuming_count, edges, m.len(), minimum);
+    let captures = program.capture_count();
+    let mut worst = plan(
+        n,
+        repeats,
+        consuming_count,
+        edges,
+        captures,
+        m.len(),
+        minimum,
+    );
     if m.len() < worst.required {
         minimum = true;
-        worst = plan(n, repeats, consuming_count, edges, m.len(), minimum);
+        worst = plan(
+            n,
+            repeats,
+            consuming_count,
+            edges,
+            captures,
+            m.len(),
+            minimum,
+        );
         if m.len() < worst.required {
             return Err(Decline::Storage {
                 required_words: worst.required,
@@ -1091,7 +1237,7 @@ fn build(program: Program<'_>, m: &mut [u32]) -> Result<(), Decline> {
             }
         }
     }
-    let p = plan(n, repeats, predicates, edges, m.len(), minimum);
+    let p = plan(n, repeats, predicates, edges, captures, m.len(), minimum);
     debug_assert_eq!(p.pred, pred_at);
     // Representative instruction of each predicate: its first.
     m[p.reps..p.reps + predicates].fill(u32::MAX);
@@ -1191,6 +1337,11 @@ fn build(program: Program<'_>, m: &mut [u32]) -> Result<(), Decline> {
     header[H_HASH_SLOTS] = p.hash_slots as u32;
     header[H_REGION] = p.region as u32;
     header[H_ASCII_START] = u32::from(ascii_start);
+    header[H_MASK] = p.mask as u32;
+    header[H_REGS] = p.regs as u32;
+    header[H_TSTACK] = p.tstack as u32;
+    header[H_TCUR] = p.tcur as u32;
+    header[H_TOUT] = p.tout as u32;
     let pairs = match program.leading() {
         0 => Prefix {
             first: [0; LEADING_BRANCHES],
@@ -1582,6 +1733,132 @@ impl Dfa<'_, '_> {
         Ok(last)
     }
 
+    /// Apply the thread effects (`matched` false) or the match effects of the
+    /// tag record `tag` to the registers at `to`, as written at `position`.
+    #[inline(always)]
+    fn apply(&mut self, tag: usize, matched: bool, to: usize, position: u32) {
+        let w = self.h(H_MASK);
+        let set = tag + 2 + if matched { 2 * w } else { 0 };
+        for word in 0..w {
+            let (mut sets, mut clears) = (self.m[set + word], self.m[set + w + word]);
+            while sets != 0 {
+                self.m[to + word * 32 + sets.trailing_zeros() as usize] = position;
+                sets &= sets - 1;
+            }
+            while clears != 0 {
+                self.m[to + word * 32 + clears.trailing_zeros() as usize] = NONE;
+                clears &= clears - 1;
+            }
+        }
+    }
+
+    /// The end of the match that begins at `start` over wholly ASCII storage,
+    /// with its captures in `out`: one thread walks the automaton, applying
+    /// each transition's recorded capture effects to the registers. A match a
+    /// continuing thread may replace is snapshotted when it is seen.
+    #[inline(always)]
+    fn capture_forward(
+        &mut self,
+        bytes: &[u8],
+        start: usize,
+        count: usize,
+        out: &mut [Option<Span>],
+    ) -> Result<Option<usize>, Stop> {
+        let need = self.m[H_NEED];
+        let ctx = if need == 0 {
+            0
+        } else if start == 0 {
+            CX_EDGE & need
+        } else {
+            context(u32::from(bytes[start - 1])) & need
+        };
+        let mut s = self.start_state(MODE_CAPTURE, ctx)?;
+        let slots = 2 * count;
+        let regs = self.h(H_REGS);
+        let snap = regs + slots;
+        self.m[regs..regs + slots].fill(NONE);
+        let allowance = self.budget.remaining();
+        let limit = bytes.len().min(start.saturating_add(allowance));
+        let base = self.progress;
+        let mut i = start;
+        let mut last = None;
+        let mut snapped = false;
+        loop {
+            let (column, mut entry) = match bytes.get(i) {
+                Some(&byte) => {
+                    if i == limit {
+                        self.progress = base + (i - start);
+                        return Err(Stop::Error(ExecError::WorkLimit));
+                    }
+                    let column = self.m[ASCII + usize::from(byte & 127)] as usize;
+                    (column, self.m[s as usize + column])
+                }
+                None => (0, self.m[s as usize]),
+            };
+            if entry.wrapping_sub(2) < TAG - 2 {
+                s = entry;
+                i += 1;
+                continue;
+            }
+            if entry == UNKNOWN {
+                self.progress = base + (i - start);
+                entry = self.step_slow(&mut s, bytes.get(i).map(|&b| u32::from(b)))?;
+            }
+            if entry == AMBIGUOUS {
+                return Err(Stop::Declined(Decline::Captures));
+            }
+            // The step may have classified the byte.
+            let column = match bytes.get(i) {
+                Some(&byte) => self.m[ASCII + usize::from(byte & 127)] as usize,
+                None => column,
+            };
+            let next = entry & (TAG - 1);
+            let tag = if entry & TAG != 0 {
+                let row = self.tag_row(s);
+                self.h(row + column)
+            } else {
+                0
+            };
+            let position = i as u32;
+            if entry & FLAG != 0 {
+                last = Some(i);
+                if next == DEAD {
+                    if tag != 0 {
+                        self.apply(tag, true, regs, position);
+                    }
+                    snapped = false;
+                    break;
+                }
+                self.m.copy_within(regs..regs + slots, snap);
+                self.apply(tag, true, snap, position);
+                snapped = true;
+            } else if next == DEAD {
+                break;
+            }
+            if tag != 0 {
+                self.apply(tag, false, regs, position);
+            }
+            if bytes.get(i).is_none() {
+                break;
+            }
+            s = next;
+            i += 1;
+        }
+        self.progress = base + (i - start);
+        self.charge(i - start)?;
+        let Some(end) = last else { return Ok(None) };
+        let from = if snapped { snap } else { regs };
+        for (k, target) in out[..count].iter_mut().enumerate() {
+            let (lo, hi) = (self.m[from + 2 * k], self.m[from + 2 * k + 1]);
+            *target = if lo == NONE || hi == NONE {
+                None
+            } else {
+                Span::new(lo as usize, hi as usize)
+            };
+        }
+        Ok(Some(end))
+    }
+
     /// The leftmost start, at or after `lower`, of a match ending at `end`.
     fn reverse(&mut self, input: Input<'_>, end: usize, lower: usize) -> Result<usize, Stop> {
         let mut cursor = input.cursor_at(end).ok_or(ExecError::InvalidProgram)?;
@@ -1782,7 +2059,12 @@ impl Dfa<'_, '_> {
                 self.m[H_STATUS] = 1;
             }
             self.m[H_CLEARS] = self.m[H_CLEARS].saturating_add(1);
+            let required = self.required_words();
+            if required > self.h(H_REQUIRED) {
+                self.m[H_REQUIRED] = required as u32;
+            }
         }
+        self.m[H_TAGS] = 0;
         self.m[H_UNITS] = 0;
         self.m[H_BUILT] = 0;
         self.m[H_STATES] = 0;
@@ -1795,6 +2077,43 @@ impl Dfa<'_, '_> {
             return Err(Stop::Declined(Decline::Disabled));
         }
         Ok(())
+    }
+
+    /// The storage that holds twice the states and state words this cache
+    /// holds now, in this program's layout: the least size at which a plan
+    /// has a hash for them and room for them. A cache that filled has shown
+    /// the automaton is at least this large, and the next fill is likely to
+    /// need about as much again; the search that follows runs on the
+    /// reallocated cache once.
+    fn required_words(&self) -> usize {
+        let states = 2 * self.h(H_STATES).max(1);
+        let words = 2 * (self.h(H_BUMP) - self.h(H_REGION));
+        let (edges, _) = census(self.program);
+        let n = self.program.instructions();
+        let repeats = self.program.words[6] as usize;
+        let predicates = self.h(H_PREDICATES);
+        let captures = self.program.capture_count();
+        let fits = |cap: usize| {
+            let p = plan(n, repeats, predicates, edges, captures, cap, false);
+            cap >= p.required && p.region + words <= cap && p.hash_slots / 2 > states
+        };
+        let mut high = self.m.len().max(1024);
+        while !fits(high) {
+            if high >= MAX_WORDS / 2 {
+                return MAX_WORDS - 1;
+            }
+            high *= 2;
+        }
+        let mut low = high / 2;
+        while low + 1 < high {
+            let middle = low + (high - low) / 2;
+            if fits(middle) {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        high
     }
 
     /// The state with `header` and the `count` threads at `threads`, built if
@@ -1825,13 +2144,17 @@ impl Dfa<'_, '_> {
             }
             slot = (slot + 1) & (slots - 1);
         }
-        let size = columns + 2 + 2 * count;
+        // A capture-mode state's row of tag references follows its threads.
+        let tags = if header & S_CAPTURE != 0 { columns } else { 0 };
+        let size = columns + 2 + 2 * count + tags;
         let s = self.h(H_BUMP);
         if s + size > self.m.len() || self.h(H_STATES) + 1 > slots / 2 {
             return Ok(None);
         }
         self.charge(size / 8 + 1)?;
         self.m[s..s + columns].fill(UNKNOWN);
+        let tail = s + columns + 2 + 2 * count;
+        self.m[tail..tail + tags].fill(0);
         self.m[s + columns] = header;
         self.m[s + columns + 1] = count as u32;
         self.m
@@ -1866,6 +2189,11 @@ impl Dfa<'_, '_> {
                 self.m[saved + 2] = 0;
                 self.m[saved + 3] = 0;
                 (ctx << 4, 1)
+            }
+            MODE_CAPTURE => {
+                self.m[saved + 2] = 0;
+                self.m[saved + 3] = 0;
+                (S_CAPTURE | ctx << 4, 1)
             }
             _ => {
                 self.m[saved + 2] = self.program.instructions() as u32 - 1;
@@ -1939,6 +2267,14 @@ impl Dfa<'_, '_> {
         let count = self.h(at + 1);
         let reverse = header & S_REVERSE != 0;
         let inject = header & S_INJECT != 0;
+        let capture = header & S_CAPTURE != 0;
+        let (w, tstack, tcur, tout) = (
+            self.h(H_MASK),
+            self.h(H_TSTACK),
+            self.h(H_TCUR),
+            self.h(H_TOUT),
+        );
+        let slots = 2 * self.program.capture_count();
         let ctx = (header >> 4) & 15;
         let need = self.m[H_NEED];
         let (side, sig) = if column == 0 {
@@ -1960,7 +2296,11 @@ impl Dfa<'_, '_> {
         let mut depth;
         let mut produced = 0usize;
         let mut flagged = false;
+        let mut ambiguous = false;
         let mut work = 0usize;
+        if capture {
+            self.m[tout..tout + 1 + 4 * w].fill(0);
+        }
         let seeds = count + usize::from(inject);
         'seeds: for seed in 0..seeds {
             let (pc, key) = if seed < count {
@@ -1970,11 +2310,18 @@ impl Dfa<'_, '_> {
             };
             self.m[stack] = pc;
             self.m[stack + 1] = key;
+            if capture {
+                self.m[tstack..tstack + 2 * w].fill(0);
+            }
             depth = 1;
             while depth > 0 {
                 depth -= 1;
                 let pc = self.m[stack + 2 * depth];
                 let key = self.m[stack + 2 * depth + 1];
+                if capture {
+                    let from = tstack + 2 * w * depth;
+                    self.m.copy_within(from..from + 2 * w, tcur);
+                }
                 if !self.visit(pc, key, 0, &mut visited)? {
                     continue;
                 }
@@ -1985,6 +2332,10 @@ impl Dfa<'_, '_> {
                     }
                     m[stack + 2 * depth] = pc;
                     m[stack + 2 * depth + 1] = key;
+                    if capture {
+                        let to = tstack + 2 * w * depth;
+                        m.copy_within(tcur..tcur + 2 * w, to);
+                    }
                     depth += 1;
                     Ok(())
                 };
@@ -2065,9 +2416,21 @@ impl Dfa<'_, '_> {
                 match op {
                     MATCH => {
                         flagged = true;
+                        if capture {
+                            self.m.copy_within(tcur..tcur + 2 * w, tout + 1 + 2 * w);
+                            self.m[tout] |= 2;
+                        }
                         break 'seeds;
                     }
-                    SAVE => push(self.m, pc + 1, key)?,
+                    SAVE => {
+                        if capture {
+                            if a as usize >= slots {
+                                return Err(Stop::Error(ExecError::InvalidProgram));
+                            }
+                            self.tag_set(tcur, w, a as usize);
+                        }
+                        push(self.m, pc + 1, key)?
+                    }
                     JUMP => push(self.m, a, key)?,
                     SPLIT => {
                         push(self.m, b, key)?;
@@ -2109,6 +2472,16 @@ impl Dfa<'_, '_> {
                     }
                     REPEAT_BODY => {
                         let (offset, bits) = self.field(a);
+                        if capture {
+                            // Entering the body forgets the captures inside it.
+                            let r = program.repeat(a as usize);
+                            for slot in 2 * r[5] as usize..2 * r[6] as usize {
+                                if slot >= slots {
+                                    return Err(Stop::Error(ExecError::InvalidProgram));
+                                }
+                                self.tag_clear(tcur, w, slot);
+                            }
+                        }
                         push(self.m, pc + 1, key & !(1 << (offset + bits)))?;
                     }
                     REPEAT_NEXT => {
@@ -2142,6 +2515,16 @@ impl Dfa<'_, '_> {
                                 if produced >= limit {
                                     return Err(Stop::Declined(Decline::Capacity));
                                 }
+                                if capture {
+                                    if produced != 0 {
+                                        // A second thread survives: the
+                                        // captures are not read off one path.
+                                        ambiguous = true;
+                                        break 'seeds;
+                                    }
+                                    self.m.copy_within(tcur..tcur + 2 * w, tout + 1);
+                                    self.m[tout] |= 1;
+                                }
                                 self.m[out + 2 * produced] = pc + 1;
                                 self.m[out + 2 * produced + 1] = next;
                                 produced += 1;
@@ -2153,33 +2536,126 @@ impl Dfa<'_, '_> {
             }
         }
         self.charge(work)?;
-        let entry = if column == 0 {
+        if ambiguous {
+            self.m[*s as usize + column] = AMBIGUOUS;
+            return Ok(AMBIGUOUS);
+        }
+        let header = if reverse {
+            S_REVERSE
+        } else if capture {
+            S_CAPTURE
+        } else if inject && !flagged {
+            S_INJECT
+        } else {
+            0
+        } | side << 4;
+        let mut next = if column == 0 {
             DEAD
         } else {
-            let header = if reverse {
-                S_REVERSE
-            } else if inject && !flagged {
-                S_INJECT
-            } else {
-                0
-            } | side << 4;
-            match self.intern(header, out, produced)? {
-                Some(next) => next,
+            self.intern_next(s, header, out, produced)?
+        };
+        let mut entry = next | if flagged { FLAG } else { 0 };
+        // A thread's own effects, or a match's, are applied by the walk.
+        let effects = capture
+            && (flagged
+                || (self.m[tout] & 1 != 0
+                    && self.m[tout + 1..tout + 1 + 2 * w].iter().any(|&m| m != 0)));
+        let mut tag = 0;
+        if effects {
+            tag = match self.intern_tag() {
+                Some(tag) => tag,
                 None => {
-                    // Full: keep this state and its successor, drop the rest.
                     self.save(*s);
                     self.clear(true)?;
                     *s = self.restore()?;
-                    match self.intern(header, out, produced)? {
-                        Some(next) => next,
-                        None => return Err(Stop::Declined(Decline::Capacity)),
+                    if column != 0 {
+                        next = self
+                            .intern(header, out, produced)?
+                            .ok_or(Stop::Declined(Decline::Capacity))?;
                     }
+                    entry = next | if flagged { FLAG } else { 0 };
+                    self.intern_tag().ok_or(Stop::Declined(Decline::Capacity))?
+                }
+            };
+            entry |= TAG;
+        }
+        self.m[*s as usize + column] = entry;
+        if effects {
+            let row = self.tag_row(*s);
+            self.m[row + column] = tag;
+        }
+        Ok(entry)
+    }
+
+    /// The successor state `header` and the `produced` threads at `out`,
+    /// interned; a full cache is cleared first, keeping `s` and the result.
+    fn intern_next(
+        &mut self,
+        s: &mut u32,
+        header: u32,
+        out: usize,
+        produced: usize,
+    ) -> Result<u32, Stop> {
+        match self.intern(header, out, produced)? {
+            Some(next) => Ok(next),
+            None => {
+                // Full: keep this state and its successor, drop the rest.
+                self.save(*s);
+                self.clear(true)?;
+                *s = self.restore()?;
+                match self.intern(header, out, produced)? {
+                    Some(next) => Ok(next),
+                    None => Err(Stop::Declined(Decline::Capacity)),
                 }
             }
-        };
-        let entry = entry | if flagged { FLAG } else { 0 };
-        self.m[*s as usize + column] = entry;
-        Ok(entry)
+        }
+    }
+
+    /// Where capture-mode state `s` keeps its row of tag references.
+    #[inline(always)]
+    fn tag_row(&self, s: u32) -> usize {
+        let columns = self.h(H_COLUMNS);
+        let at = s as usize + columns;
+        at + 2 + 2 * self.h(at + 1)
+    }
+
+    /// The tag record for the effects the transition just computed recorded
+    /// at `H_TOUT`, found or added. `None` when the cache has no room.
+    fn intern_tag(&mut self) -> Option<u32> {
+        let w = self.h(H_MASK);
+        let tout = self.h(H_TOUT);
+        let len = 1 + 4 * w;
+        let mut at = self.h(H_TAGS);
+        while at != 0 {
+            if self.m[at + 1..at + 1 + len] == self.m[tout..tout + len] {
+                return Some(at as u32);
+            }
+            at = self.h(at);
+        }
+        let at = self.h(H_BUMP);
+        if at + 1 + len > self.m.len() {
+            return None;
+        }
+        self.m[at] = self.m[H_TAGS];
+        self.m.copy_within(tout..tout + len, at + 1);
+        self.m[H_TAGS] = at as u32;
+        self.m[H_BUMP] = (at + 1 + len) as u32;
+        if self.m[H_PEAK] < self.m[H_BUMP] {
+            self.m[H_PEAK] = self.m[H_BUMP];
+        }
+        Some(at as u32)
+    }
+
+    /// Record in the mask pair at `tcur` that the path writes `slot`.
+    fn tag_set(&mut self, tcur: usize, w: usize, slot: usize) {
+        self.m[tcur + slot / 32] |= 1 << (slot % 32);
+        self.m[tcur + w + slot / 32] &= !(1 << (slot % 32));
+    }
+
+    /// Record that the path forgets `slot`.
+    fn tag_clear(&mut self, tcur: usize, w: usize, slot: usize) {
+        self.m[tcur + slot / 32] &= !(1 << (slot % 32));
+        self.m[tcur + w + slot / 32] |= 1 << (slot % 32);
     }
 }
 

@@ -7,8 +7,9 @@ instructions one state at a time, only for states a search reaches, and only
 for programs that run. No program gains words beyond one header bit, and no
 code is generated.
 
-The backtracking evaluator stays the definition of every answer and the only
-source of captures. The automaton is a second reading of the same instructions
+The backtracking evaluator stays the definition of every answer. It is the
+source of captures for every search the automaton cannot read them off a single
+path (see Captures). The automaton is a second reading of the same instructions
 for the subset whose meaning a finite automaton can hold exactly, and the
 differential suites compare the two on every case they run (see Verification).
 
@@ -218,6 +219,52 @@ one), no non-ASCII character can begin a match, and the scan passes over them
 with the ASCII bytes it rejects; the byte pairs are then exact over this storage
 too, unless the leading run is folded, since a folded `k` matches U+212A under
 `u`. The skip is set up only when at least 32 bytes remain.
+
+## Captures
+
+`dfa::captures` returns the match that begins exactly at a position, with every
+capture group, when the automaton can read the groups off one path.
+
+A capture search is anchored: one thread starts at the given position. It uses
+its own states, marked `S_CAPTURE`, so they intern apart from the bounds states
+and the bounds loops never see them. For a program that tries one start (sticky
+or start-anchored) the position is the search's start. For any other program it
+is the start `find` reported, so the capture pass replaces the evaluator pass
+that ran from there.
+
+While it builds a transition, the walk carries a pair of slot masks along every
+path: `SAVE k` sets slot k and clears it from the clear mask, and entering the
+body of a repeat clears the slots of the captures inside it, as the evaluator's
+`Phase::Clear` does. The first path to reach a thread of the next state or
+`MATCH` is the evaluator's path, so its masks are the transition's effects. The
+effects are interned in the cache as one tag record per distinct set of masks
+(`ceil(2 * captures / 32)` words per mask, so there is no cap on groups), and a
+state's row of tag references follows its threads.
+
+A transition on which a second thread of the next state survives is not
+one-pass. It is stored as `AMBIGUOUS`, which is part of the automaton's own
+state, and a capture search that reaches it is declined with
+`Decline::Captures`: the evaluator answers, exactly as before. When `MATCH` is
+reached after a thread was already produced (leftmost-first keeps the thread
+running), the transition also carries the match's masks; the walk snapshots the
+registers at that match and a later match replaces the snapshot.
+
+The registers are ordinary words of the cache. The steady loop is the bounds
+loop with one more way out of its single comparison: an entry from 2 up to
+`TAG` is a plain transition, anything else (a tag, a match, unknown, dead,
+ambiguous) is handled out of line. This slice answers wholly ASCII storage;
+other storage is declined.
+
+## Storage a program needs
+
+`CacheStats::required_words` is zero until a clear forced by a full cache. Then
+it is the least storage, in this program's layout, with a hash and room for
+twice the states and state words the cache held when it filled. A thrashing
+cache disables itself after three consecutive thrashing clears; a host that
+wants the automaton for that program reallocates at `required_words`, resets
+the cache and searches again. A cache that held too few states reports a larger
+size at its next disable, so the host repeats until the program fits or the
+size passes its own limit.
 
 ## For a host
 

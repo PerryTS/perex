@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.17 — 2026-10-29
+
+- Read capture groups off the lazy automaton: `dfa::captures` returns the match that begins at a position with every group when each transition on the way keeps one path alive, recording each transition's capture effects (writes, and the per-iteration reset of captures inside a repeat) as interned tag records in the cache. A transition that keeps two paths alive is marked ambiguous in the automaton's own state and the search is declined to the evaluator, as before.
+- Report the storage a thrashing program needs: `CacheStats::required_words`, derived from the states the cache held when it filled, so a host can allocate automaton storage on demand and grow it.
+- Add `Decline::Captures`. The cache layout number advances to 2; older caches are rebuilt.
+- No program-format change; complete captures, work limits and resumable searches are unchanged.
+
 ## 0.1.16 — 2026-10-28
 
 - Execute adjacent exact literal and capture-save bytecodes directly over original ASCII storage, preserving each opcode work charge and paid SAVE retry after undo growth.
