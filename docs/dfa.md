@@ -7,8 +7,9 @@ instructions one state at a time, only for states a search reaches, and only
 for programs that run. No program gains words beyond one header bit, and no
 code is generated.
 
-The backtracking evaluator stays the definition of every answer and the only
-source of captures. The automaton is a second reading of the same instructions
+The backtracking evaluator stays the definition of every answer. It is the
+source of captures for every search the automaton cannot read them off a single
+path (see Captures). The automaton is a second reading of the same instructions
 for the subset whose meaning a finite automaton can hold exactly, and the
 differential suites compare the two on every case they run (see Verification).
 
@@ -143,7 +144,11 @@ the whole header.
 
 The host decides its size, which is the hard cap; nothing grows.
 `dfa::minimum_words(program)` is the least storage the program can be searched
-in, and `dfa::stats(cache)` reports the storage, the words in use, the peak,
+in, and `dfa::initial_words(program)` the size a host gives a program's first
+storage: the minimum with a state hash and region planned for one state per
+instruction, a size read off the program rather than a bound on its automaton.
+New storage need not be zeroed; the host resets it (`dfa::reset`, one word),
+because the automaton writes every word before it reads it. `dfa::stats(cache)` reports the storage, the words in use, the peak,
 the states, classes and clears, and whether the cache disabled itself. A larger
 cache holds more states and a larger work area; the work area allows four
 threads per instruction, capped by a sixty-fourth of the storage.
@@ -158,6 +163,14 @@ transition that needs more threads than the work area holds, or a subject with
 more classes than the signature table holds, declines that search only.
 
 ## Answers
+
+A search over wholly ASCII storage whose remainder (or, for a program that
+tries one start, whose start) holds no byte the program's first-character
+descriptor admits has no match: that is the evaluator's own candidate
+decision. Before a cache is built the automaton makes it without building a
+state, so such a search needs no storage at all; over empty storage every
+other search declines with `Decline::Storage`, and a host allocates storage
+when a search first needs states.
 
 - `dfa::is_match(program, input, start, cache, budget)`: `Tested::Match`,
   `Tested::NoMatch` or `Tested::Declined(reason)`.
@@ -218,6 +231,57 @@ one), no non-ASCII character can begin a match, and the scan passes over them
 with the ASCII bytes it rejects; the byte pairs are then exact over this storage
 too, unless the leading run is folded, since a folded `k` matches U+212A under
 `u`. The skip is set up only when at least 32 bytes remain.
+
+## Captures
+
+`dfa::captures` returns the match that begins exactly at a position, with every
+capture group, when the automaton can read the groups off one path.
+
+A capture search is anchored: one thread starts at the given position. It uses
+its own states, marked `S_CAPTURE`, so they intern apart from the bounds states
+and the bounds loops never see them. For a program that tries one start (sticky
+or start-anchored) the position is the search's start. For any other program it
+is the start `find` reported, so the capture pass replaces the evaluator pass
+that ran from there.
+
+While it builds a transition, the walk carries a pair of slot masks along every
+path: `SAVE k` sets slot k and clears it from the clear mask, and entering the
+body of a repeat clears the slots of the captures inside it, as the evaluator's
+`Phase::Clear` does. The first path to reach a thread of the next state or
+`MATCH` is the evaluator's path, so its masks are the transition's effects. The
+effects are interned in the cache as one tag record per distinct set of masks
+(`ceil(2 * captures / 32)` words per mask, so there is no cap on groups), and a
+state's row of tag references follows its threads.
+
+A transition on which a second thread of the next state survives is not
+one-pass. It is stored as `AMBIGUOUS`, which is part of the automaton's own
+state, and a capture search that reaches it is declined with
+`Decline::Captures`: the evaluator answers, exactly as before. The search
+also marks the cache (`CacheStats::captures_declined`): the program's captures
+are not read off one path, so every later capture search on that cache
+declines before it walks, and `dfa::captures_declined(cache)` lets a host skip
+the pass. The mark is part of the cache: a clear keeps it, and a reset or
+rebuild forgets it with the states. When `MATCH` is
+reached after a thread was already produced (leftmost-first keeps the thread
+running), the transition also carries the match's masks; the walk snapshots the
+registers at that match and a later match replaces the snapshot.
+
+The registers are ordinary words of the cache. The steady loop is the bounds
+loop with one more way out of its single comparison: an entry from 2 up to
+`TAG` is a plain transition, anything else (a tag, a match, unknown, dead,
+ambiguous) is handled out of line. This slice answers wholly ASCII storage;
+other storage is declined.
+
+## Storage a program needs
+
+`CacheStats::required_words` is zero until a clear forced by a full cache. Then
+it is the least storage, in this program's layout, with a hash and room for
+twice the states and state words the cache held when it filled. A thrashing
+cache disables itself after three consecutive thrashing clears; a host that
+wants the automaton for that program reallocates at `required_words`, resets
+the cache and searches again. A cache that held too few states reports a larger
+size at its next disable, so the host repeats until the program fits or the
+size passes its own limit.
 
 ## For a host
 

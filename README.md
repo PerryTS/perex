@@ -182,7 +182,7 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 
 [Test262 pattern conformance](docs/conformance.md) compares every pattern harvested from the suite's regular-expression tests against Node, for syntax acceptance and complete match answers. There is no remaining gap: 48,718 cases compared, nothing unsupported and no difference, on the harvest recorded there.
 
-[The lazy automaton](docs/dfa.md) answers whether a program matches, and where its match begins and ends, in a few instructions per character from states it builds on demand in a cache the host owns, for programs without backreferences, lookaround or properties of strings. The evaluator remains the only source of captures, and every differential harness compares the two.
+[The lazy automaton](docs/dfa.md) answers whether a program matches, and where its match begins and ends, in a few instructions per character from states it builds on demand in a cache the host owns, for programs without backreferences, lookaround or properties of strings. `dfa::captures` also reads every capture group off a transition's single path when the program is one-pass at the match, and declines to the evaluator otherwise; every differential harness compares the two.
 
 [Branches](docs/branch.md) lay alternation out flat and skip an alternative, and its backtracking frame, when the next character cannot begin it, by a first-character set re-derived from the instructions during validation.
 

@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|mode| !mode.is_empty());
     let mut cache: Vec<u32> = Vec::new();
     let mut cached_program: Vec<u32> = Vec::new();
-    let (mut eligible, mut answered) = (0usize, 0usize);
+    let (mut eligible, mut answered, mut captured) = (0usize, 0usize, 0usize);
     let mut out = io::BufWriter::new(io::stdout().lock());
     for line in io::stdin().lock().lines() {
         let line = line?;
@@ -286,7 +286,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Err(perex::executor::ExecError::WorkLimit) => true,
                 Err(_) => false,
             };
-            let agreed = tested_agrees && bounds_agree;
+            // The captures the automaton reads off one path, from the match's
+            // start, are the evaluator's: every group, or a decline.
+            let captures_agree = match bounds {
+                Ok(dfa::Found::Match(span)) if vm => {
+                    let mut read = vec![None; program.capture_count()];
+                    let mut budget = Budget::new(work);
+                    match dfa::captures(
+                        program,
+                        input,
+                        span.start(),
+                        &mut cache,
+                        &mut budget,
+                        &mut read,
+                    ) {
+                        Ok(dfa::Found::Match(found)) => {
+                            captured += 1;
+                            found == span && read == captures
+                        }
+                        Ok(dfa::Found::NoMatch) => false,
+                        Ok(dfa::Found::Declined(_)) => true,
+                        Err(perex::executor::ExecError::WorkLimit) => true,
+                        Err(_) => false,
+                    }
+                }
+                _ => true,
+            };
+            let agreed = tested_agrees && bounds_agree && captures_agree;
             if !agreed {
                 writeln!(
                     out,
@@ -338,7 +364,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if automaton.is_some() {
-        eprintln!("dfa: eligible {eligible} answered {answered}");
+        eprintln!("dfa: eligible {eligible} answered {answered} captured {captured}");
     }
     Ok(())
 }
