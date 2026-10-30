@@ -1082,6 +1082,32 @@ fn wtf8_steady<const SKIP: bool>(
     Some((last, i))
 }
 
+/// The plain steps of a capture walk over ASCII `bytes`, which end where the
+/// search's work allowance does: from `*i` in state `*s`, every transition
+/// that is known, records no capture effect and ends no match is taken. The
+/// first other entry stops the run and is returned with its column; `None`
+/// when `bytes` ran out first.
+#[inline(always)]
+fn plain_run(m: &[u32], bytes: &[u8], i: &mut usize, s: &mut u32) -> Option<(usize, u32)> {
+    let ascii = &m[ASCII..ASCII + 128];
+    let (mut at, mut state) = (*i, *s);
+    let stop = loop {
+        let Some(&byte) = bytes.get(at) else {
+            break None;
+        };
+        let column = ascii[usize::from(byte & 127)];
+        // Offsets stay below 2^30 and columns below 2^10.
+        let entry = m[(state + column) as usize];
+        if entry.wrapping_sub(2) >= TAG - 2 {
+            break Some((column as usize, entry));
+        }
+        state = entry;
+        at += 1;
+    };
+    (*i, *s) = (at, state);
+    stop
+}
+
 /// The scalar whose WTF-8 encoding begins with the non-ASCII byte at `i`, and
 /// its width in bytes. Validated storage holds a whole encoding there.
 #[inline(always)]
@@ -1925,22 +1951,14 @@ impl Dfa<'_, '_> {
         let mut last = None;
         let mut snapped = false;
         loop {
-            let (column, mut entry) = match bytes.get(i) {
-                Some(&byte) => {
-                    if i == limit {
-                        self.progress = base + (i - start);
-                        return Err(Stop::Error(ExecError::WorkLimit));
-                    }
-                    let column = self.m[ASCII + usize::from(byte & 127)] as usize;
-                    (column, self.m[s as usize + column])
+            let (column, mut entry) = match plain_run(self.m, &bytes[..limit], &mut i, &mut s) {
+                Some(stop) => stop,
+                None if i < bytes.len() => {
+                    self.progress = base + (i - start);
+                    return Err(Stop::Error(ExecError::WorkLimit));
                 }
                 None => (0, self.m[s as usize]),
             };
-            if entry.wrapping_sub(2) < TAG - 2 {
-                s = entry;
-                i += 1;
-                continue;
-            }
             if entry == UNKNOWN {
                 self.progress = base + (i - start);
                 entry = self.step_slow(&mut s, bytes.get(i).map(|&b| u32::from(b)))?;
