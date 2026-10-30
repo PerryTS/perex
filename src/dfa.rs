@@ -1999,15 +1999,23 @@ impl Dfa<'_, '_> {
         let mut last = None;
         let mut snapped = false;
         loop {
-            let (mut column, mut entry) =
-                match capture_run(self.m, &bytes[..limit], &mut i, &mut s, regs, w) {
+            // A transition not built yet goes to the slow step directly: a
+            // walk that is still building its states takes one per byte.
+            let peek = bytes[..limit].get(i).map(|&byte| {
+                let column = self.m[ASCII + usize::from(byte & 127)] as usize;
+                (column, self.m[s as usize + column])
+            });
+            let (mut column, mut entry) = match peek {
+                Some(unknown @ (_, UNKNOWN)) => unknown,
+                _ => match capture_run(self.m, &bytes[..limit], &mut i, &mut s, regs, w) {
                     Some(stop) => stop,
                     None if i < bytes.len() => {
                         self.progress = base + (i - start);
                         return Err(Stop::Error(ExecError::WorkLimit));
                     }
                     None => (0, self.m[s as usize]),
-                };
+                },
+            };
             if entry == UNKNOWN {
                 self.progress = base + (i - start);
                 entry = self.step_slow(&mut s, bytes.get(i).map(|&b| u32::from(b)))?;
