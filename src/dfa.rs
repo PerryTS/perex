@@ -183,6 +183,11 @@ const S_INJECT: u32 = 2;
 /// A capture-mode state: one thread, and a row of tag references after its
 /// threads. Such states intern apart from bounds states.
 const S_CAPTURE: u32 = 4;
+/// Where a capture-mode state's tag row begins, past its transitions: after
+/// the header, the thread count and the one thread. A capture transition that
+/// keeps no thread goes to `DEAD` and one that keeps two is `AMBIGUOUS`, so no
+/// capture state is interned with another count.
+const CAPTURE_TAGS: usize = 4;
 
 const MODE_UNANCHORED: usize = 0;
 const MODE_ANCHORED: usize = 1;
@@ -1082,6 +1087,84 @@ fn wtf8_steady<const SKIP: bool>(
     Some((last, i))
 }
 
+/// The steps of a capture walk over ASCII `bytes`, which end where the
+/// search's work allowance does: from `*i` in state `*s`, every known
+/// transition that ends no match and keeps the thread alive is taken, and the
+/// thread effects of its tag record are applied to the registers at `regs` as
+/// it is. The first other entry stops the run and is returned with its
+/// column; `None` when `bytes` ran out first. `w` is the mask width.
+#[inline(never)]
+fn capture_run(
+    m: &mut [u32],
+    bytes: &[u8],
+    i: &mut usize,
+    s: &mut u32,
+    regs: usize,
+    w: usize,
+) -> Option<(usize, u32)> {
+    let columns = m[H_COLUMNS] as usize;
+    let (mut at, mut state) = (*i, *s);
+    let stop = loop {
+        // The plain transitions read the storage only.
+        let (column, entry) = {
+            let m = &*m;
+            let ascii = &m[ASCII..ASCII + 128];
+            loop {
+                let Some(&byte) = bytes.get(at) else {
+                    break (0, None);
+                };
+                let column = ascii[usize::from(byte & 127)];
+                // Offsets stay below 2^30 and columns below 2^10.
+                let entry = m[(state + column) as usize];
+                if entry.wrapping_sub(2) >= TAG - 2 {
+                    break (column as usize, Some(entry));
+                }
+                state = entry;
+                at += 1;
+            }
+        };
+        let Some(entry) = entry else { break None };
+        let next = entry & (TAG - 1);
+        if entry & (FLAG | TAG) != TAG || next < 2 {
+            break Some((column, entry));
+        }
+        let row = state as usize + columns + CAPTURE_TAGS;
+        debug_assert_eq!(m[row - 3], 1);
+        apply_effects(m, m[row + column] as usize + 2, w, regs, at as u32);
+        state = next;
+        at += 1;
+    };
+    (*i, *s) = (at, state);
+    stop
+}
+
+/// Apply the mask pairs at `set` (`w` words of writes, then `w` of clears) to
+/// the registers at `to`, as written at `position`.
+#[inline(always)]
+fn apply_effects(m: &mut [u32], set: usize, w: usize, to: usize, position: u32) {
+    if w == 1 {
+        // Sixteen groups or fewer: one word of writes, one of clears.
+        let (sets, clears) = (m[set], m[set + 1]);
+        write_masked(m, to, sets, position);
+        write_masked(m, to, clears, NONE);
+        return;
+    }
+    for word in 0..w {
+        let (sets, clears) = (m[set + word], m[set + w + word]);
+        write_masked(m, to + word * 32, sets, position);
+        write_masked(m, to + word * 32, clears, NONE);
+    }
+}
+
+/// Write `value` to the registers at `to` that `mask` names.
+#[inline(always)]
+fn write_masked(m: &mut [u32], to: usize, mut mask: u32, value: u32) {
+    while mask != 0 {
+        m[to + mask.trailing_zeros() as usize] = value;
+        mask &= mask - 1;
+    }
+}
+
 /// The scalar whose WTF-8 encoding begins with the non-ASCII byte at `i`, and
 /// its width in bytes. Validated storage holds a whole encoding there.
 #[inline(always)]
@@ -1876,21 +1959,11 @@ impl Dfa<'_, '_> {
 
     /// Apply the thread effects (`matched` false) or the match effects of the
     /// tag record `tag` to the registers at `to`, as written at `position`.
+    /// `w` is the header's mask width, read once by the walk.
     #[inline(always)]
-    fn apply(&mut self, tag: usize, matched: bool, to: usize, position: u32) {
-        let w = self.h(H_MASK);
+    fn apply(&mut self, tag: usize, matched: bool, to: usize, position: u32, w: usize) {
         let set = tag + 2 + if matched { 2 * w } else { 0 };
-        for word in 0..w {
-            let (mut sets, mut clears) = (self.m[set + word], self.m[set + w + word]);
-            while sets != 0 {
-                self.m[to + word * 32 + sets.trailing_zeros() as usize] = position;
-                sets &= sets - 1;
-            }
-            while clears != 0 {
-                self.m[to + word * 32 + clears.trailing_zeros() as usize] = NONE;
-                clears &= clears - 1;
-            }
-        }
+        apply_effects(self.m, set, w, to, position);
     }
 
     /// The end of the match that begins at `start` over wholly ASCII storage,
@@ -1917,6 +1990,7 @@ impl Dfa<'_, '_> {
         let slots = 2 * count;
         let regs = self.h(H_REGS);
         let snap = regs + slots;
+        let w = self.h(H_MASK);
         self.m[regs..regs + slots].fill(NONE);
         let allowance = self.budget.remaining();
         let limit = bytes.len().min(start.saturating_add(allowance));
@@ -1925,35 +1999,35 @@ impl Dfa<'_, '_> {
         let mut last = None;
         let mut snapped = false;
         loop {
-            let (column, mut entry) = match bytes.get(i) {
-                Some(&byte) => {
-                    if i == limit {
+            // A transition not built yet goes to the slow step directly: a
+            // walk that is still building its states takes one per byte.
+            let peek = bytes[..limit].get(i).map(|&byte| {
+                let column = self.m[ASCII + usize::from(byte & 127)] as usize;
+                (column, self.m[s as usize + column])
+            });
+            let (mut column, mut entry) = match peek {
+                Some(unknown @ (_, UNKNOWN)) => unknown,
+                _ => match capture_run(self.m, &bytes[..limit], &mut i, &mut s, regs, w) {
+                    Some(stop) => stop,
+                    None if i < bytes.len() => {
                         self.progress = base + (i - start);
                         return Err(Stop::Error(ExecError::WorkLimit));
                     }
-                    let column = self.m[ASCII + usize::from(byte & 127)] as usize;
-                    (column, self.m[s as usize + column])
-                }
-                None => (0, self.m[s as usize]),
+                    None => (0, self.m[s as usize]),
+                },
             };
-            if entry.wrapping_sub(2) < TAG - 2 {
-                s = entry;
-                i += 1;
-                continue;
-            }
             if entry == UNKNOWN {
                 self.progress = base + (i - start);
                 entry = self.step_slow(&mut s, bytes.get(i).map(|&b| u32::from(b)))?;
+                // The step may have classified the byte.
+                if let Some(&byte) = bytes.get(i) {
+                    column = self.m[ASCII + usize::from(byte & 127)] as usize;
+                }
             }
             if entry == AMBIGUOUS {
                 self.m[H_NO_CAPTURES] = 1;
                 return Err(Stop::Declined(Decline::Captures));
             }
-            // The step may have classified the byte.
-            let column = match bytes.get(i) {
-                Some(&byte) => self.m[ASCII + usize::from(byte & 127)] as usize,
-                None => column,
-            };
             let next = entry & (TAG - 1);
             let tag = if entry & TAG != 0 {
                 let row = self.tag_row(s);
@@ -1966,19 +2040,19 @@ impl Dfa<'_, '_> {
                 last = Some(i);
                 if next == DEAD {
                     if tag != 0 {
-                        self.apply(tag, true, regs, position);
+                        self.apply(tag, true, regs, position, w);
                     }
                     snapped = false;
                     break;
                 }
                 self.m.copy_within(regs..regs + slots, snap);
-                self.apply(tag, true, snap, position);
+                self.apply(tag, true, snap, position, w);
                 snapped = true;
             } else if next == DEAD {
                 break;
             }
             if tag != 0 {
-                self.apply(tag, false, regs, position);
+                self.apply(tag, false, regs, position, w);
             }
             if bytes.get(i).is_none() {
                 break;
@@ -2756,9 +2830,9 @@ impl Dfa<'_, '_> {
     /// Where capture-mode state `s` keeps its row of tag references.
     #[inline(always)]
     fn tag_row(&self, s: u32) -> usize {
-        let columns = self.h(H_COLUMNS);
-        let at = s as usize + columns;
-        at + 2 + 2 * self.h(at + 1)
+        let at = s as usize + self.h(H_COLUMNS);
+        debug_assert_eq!(self.m[at + 1], 1);
+        at + CAPTURE_TAGS
     }
 
     /// The tag record for the effects the transition just computed recorded

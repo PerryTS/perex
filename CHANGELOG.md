@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.18 — 2026-10-30
+
+- Walk captures in fewer instructions: `dfa::captures` takes plain transitions in a loop of their own over the subject cut at the work limit (one comparison per byte, the column table borrowed once), and applies a thread's tag events inside that loop: a capture state holds one thread, so its tag row sits at a fixed offset, and a program of sixteen groups or fewer reads one word of writes and one of clears. On a seven-group line pattern over 64-byte lines the capture search costs about 36% fewer instructions.
+- No API, program-format or cache-layout change; answers, complete captures, work limits and declines are unchanged.
+
 ## 0.1.17 — 2026-10-29
 
 - Read capture groups off the lazy automaton: `dfa::captures` returns the match that begins at a position with every group when each transition on the way keeps one path alive, recording each transition's capture effects (writes, and the per-iteration reset of captures inside a repeat) as interned tag records in the cache. A transition that keeps two paths alive is marked ambiguous in the automaton's own state and the search is declined to the evaluator, as before.
