@@ -268,9 +268,13 @@ registers at that match and a later match replaces the snapshot.
 
 The registers are ordinary words of the cache. The steady loop is the bounds
 loop with one more way out of its single comparison: an entry from 2 up to
-`TAG` is a plain transition, anything else (a tag, a match, unknown, dead,
-ambiguous) is handled out of line. This slice answers wholly ASCII storage;
-other storage is declined.
+`TAG` is a plain transition. A tag on a transition that ends no match and
+keeps the thread is applied in the same loop: a capture state holds exactly
+one thread (a transition keeping none goes to `DEAD`, one keeping two is
+`AMBIGUOUS`), so its tag row sits at a fixed offset past its transitions, and
+a program of sixteen groups or fewer reads one word of writes and one of
+clears. Anything else (a match, unknown, dead, ambiguous) is handled out of
+line. This slice answers wholly ASCII storage; other storage is declined.
 
 ## Storage a program needs
 
