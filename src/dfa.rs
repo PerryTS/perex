@@ -2073,9 +2073,8 @@ impl Dfa<'_, '_> {
         let from = if snapped { snap } else { regs };
         // The registers are read as one slice of pairs: one range check for
         // the run, none per group.
-        let pairs = self.m[from..from + slots].chunks_exact(2);
-        for (target, pair) in out[..count].iter_mut().zip(pairs) {
-            let (lo, hi) = (pair[0], pair[1]);
+        let (pairs, _) = self.m[from..from + slots].as_chunks::<2>();
+        for (target, &[lo, hi]) in out[..count].iter_mut().zip(pairs) {
             *target = if lo == NONE || hi == NONE {
                 None
             } else {
