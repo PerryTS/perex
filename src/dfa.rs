@@ -1103,6 +1103,9 @@ fn capture_run(
     w: usize,
 ) -> Option<(usize, u32)> {
     let columns = m[H_COLUMNS] as usize;
+    // Every register a mask can name lies in `regs..regs + 32 * w`; checked
+    // once here, so the writes of a tagged step need no check of their own.
+    assert!(regs + 32 * w <= m.len());
     let (mut at, mut state) = (*i, *s);
     let stop = loop {
         // The plain transitions read the storage only.
@@ -1143,8 +1146,11 @@ fn capture_run(
 #[inline(always)]
 fn apply_effects(m: &mut [u32], set: usize, w: usize, to: usize, position: u32) {
     if w == 1 {
-        // Sixteen groups or fewer: one word of writes, one of clears.
-        let (sets, clears) = (m[set], m[set + 1]);
+        // Sixteen groups or fewer: one word of writes, one of clears, read
+        // as one pair.
+        let [sets, clears] = *m[set..]
+            .first_chunk::<2>()
+            .expect("a tag record holds its mask pair");
         write_masked(m, to, sets, position);
         write_masked(m, to, clears, NONE);
         return;
@@ -1160,7 +1166,8 @@ fn apply_effects(m: &mut [u32], set: usize, w: usize, to: usize, position: u32) 
 #[inline(always)]
 fn write_masked(m: &mut [u32], to: usize, mut mask: u32, value: u32) {
     while mask != 0 {
-        m[to + mask.trailing_zeros() as usize] = value;
+        // A nonzero mask's lowest set bit is below 32.
+        m[to + (mask.trailing_zeros() as usize & 31)] = value;
         mask &= mask - 1;
     }
 }
@@ -2064,8 +2071,10 @@ impl Dfa<'_, '_> {
         self.charge(i - start)?;
         let Some(end) = last else { return Ok(None) };
         let from = if snapped { snap } else { regs };
-        for (k, target) in out[..count].iter_mut().enumerate() {
-            let (lo, hi) = (self.m[from + 2 * k], self.m[from + 2 * k + 1]);
+        // The registers are read as one slice of pairs: one range check for
+        // the run, none per group.
+        let (pairs, _) = self.m[from..from + slots].as_chunks::<2>();
+        for (target, &[lo, hi]) in out[..count].iter_mut().zip(pairs) {
             *target = if lo == NONE || hi == NONE {
                 None
             } else {
