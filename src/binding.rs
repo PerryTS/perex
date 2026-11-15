@@ -213,18 +213,11 @@ impl<S: ImmutableSubject> BoundSubject<S> {
 }
 
 /// Whether `words` begins with `header`. Every view checks this, so it is
-/// written as one pass of word differences rather than a call to a general
-/// slice comparison: the header is fixed-size and nearly always equal.
+/// one comparison of two fixed-size arrays (a few wide loads), not a word
+/// loop: the header is fixed-size and nearly always equal.
 #[inline(always)]
 fn same_header(words: &[u32], header: &[u32; crate::program::HEADER]) -> bool {
-    words.len() >= header.len()
-        && words[..header.len()]
-            .iter()
-            .zip(header)
-            .fold(0, |difference, (word, expected)| {
-                difference | (word ^ expected)
-            })
-            == 0
+    words.first_chunk::<{ crate::program::HEADER }>() == Some(header)
 }
 
 /// What validating a program established, as plain data: its length and

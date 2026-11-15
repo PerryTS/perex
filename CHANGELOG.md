@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.19 — 2026-11-15
+
+- Fewer checks per capture search: `dfa::captures` checks once per walk that every register a mask can name lies inside the cache, so a tagged step writes its registers without a check per write, reads its mask pair as one pair, and copies the groups out as one slice of register pairs. A bound view compares its 11-word program header as one fixed-size array. On a seven-group line pattern over 64-byte lines a host's whole exec costs about 0.6% fewer instructions.
+- No API, program-format or cache-layout change; answers, complete captures, work limits and declines are unchanged (checked against 0.1.18 on 105,319 random cases over 22 patterns).
+
 ## 0.1.18 — 2026-10-30
 
 - Walk captures in fewer instructions: `dfa::captures` takes plain transitions in a loop of their own over the subject cut at the work limit (one comparison per byte, the column table borrowed once), and applies a thread's tag events inside that loop: a capture state holds one thread, so its tag row sits at a fixed offset, and a program of sixteen groups or fewer reads one word of writes and one of clears. On a seven-group line pattern over 64-byte lines the capture search costs about 36% fewer instructions.
