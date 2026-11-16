@@ -7,10 +7,13 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      HAS_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install stable Rust
@@ -23,9 +26,15 @@ jobs:
             exit 1
           fi
       - run: cargo +stable test --locked
+      # crates.io trusted publishing: a short-lived token for this workflow run.
+      # A CARGO_REGISTRY_TOKEN repository secret, if set, is used instead.
+      - name: Request a crates.io token
+        id: auth
+        if: ${{ env.HAS_REGISTRY_TOKEN != 'true' }}
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
       - run: cargo +stable publish --locked
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
       - name: Create the GitHub release
         run: gh release create "$GITHUB_REF_NAME" --generate-notes
         env:
