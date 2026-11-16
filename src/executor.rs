@@ -1348,6 +1348,117 @@ impl Vm<'_, '_, '_, '_> {
     // Ordinary opcodes stay in one dispatch loop. A long sub-operation, pause,
     // failure or capacity request returns to the outer resumable phase loop.
     // This is the same instruction implementation for both entry points.
+    /// Take the newest frame and resume from it: its position, direction,
+    /// assertion and instruction, and what follows once the undo log is back
+    /// to the length it had when the frame was pushed.
+    #[inline(always)]
+    fn pop_frame(&mut self) -> Result<(usize, AfterRollback), ExecError> {
+        self.state.frames -= 1;
+        let frame = self.scratch.frames[self.state.frames];
+        self.restore(frame.position);
+        self.state.reverse = frame.reverse;
+        self.state.assertion = frame.assertion;
+        self.state.pc = frame.pc as usize;
+        let after = match frame.kind {
+            0 | 2 => AfterRollback::Trial,
+            1 => AfterRollback::Fail,
+            3 | 4 => {
+                self.state.work = Work::Atom(AtomState {
+                    minimum_end: if frame.kind == 3 { frame.limit } else { 0 },
+                    needed: 0,
+                    remaining: if frame.kind == 4 {
+                        u32::try_from(frame.limit).map_err(|_| ExecError::InvalidProgram)?
+                    } else {
+                        0
+                    },
+                    before: frame.position,
+                });
+                if frame.kind == 3 {
+                    AfterRollback::AtomRetreat
+                } else {
+                    AfterRollback::AtomExtend
+                }
+            }
+            5 => AfterRollback::Sequence(
+                u32::try_from(frame.limit).map_err(|_| ExecError::InvalidProgram)?,
+            ),
+            _ => return Err(ExecError::InvalidProgram),
+        };
+        Ok((frame.undo, after))
+    }
+    /// Backtrack inside a trial: what the `Fail` and `Rollback` phases do in
+    /// the dispatcher, with the same charges, done here only when no pause
+    /// could fall between them (the dispatcher re-reads the quantum before
+    /// each phase) and the frame resumes a trial, fails again, or resumes a
+    /// character repetition. Otherwise the phase is left to the dispatcher.
+    /// Returns whether the trial goes on.
+    #[inline(always)]
+    fn backtrack<const PAUSABLE: bool>(
+        &mut self,
+        initial: usize,
+        quantum: usize,
+        quantum_end: usize,
+    ) -> Result<bool, ExecError> {
+        loop {
+            if self.state.frames == 0 {
+                return Ok(false);
+            }
+            let frame = self.scratch.frames[self.state.frames - 1];
+            if !matches!(frame.kind, 0..=4) {
+                return Ok(false);
+            }
+            let count = self.state.undo.wrapping_sub(frame.undo);
+            if count > self.state.undo {
+                return Ok(false);
+            }
+            let remaining = self.budget.remaining();
+            if remaining <= count {
+                return Ok(false);
+            }
+            if PAUSABLE && (remaining - 1 <= quantum_end || remaining - 1 - quantum_end < count) {
+                return Ok(false);
+            }
+            self.charge(1 + count)?;
+            let (until, after) = self.pop_frame()?;
+            for _ in 0..count {
+                self.state.undo -= 1;
+                let old = self.scratch.undo[self.state.undo];
+                self.scratch.registers[old.slot] = old.value;
+            }
+            if self.state.undo != until {
+                return Err(ExecError::InvalidProgram);
+            }
+            if self.state.frames == 0 {
+                self.state.undo = 0;
+            }
+            match after {
+                AfterRollback::Trial => {
+                    self.state.phase = Phase::Trial;
+                    return Ok(true);
+                }
+                AfterRollback::Fail => {
+                    self.state.phase = Phase::Fail;
+                    if PAUSABLE && self.budget.remaining() <= quantum_end {
+                        return Ok(false);
+                    }
+                }
+                AfterRollback::AtomRetreat | AfterRollback::AtomExtend => {
+                    self.state.phase = if matches!(after, AfterRollback::AtomRetreat) {
+                        Phase::AtomRetreat
+                    } else {
+                        Phase::AtomExtend
+                    };
+                    self.atom_chain::<PAUSABLE>(initial, quantum)?;
+                    match self.state.phase {
+                        Phase::Trial => return Ok(true),
+                        Phase::Fail if !PAUSABLE || self.budget.remaining() > quantum_end => {}
+                        _ => return Ok(false),
+                    }
+                }
+                _ => return Err(ExecError::InvalidProgram),
+            }
+        }
+    }
     fn trial<const PAUSABLE: bool>(&mut self, quantum: usize) -> Result<(), ExecError> {
         let initial = self.budget.remaining();
         // A quantum larger than all remaining work cannot be reached before
@@ -1388,7 +1499,12 @@ impl Vm<'_, '_, '_, '_> {
             match step {
                 Ok(Step::Next) => {}
                 Ok(Step::Fail) => {
-                    self.state.phase = Phase::Fail;
+                    if self.backtrack::<PAUSABLE>(initial, quantum, quantum_end)? {
+                        continue;
+                    }
+                    if matches!(self.state.phase, Phase::Trial) {
+                        self.state.phase = Phase::Fail;
+                    }
                     return Ok(());
                 }
                 Ok(Step::Phase) => {
@@ -1660,43 +1776,8 @@ impl Vm<'_, '_, '_, '_> {
                         self.state.phase = Phase::NextStart;
                     } else {
                         self.charge(1)?;
-                        self.state.frames -= 1;
-                        let frame = self.scratch.frames[self.state.frames];
-                        self.restore(frame.position);
-                        self.state.reverse = frame.reverse;
-                        self.state.assertion = frame.assertion;
-                        self.state.pc = frame.pc as usize;
-                        let after = match frame.kind {
-                            0 | 2 => AfterRollback::Trial,
-                            1 => AfterRollback::Fail,
-                            3 | 4 => {
-                                self.state.work = Work::Atom(AtomState {
-                                    minimum_end: if frame.kind == 3 { frame.limit } else { 0 },
-                                    needed: 0,
-                                    remaining: if frame.kind == 4 {
-                                        u32::try_from(frame.limit)
-                                            .map_err(|_| ExecError::InvalidProgram)?
-                                    } else {
-                                        0
-                                    },
-                                    before: frame.position,
-                                });
-                                if frame.kind == 3 {
-                                    AfterRollback::AtomRetreat
-                                } else {
-                                    AfterRollback::AtomExtend
-                                }
-                            }
-                            5 => AfterRollback::Sequence(
-                                u32::try_from(frame.limit)
-                                    .map_err(|_| ExecError::InvalidProgram)?,
-                            ),
-                            _ => return Err(ExecError::InvalidProgram),
-                        };
-                        self.state.phase = Phase::Rollback {
-                            until: frame.undo,
-                            after,
-                        };
+                        let (until, after) = self.pop_frame()?;
+                        self.state.phase = Phase::Rollback { until, after };
                     }
                 }
                 Phase::Rollback { until, after } => {
@@ -2055,7 +2136,24 @@ impl Vm<'_, '_, '_, '_> {
             REPEAT_BODY => {
                 let r = self.repeat_record(a as usize);
                 let slot = self.program.capture_count() * 2 + a as usize * 2 + 1;
+                let (next, end) = (r[5] as usize * 2, r[6] as usize * 2);
+                let count = end.wrapping_sub(next);
                 if r[5] == r[6] {
+                    self.store(slot, self.cursor.position())?;
+                } else if end > next
+                    && end <= self.scratch.registers.len()
+                    && remaining > count
+                    && (!PAUSABLE || available() > count)
+                    && self.state.undo + count < self.scratch.undo.len()
+                {
+                    // What the `Clear` phase does, one charge per register,
+                    // here when no pause can fall between its steps and the
+                    // undo log has room for every write, so no step can stop
+                    // for capacity either.
+                    self.charge(count)?;
+                    for register in next..end {
+                        self.store(register, UNSET)?;
+                    }
                     self.store(slot, self.cursor.position())?;
                 } else {
                     self.state.phase = Phase::Clear {
