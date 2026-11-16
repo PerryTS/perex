@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.20 — 2026-11-16
+
+- Backtrack inside a trial without returning to the outer phase loop: the executor pops a frame and runs the Fail, Rollback and Clear phases in place when no pause or capacity request can fall between them, with the same charges. On the three.js track-name parse the engine-only instruction count fell from 21.8x node to 18x node.
+- No API, program-format or cache-layout change; answers, complete captures, work limits and declines are unchanged.
+
 ## 0.1.19 — 2026-11-15
 
 - Fewer checks per capture search: `dfa::captures` checks once per walk that every register a mask can name lies inside the cache, so a tagged step writes its registers without a check per write, reads its mask pair as one pair, and copies the groups out as one slice of register pairs. A bound view compares its 11-word program header as one fixed-size array. On a seven-group line pattern over 64-byte lines a host's whole exec costs about 0.6% fewer instructions.
