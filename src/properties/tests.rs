@@ -166,8 +166,7 @@ fn unicode_membership_is_resolved_only_on_cold_paths() {
         #[cfg(feature = "selectable-unicode")]
         assert_eq!(resolved, before + 2);
         let witness = bound.witness();
-        let relocated = moved.clone();
-        drop(bound);
+        let relocated = bound.into_storage().to_vec();
         let rebound = BoundProgram::new_witnessed(relocated.as_slice(), witness).unwrap();
         assert_eq!(rebound.witness(), witness);
         for _ in 0..4 {
