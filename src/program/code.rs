@@ -2,6 +2,7 @@
 //! outside it so static DFA instantiations carry only the instructions they read.
 use super::*;
 
+#[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Code<'a> {
     pub(crate) words: &'a [u32],

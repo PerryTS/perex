@@ -510,7 +510,7 @@ fn is_match_with<P: Provider>(
     budget: &mut Budget,
 ) -> Result<Tested, ExecError> {
     Ok(
-        match search::<P>(program, input, start_utf16, cache, budget, false)? {
+        match search::<P, false>(program, input, start_utf16, cache, budget)? {
             Outcome::Declined(why) => Tested::Declined(why),
             Outcome::NoMatch => Tested::NoMatch,
             Outcome::Matched(_) => Tested::Match,
@@ -547,7 +547,7 @@ fn find_with<P: Provider>(
     budget: &mut Budget,
 ) -> Result<Found, ExecError> {
     Ok(
-        match search::<P>(program, input, start_utf16, cache, budget, true)? {
+        match search::<P, true>(program, input, start_utf16, cache, budget)? {
             Outcome::Declined(why) => Found::Declined(why),
             Outcome::NoMatch => Found::NoMatch,
             Outcome::Matched(span) => Found::Match(span.ok_or(ExecError::InvalidProgram)?),
@@ -684,24 +684,23 @@ impl From<ExecError> for Stop {
 }
 
 #[inline(always)]
-fn search<P: Provider>(
+fn search<P: Provider, const BOUNDS: bool>(
     program: Code<'_>,
     input: Input<'_>,
     start_utf16: usize,
     cache: &mut [u32],
     budget: &mut Budget,
-    bounds: bool,
 ) -> Result<Outcome, ExecError> {
     if let Some(prefix) = program.literal_prefix() {
         return Ok(match prefix.find(input, start_utf16, budget)? {
-            Some(span) => Outcome::Matched(bounds.then_some(span)),
+            Some(span) => Outcome::Matched(BOUNDS.then_some(span)),
             None => Outcome::NoMatch,
         });
     }
     // A validated program holds its whole header; reading it as one array
     // checks that once.
     let Some(words) = program.words.first_chunk::<HEADER>() else {
-        return general::<P>(program, input, start_utf16, cache, budget, bounds);
+        return general::<P, BOUNDS>(program, input, start_utf16, cache, budget);
     };
     let anchored = words[2] & Y != 0 || words[7] & ANCHORED != 0;
     if words[7] & DFA != 0
@@ -714,13 +713,13 @@ fn search<P: Provider>(
             start_utf16,
             cache,
             budget,
-            !bounds,
+            !BOUNDS,
             anchored,
         )
     {
         return match end {
             None => Ok(Outcome::NoMatch),
-            Some(_) if !bounds => Ok(Outcome::Matched(None)),
+            Some(_) if !BOUNDS => Ok(Outcome::Matched(None)),
             Some(end) if anchored => Ok(Outcome::Matched(Span::new(start_utf16, end))),
             // The steady path starts where it was asked to: ASCII storage
             // needs no Unicode adjustment, and other storage starts at zero.
@@ -730,7 +729,7 @@ fn search<P: Provider>(
             },
         };
     }
-    general::<P>(program, input, start_utf16, cache, budget, bounds)
+    general::<P, BOUNDS>(program, input, start_utf16, cache, budget)
 }
 
 /// The reverse pass over wholly ASCII storage when every transition it takes
@@ -815,13 +814,12 @@ fn reverse_only<P: Provider>(
 /// Everything [`search`]'s steady path leaves: building the cache, states
 /// and classes not yet cached, other storage, and the reverse pass.
 #[inline(never)]
-fn general<P: Provider>(
+fn general<P: Provider, const BOUNDS: bool>(
     program: Code<'_>,
     input: Input<'_>,
     start_utf16: usize,
     cache: &mut [u32],
     budget: &mut Budget,
-    bounds: bool,
 ) -> Result<Outcome, ExecError> {
     if !eligible_code(program) {
         return Ok(Outcome::Declined(Decline::Ineligible));
@@ -856,7 +854,7 @@ fn general<P: Provider>(
         flushed: 0,
         unicode: program.unicode(),
     };
-    let result = dfa.run(input, start_utf16, bounds);
+    let result = dfa.run(input, start_utf16, BOUNDS);
     dfa.flush_units();
     *budget = dfa.budget;
     match result {

@@ -14,8 +14,8 @@ mod state;
 use state::*;
 const UNSET: usize = usize::MAX;
 
-fn equal(program: VmProgram<'_>, left: u32, right: u32, fold: bool) -> bool {
-    left == right || (fold && casefold::equal(left, right, program.unicode()))
+fn equal(unicode: bool, left: u32, right: u32, fold: bool) -> bool {
+    left == right || (fold && casefold::equal(left, right, unicode))
 }
 fn line_terminator(c: u32) -> bool {
     matches!(c, 10 | 13 | 0x2028 | 0x2029)
@@ -370,6 +370,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
                 return Ok(Progress::Pending);
             }
             let mut vm = Vm {
+                unicode: program.unicode(),
                 program: VmProgram::new(program),
                 sections: program.sections(),
                 input,
@@ -580,6 +581,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
                     return Err(ExecError::ChangedResources);
                 }
                 let mut vm = Vm {
+                    unicode: program.unicode(),
                     program: VmProgram::new(program),
                     sections: program.sections(),
                     input,
@@ -740,10 +742,11 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
 
 // Keep only the VM query with its words. DFA dispatch metadata belongs to the
 // compiled capability, outside the evaluator's active frame.
+#[cfg_attr(feature = "selectable-unicode", repr(C))]
 #[derive(Clone, Copy)]
 struct VmProgram<'a> {
-    membership: crate::properties::Query,
     code: Code<'a>,
+    membership: crate::properties::Query,
 }
 impl<'a> VmProgram<'a> {
     #[inline]
@@ -764,6 +767,8 @@ impl<'a> core::ops::Deref for VmProgram<'a> {
 
 struct Vm<'a, 'p, 's, 'w> {
     program: VmProgram<'p>,
+    // The validated header is immutable throughout this evaluator borrow.
+    unicode: bool,
     sections: ProgramSections<'p>,
     input: Input<'a>,
     cursor: Cursor<'a>,
@@ -855,7 +860,7 @@ impl Vm<'_, '_, '_, '_> {
         Ok(())
     }
     fn read(&mut self) -> Option<u32> {
-        read(&mut self.cursor, self.program.unicode(), self.state.reverse)
+        read(&mut self.cursor, self.unicode, self.state.reverse)
     }
     #[inline]
     fn restore(&mut self, mark: Mark) {
@@ -908,7 +913,7 @@ impl Vm<'_, '_, '_, '_> {
     fn sought(&mut self, after: AfterSeek) -> Result<(), ExecError> {
         match after {
             AfterSeek::Start => {
-                if self.program.unicode() {
+                if self.unicode {
                     self.cursor.normalize_unicode_start();
                 }
                 self.state.start = self.cursor.mark();
@@ -961,7 +966,7 @@ impl Vm<'_, '_, '_, '_> {
     }
     fn begin_class(&mut self, a: u32, b: u32, c: u32, context: ClassUse, fold: bool, sorted: bool) {
         let values = if fold {
-            casefold::equivalents(c, self.program.unicode())
+            casefold::equivalents(c, self.unicode)
         } else {
             [c; 4]
         };
@@ -1124,7 +1129,7 @@ impl Vm<'_, '_, '_, '_> {
     /// when it is and where it was when it is not.
     fn sequence_matches(&mut self, member: &[u32], start: Mark, fold: bool) -> bool {
         self.restore(start);
-        let (unicode, reverse) = (self.program.unicode(), self.state.reverse);
+        let (unicode, reverse) = (self.unicode, self.state.reverse);
         for i in 0..member.len() {
             let expected = member[if reverse { member.len() - 1 - i } else { i }];
             let found = read(&mut self.cursor, unicode, reverse);
@@ -1752,14 +1757,14 @@ impl Vm<'_, '_, '_, '_> {
                         self.state.phase = Phase::Trial;
                     } else {
                         self.charge(1)?;
-                        let point = read(&mut left, self.program.unicode(), self.state.reverse)
+                        let point = read(&mut left, self.unicode, self.state.reverse)
                             .ok_or(ExecError::InvalidProgram)?;
                         if left.position() < start || left.position() > end {
                             return Err(ExecError::InvalidProgram);
                         }
                         if self
                             .read()
-                            .is_some_and(|right| equal(self.program, point, right, fold))
+                            .is_some_and(|right| equal(self.unicode, point, right, fold))
                         {
                             self.state.phase = Phase::Backref {
                                 start,
@@ -1889,7 +1894,7 @@ impl Vm<'_, '_, '_, '_> {
                                 target: run_end,
                                 after: AfterSeek::Start,
                             };
-                        } else if read(&mut self.cursor, self.program.unicode(), false).is_none() {
+                        } else if read(&mut self.cursor, self.unicode, false).is_none() {
                             self.state.phase = Phase::Finished(false);
                         } else {
                             self.state.start = self.cursor.mark();
@@ -1960,7 +1965,7 @@ impl Vm<'_, '_, '_, '_> {
             CHAR | CHAR_I => {
                 success = self
                     .read()
-                    .is_some_and(|c| equal(self.program, c, a, op == CHAR_I))
+                    .is_some_and(|c| equal(self.unicode, c, a, op == CHAR_I))
             }
             ANY | ANY_S => {
                 success = self
@@ -2015,7 +2020,7 @@ impl Vm<'_, '_, '_, '_> {
                 // here against the same character, and charged as executing
                 // it would be, so a chain of alternatives costs one read.
                 let mut ahead = self.cursor;
-                let bucket = read(&mut ahead, self.program.unicode(), self.state.reverse)
+                let bucket = read(&mut ahead, self.unicode, self.state.reverse)
                     .map_or(0, |c| 1 << first_bucket(c));
                 // The chain stays within the quantum the next instruction
                 // would have been given; past it, the trial loop takes the
@@ -2054,9 +2059,9 @@ impl Vm<'_, '_, '_, '_> {
             WORD | WORD_I => {
                 let mut before = self.cursor;
                 let mut after = self.cursor;
-                let ui = op == WORD_I && self.program.unicode();
-                let left = read(&mut before, self.program.unicode(), true);
-                let right = read(&mut after, self.program.unicode(), false);
+                let ui = op == WORD_I && self.unicode;
+                let left = read(&mut before, self.unicode, true);
+                let right = read(&mut after, self.unicode, false);
                 success = (left.is_some_and(|c| casefold::word(c, ui))
                     != right.is_some_and(|c| casefold::word(c, ui)))
                     != (a != 0);
@@ -2275,6 +2280,7 @@ fn find_program(
     // single borrow. Search uses this identical VM across multiple borrows.
     let mut state = State::new(start_utf16, input.len_utf16());
     let mut vm = Vm {
+        unicode: program.unicode(),
         program,
         sections: program.sections(),
         input,
@@ -2328,6 +2334,7 @@ fn is_match_program(
     let mut state = State::new(start_utf16, input.len_utf16());
     state.boolean = true;
     let mut vm = Vm {
+        unicode: program.unicode(),
         program,
         sections: program.sections(),
         input,

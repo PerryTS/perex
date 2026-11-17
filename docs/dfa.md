@@ -433,3 +433,8 @@ The DFA core borrows a provider-independent validated word view. Its monomorphiz
 state carries no VM query or dispatch table. The VM separately retains only its
 cached membership query, so neither executor copies the other engine’s capability
 through its character loop. Both read the same program format and reader methods.
+
+The operation fixes whether it needs bounds as a const parameter of the same
+search implementation. The VM caches Unicode mode for one immutable program
+borrow; character reads and case folding reuse that mode. The validated view
+keeps words and the VM query contiguous, with DFA entry functions after them.

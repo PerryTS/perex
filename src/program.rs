@@ -622,10 +622,13 @@ pub(crate) struct ProgramSections<'a> {
 /// borrow or separate owning allocation. With selectable Unicode, this view
 /// also retains an immutable native function resolved during validation.
 /// Release the view before moving storage; validate again or reuse a binding witness.
+// Words and the VM query form a contiguous prefix, so a VM borrow does not
+// gather its inputs around the DFA entries.
+#[cfg_attr(feature = "selectable-unicode", repr(C))]
 #[derive(Clone, Copy, Debug)]
 pub struct Program<'a> {
-    pub(crate) membership: properties::Membership,
     pub(crate) words: &'a [u32],
+    pub(crate) membership: properties::Membership,
 }
 
 impl<'a> Program<'a> {

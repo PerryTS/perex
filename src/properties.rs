@@ -112,7 +112,7 @@ pub(crate) struct Unicode;
 impl Provider for Unicode {
     #[inline(always)]
     fn contains(id: u32, point: u32) -> bool {
-        contains_data(id, point)
+        contains_inline(id, point)
     }
 }
 
@@ -193,10 +193,16 @@ pub(crate) fn ascii(id: u32) -> u128 {
         | (u128::from(row[5]) << 96)
 }
 
+// The VM keeps an ordinary function entry. Only the statically selected DFA
+// expands the query into its character-class builder.
+fn contains_data(id: u32, c: u32) -> bool {
+    contains_inline(id, c)
+}
+
 /// ASCII stays in the small descriptor table; non-ASCII membership uses a
 /// category mask or binary search over shared, disjoint interval boundaries.
 #[inline(always)]
-fn contains_data(id: u32, c: u32) -> bool {
+fn contains_inline(id: u32, c: u32) -> bool {
     let row = data::PROPERTIES[id as usize];
     if c < 128 {
         return row[2 + c as usize / 32] & (1 << (c % 32)) != 0;
