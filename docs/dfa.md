@@ -412,3 +412,19 @@ storage, the most in use was 10,635–11,576 words for the small patterns and
 33,220 for the emoji pattern. Most of it is the work area and tables sized
 from the storage and the program; the states themselves were one to thirteen.
 
+
+## Selectable Unicode providers
+
+With `selectable-unicode`, the program's cold compiler/validator selects the
+entry points of the DFA instantiated with its Unicode provider. The matcher
+and character-class builder share one generic implementation. A zero-sized
+provider makes each membership call statically known and inlineable. The
+property-free instantiation references no membership tables; the Unicode
+instantiation is reachable through the explicit installer. The layout builder
+and provider-independent scans remain shared.
+
+The program and its binding witness cache the selected entry points, so a DFA
+operation dispatches once before its loops. Neither a membership query nor a
+resumed view reads the installation slot. Program words and cache words still
+hold offsets and IDs, never native pointers. Feature-off builds call the Unicode
+instantiation directly.

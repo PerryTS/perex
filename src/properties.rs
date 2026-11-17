@@ -3,7 +3,7 @@
 mod data;
 
 #[cfg(feature = "selectable-unicode")]
-static MEMBERSHIP: std::sync::OnceLock<fn(u32, u32) -> bool> = std::sync::OnceLock::new();
+static MEMBERSHIP: std::sync::OnceLock<Membership> = std::sync::OnceLock::new();
 
 /// Install the immutable Unicode membership provider before compiling or
 /// validating programs that need properties or non-ASCII capture names.
@@ -11,7 +11,8 @@ static MEMBERSHIP: std::sync::OnceLock<fn(u32, u32) -> bool> = std::sync::OnceLo
 /// Installation is idempotent and safe across threads. The opt-in
 /// `selectable-unicode` feature requires std; an absent provider panics on the
 /// cold compile/validation path. Validated programs retain the resolved native
-/// function, so matching and resumed borrows never read the installation slot.
+/// membership function and DFA entries, so matching and resumed borrows never
+/// read the installation slot.
 /// Without this feature the engine remains no_std and calls the database
 /// directly; installation is a no-op.
 ///
@@ -21,16 +22,21 @@ static MEMBERSHIP: std::sync::OnceLock<fn(u32, u32) -> bool> = std::sync::OnceLo
 /// case-fold data and properties of strings are independent.
 pub fn install_unicode_properties() {
     #[cfg(feature = "selectable-unicode")]
-    let _ = MEMBERSHIP.set(contains_data);
+    let _ = MEMBERSHIP.set(Membership {
+        query: Query(contains_data),
+        dfa: &crate::dfa::UNICODE_DISPATCH,
+    });
 }
 
 /// A process-local capability, never part of relocatable program words.
 /// The default configuration is zero-sized and retains direct dispatch.
-#[cfg_attr(feature = "selectable-unicode", repr(transparent))]
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Membership {
     #[cfg(feature = "selectable-unicode")]
     query: Query,
+    #[cfg(feature = "selectable-unicode")]
+    pub(crate) dfa: &'static crate::dfa::Dispatch,
 }
 
 #[cfg(feature = "selectable-unicode")]
@@ -51,7 +57,7 @@ impl PartialEq for Membership {
     fn eq(&self, other: &Self) -> bool {
         #[cfg(feature = "selectable-unicode")]
         {
-            core::ptr::fn_addr_eq(self.query.0, other.query.0)
+            core::ptr::fn_addr_eq(self.query.0, other.query.0) && core::ptr::eq(self.dfa, other.dfa)
         }
         #[cfg(not(feature = "selectable-unicode"))]
         {
@@ -74,6 +80,30 @@ impl Membership {
     }
 }
 
+/// A DFA instantiation fixes membership at compile time; dispatch is outside
+/// its character and state-building loops.
+pub(crate) trait Provider {
+    fn contains(id: u32, point: u32) -> bool;
+}
+
+pub(crate) struct Unicode;
+impl Provider for Unicode {
+    #[inline(always)]
+    fn contains(id: u32, point: u32) -> bool {
+        contains_data(id, point)
+    }
+}
+
+#[cfg(feature = "selectable-unicode")]
+pub(crate) struct PropertyFree;
+#[cfg(feature = "selectable-unicode")]
+impl Provider for PropertyFree {
+    #[inline(always)]
+    fn contains(_: u32, _: u32) -> bool {
+        unreachable!("validated property-free program queried membership")
+    }
+}
+
 /// Compilation/validation alone may discover a first property. Once resolved,
 /// the same capability travels through preparation, emission and validation.
 #[derive(Clone, Copy, Debug, Default)]
@@ -89,13 +119,9 @@ impl Resolver {
             *self.membership.get_or_insert_with(|| {
                 #[cfg(test)]
                 SLOT_READS.with(|reads| reads.set(reads.get() + 1));
-                Membership {
-                    query: Query(
-                        *MEMBERSHIP
-                            .get()
-                            .expect("Unicode properties must be installed by the host"),
-                    ),
-                }
+                *MEMBERSHIP
+                    .get()
+                    .expect("Unicode properties must be installed by the host")
             })
         }
         #[cfg(not(feature = "selectable-unicode"))]

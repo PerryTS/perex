@@ -57,6 +57,27 @@ fn answers(program: Program<'_>, subject: &str, expected: &[Option<Span>]) {
                     dfa::find(program, input, 0, &mut cache, &mut Budget::new(1_000_000)).unwrap(),
                     Found::Match(expected[0].unwrap())
                 );
+                assert_eq!(
+                    dfa::is_match(program, input, 0, &mut cache, &mut Budget::new(1_000_000))
+                        .unwrap(),
+                    dfa::Tested::Match,
+                );
+                if subject.is_ascii() && size == 65536 {
+                    let mut actual = vec![None; program.capture_count()];
+                    assert_eq!(
+                        dfa::captures(
+                            program,
+                            input,
+                            expected[0].unwrap().start(),
+                            &mut cache,
+                            &mut Budget::new(1_000_000),
+                            &mut actual,
+                        )
+                        .unwrap(),
+                        Found::Match(expected[0].unwrap()),
+                    );
+                    assert_eq!(actual, expected);
+                }
             }
         }
     }
@@ -119,6 +140,12 @@ fn unicode_membership_is_resolved_only_on_cold_paths() {
             r"(\p{L}+)",
             "gu",
             "12 αβ!A",
+            &[Span::new(3, 5), Span::new(3, 5)],
+        ),
+        (
+            r"(\p{L}+)",
+            "gu",
+            "12 Ab!A",
             &[Span::new(3, 5), Span::new(3, 5)],
         ),
         (r"[\p{Script=Greek}\p{Nd}]", "u", "!?Δ9", &[Span::new(2, 3)]),

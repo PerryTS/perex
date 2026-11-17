@@ -206,9 +206,13 @@ path, before a program needing membership can be published.
 
 Compilation and validation resolve the provider once, on the first property or
 non-ASCII identifier query. The validated `Program` view and `ProgramWitness`
-retain the native function pointer. Evaluator, atom and DFA membership calls
-invoke it directly, without reading the installation slot or checking whether
-it is filled. Rebinding a witnessed program, relocation and resumed searches
+retain the native membership function and the selected DFA entry points.
+Evaluator and atom membership calls invoke the cached function. The DFA is one
+implementation generic over a zero-sized provider: Unicode membership calls
+inline into its character-class builder, while property-free programs select
+an instantiation with no database reference. A search calls its cached entry
+once; its character loops use static dispatch. Neither executor reads the
+installation slot or checks whether it is filled. Rebinding a witnessed program, relocation and resumed searches
 reuse the same capability. Property-free patterns never read the slot.
 
 Program words remain relocation-safe property IDs: no native pointer is stored

@@ -16,6 +16,7 @@ use crate::{
     },
     input::{Cursor, Input},
     program::*,
+    properties::Provider,
     span::Span,
 };
 
@@ -378,11 +379,54 @@ pub fn captures_declined(cache: &[u32]) -> bool {
     cache.len() >= FRONT && cache[H_MAGIC] == MAGIC && cache[H_NO_CAPTURES] != 0
 }
 
+#[cfg(feature = "selectable-unicode")]
+type Find = fn(Program<'_>, Input<'_>, usize, &mut [u32], &mut Budget) -> Result<Found, ExecError>;
+#[cfg(feature = "selectable-unicode")]
+type Test = fn(Program<'_>, Input<'_>, usize, &mut [u32], &mut Budget) -> Result<Tested, ExecError>;
+#[cfg(feature = "selectable-unicode")]
+type Capture = fn(
+    Program<'_>,
+    Input<'_>,
+    usize,
+    &mut [u32],
+    &mut Budget,
+    &mut [Option<Span>],
+) -> Result<Found, ExecError>;
+
+#[cfg(feature = "selectable-unicode")]
+#[derive(Debug)]
+pub(crate) struct Dispatch {
+    find: Find,
+    test: Test,
+    captures: Capture,
+}
+
+#[cfg(feature = "selectable-unicode")]
+pub(crate) static UNICODE_DISPATCH: Dispatch = Dispatch {
+    find: find_with::<crate::properties::Unicode>,
+    test: is_match_with::<crate::properties::Unicode>,
+    captures: capture_search::<crate::properties::Unicode>,
+};
+#[cfg(feature = "selectable-unicode")]
+static PROPERTY_FREE_DISPATCH: Dispatch = Dispatch {
+    find: find_with::<crate::properties::PropertyFree>,
+    test: is_match_with::<crate::properties::PropertyFree>,
+    captures: capture_search::<crate::properties::PropertyFree>,
+};
+
+#[cfg(feature = "selectable-unicode")]
+impl Default for &Dispatch {
+    fn default() -> Self {
+        &PROPERTY_FREE_DISPATCH
+    }
+}
+
 /// Whether `program` matches `input` at or after `start_utf16`, answered by
 /// the automaton in `cache`. The cache must belong to this program: the host
 /// keeps one per program. A cache built for another program of the same
 /// length and header is the host's error and may give wrong answers; one with
 /// a different length or header is rebuilt.
+#[inline(always)]
 pub fn is_match(
     program: Program<'_>,
     input: Input<'_>,
@@ -390,8 +434,21 @@ pub fn is_match(
     cache: &mut [u32],
     budget: &mut Budget,
 ) -> Result<Tested, ExecError> {
+    #[cfg(feature = "selectable-unicode")]
+    return (program.membership.dfa.test)(program, input, start_utf16, cache, budget);
+    #[cfg(not(feature = "selectable-unicode"))]
+    is_match_with::<crate::properties::Unicode>(program, input, start_utf16, cache, budget)
+}
+
+fn is_match_with<P: Provider>(
+    program: Program<'_>,
+    input: Input<'_>,
+    start_utf16: usize,
+    cache: &mut [u32],
+    budget: &mut Budget,
+) -> Result<Tested, ExecError> {
     Ok(
-        match search(program, input, start_utf16, cache, budget, false)? {
+        match search::<P>(program, input, start_utf16, cache, budget, false)? {
             Outcome::Declined(why) => Tested::Declined(why),
             Outcome::NoMatch => Tested::NoMatch,
             Outcome::Matched(_) => Tested::Match,
@@ -403,6 +460,7 @@ pub fn is_match(
 /// at or after `start_utf16` — group zero, leftmost first — answered by the
 /// automaton in `cache`. Captures come from the evaluator, started at the
 /// span's start. The cache contract is [`is_match`]'s.
+#[inline(always)]
 pub fn find(
     program: Program<'_>,
     input: Input<'_>,
@@ -410,8 +468,21 @@ pub fn find(
     cache: &mut [u32],
     budget: &mut Budget,
 ) -> Result<Found, ExecError> {
+    #[cfg(feature = "selectable-unicode")]
+    return (program.membership.dfa.find)(program, input, start_utf16, cache, budget);
+    #[cfg(not(feature = "selectable-unicode"))]
+    find_with::<crate::properties::Unicode>(program, input, start_utf16, cache, budget)
+}
+
+fn find_with<P: Provider>(
+    program: Program<'_>,
+    input: Input<'_>,
+    start_utf16: usize,
+    cache: &mut [u32],
+    budget: &mut Budget,
+) -> Result<Found, ExecError> {
     Ok(
-        match search(program, input, start_utf16, cache, budget, true)? {
+        match search::<P>(program, input, start_utf16, cache, budget, true)? {
             Outcome::Declined(why) => Found::Declined(why),
             Outcome::NoMatch => Found::NoMatch,
             Outcome::Matched(span) => Found::Match(span.ok_or(ExecError::InvalidProgram)?),
@@ -451,11 +522,14 @@ pub fn captures(
     {
         return Ok(Found::Declined(Decline::Captures));
     }
-    capture_search(program, input, start_utf16, cache, budget, out)
+    #[cfg(feature = "selectable-unicode")]
+    return (program.membership.dfa.captures)(program, input, start_utf16, cache, budget, out);
+    #[cfg(not(feature = "selectable-unicode"))]
+    capture_search::<crate::properties::Unicode>(program, input, start_utf16, cache, budget, out)
 }
 
 #[inline(never)]
-fn capture_search(
+fn capture_search<P: Provider>(
     program: Program<'_>,
     input: Input<'_>,
     start_utf16: usize,
@@ -491,7 +565,8 @@ fn capture_search(
     if start_utf16 > bytes.len() {
         return Ok(Found::NoMatch);
     }
-    let mut dfa = Dfa {
+    let mut dfa = Dfa::<P> {
+        provider: core::marker::PhantomData,
         program,
         m: cache,
         budget: *budget,
@@ -530,7 +605,7 @@ impl From<ExecError> for Stop {
 }
 
 #[inline(always)]
-fn search(
+fn search<P: Provider>(
     program: Program<'_>,
     input: Input<'_>,
     start_utf16: usize,
@@ -547,7 +622,7 @@ fn search(
     // A validated program holds its whole header; reading it as one array
     // checks that once.
     let Some(words) = program.words.first_chunk::<HEADER>() else {
-        return general(program, input, start_utf16, cache, budget, bounds);
+        return general::<P>(program, input, start_utf16, cache, budget, bounds);
     };
     let anchored = words[2] & Y != 0 || words[7] & ANCHORED != 0;
     if words[7] & DFA != 0
@@ -572,11 +647,11 @@ fn search(
             // needs no Unicode adjustment, and other storage starts at zero.
             Some(end) => match reverse_steady(input, start_utf16, end, cache, budget) {
                 Some(begin) => Ok(Outcome::Matched(Span::new(begin, end))),
-                None => reverse_only(program, input, start_utf16, end, cache, budget),
+                None => reverse_only::<P>(program, input, start_utf16, end, cache, budget),
             },
         };
     }
-    general(program, input, start_utf16, cache, budget, bounds)
+    general::<P>(program, input, start_utf16, cache, budget, bounds)
 }
 
 /// The reverse pass over wholly ASCII storage when every transition it takes
@@ -631,7 +706,7 @@ fn reverse_steady(
 
 /// The reverse pass alone, for a match end the steady path found.
 #[inline(never)]
-fn reverse_only(
+fn reverse_only<P: Provider>(
     program: Program<'_>,
     input: Input<'_>,
     start: usize,
@@ -639,7 +714,8 @@ fn reverse_only(
     cache: &mut [u32],
     budget: &mut Budget,
 ) -> Result<Outcome, ExecError> {
-    let mut dfa = Dfa {
+    let mut dfa = Dfa::<P> {
+        provider: core::marker::PhantomData,
         program,
         m: cache,
         budget: *budget,
@@ -660,7 +736,7 @@ fn reverse_only(
 /// Everything [`search`]'s steady path leaves: building the cache, states
 /// and classes not yet cached, other storage, and the reverse pass.
 #[inline(never)]
-fn general(
+fn general<P: Provider>(
     program: Program<'_>,
     input: Input<'_>,
     start_utf16: usize,
@@ -692,7 +768,8 @@ fn general(
     if start_utf16 > input.len_utf16() {
         return Ok(Outcome::NoMatch);
     }
-    let mut dfa = Dfa {
+    let mut dfa = Dfa::<P> {
+        provider: core::marker::PhantomData,
         program,
         m: cache,
         budget: *budget,
@@ -1666,14 +1743,14 @@ fn read(cursor: &mut Cursor<'_>, unicode: bool, reverse: bool) -> Option<u32> {
 }
 
 /// Whether a consuming instruction accepts `c`, by the evaluator's rules.
-fn accepts(program: Program<'_>, [op, a, b]: [u32; 3], c: u32) -> bool {
+fn accepts<P: Provider>(program: Program<'_>, [op, a, b]: [u32; 3], c: u32) -> bool {
     match op {
         CHAR => c == a,
         CHAR_I => c == a || casefold::equal(c, a, program.unicode()),
         ANY => !line_terminator(c),
         ANY_S => true,
-        CLASS | CLASS_SORTED => class(program, a, b, [c; 4], op == CLASS_SORTED),
-        CLASS_I | CLASS_SORTED_I => class(
+        CLASS | CLASS_SORTED => class::<P>(program, a, b, [c; 4], op == CLASS_SORTED),
+        CLASS_I | CLASS_SORTED_I => class::<P>(
             program,
             a,
             b,
@@ -1686,7 +1763,13 @@ fn accepts(program: Program<'_>, [op, a, b]: [u32; 3], c: u32) -> bool {
 
 /// Class membership for a character's case equivalents, as the evaluator's
 /// class step decides it, including a `v` complement's whole-closure rule.
-fn class(program: Program<'_>, a: u32, b: u32, values: [u32; 4], sorted: bool) -> bool {
+fn class<P: Provider>(
+    program: Program<'_>,
+    a: u32,
+    b: u32,
+    values: [u32; 4],
+    sorted: bool,
+) -> bool {
     let (start, end, negated) = (a, a + (b & !NEGATED), b & NEGATED != 0);
     let found = if sorted {
         values.iter().any(|&value| {
@@ -1710,11 +1793,11 @@ fn class(program: Program<'_>, a: u32, b: u32, values: [u32; 4], sorted: bool) -
             if lo & PROPERTY != 0 && hi == 2 {
                 return !values
                     .iter()
-                    .any(|&value| program.membership.contains(lo & !PROPERTY, value));
+                    .any(|&value| P::contains(lo & !PROPERTY, value));
             }
             values.iter().any(|&value| {
                 if lo & PROPERTY != 0 {
-                    program.membership.contains(lo & !PROPERTY, value) != (hi != 0)
+                    P::contains(lo & !PROPERTY, value) != (hi != 0)
                 } else {
                     value >= lo && value <= hi
                 }
@@ -1754,7 +1837,8 @@ fn context(c: u32) -> u32 {
         })
 }
 
-struct Dfa<'p, 'c> {
+struct Dfa<'p, 'c, P: Provider> {
+    provider: core::marker::PhantomData<P>,
     program: Program<'p>,
     m: &'c mut [u32],
     budget: Budget,
@@ -1765,7 +1849,7 @@ struct Dfa<'p, 'c> {
     unicode: bool,
 }
 
-impl Dfa<'_, '_> {
+impl<P: Provider> Dfa<'_, '_, P> {
     #[inline(always)]
     fn h(&self, index: usize) -> usize {
         self.m[index] as usize
@@ -2215,7 +2299,7 @@ impl Dfa<'_, '_> {
         self.m[tmp] = context(c) & self.m[H_NEED] & !CX_EDGE;
         for index in 0..predicates {
             let pc = self.h(reps + index);
-            if accepts(self.program, self.program.instruction(pc), c) {
+            if accepts::<P>(self.program, self.program.instruction(pc), c) {
                 let bit = PRED_BASE + index;
                 self.m[tmp + bit / 32] |= 1 << (bit % 32);
             }

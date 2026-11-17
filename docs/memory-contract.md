@@ -10,7 +10,7 @@ A GC host traces its object-to-program edge and updates it during relocation. Pe
 
 Shared immutable Unicode data can reside in read-only native data. With
 `selectable-unicode`, compilation/validation resolves an installed provider once
-and retains its native function pointer in the borrowed view and binding witness,
+and retains its native membership function and DFA dispatch table in the borrowed view and binding witness,
 never in serialized program words. The provider is immutable for the process
 lifetime and refers to no host heap object. A witnessed relocation/resumption
 reuses that capability without looking up the installation slot. Report its footprint and version separately. Future static/AOT program storage needs an explicit lifetime/version contract of its own.
