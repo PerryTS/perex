@@ -813,7 +813,7 @@ fn reverse_only<P: Provider>(
 
 /// Everything [`search`]'s steady path leaves: building the cache, states
 /// and classes not yet cached, other storage, and the reverse pass.
-#[inline(never)]
+#[inline(always)]
 fn general<P: Provider, const BOUNDS: bool>(
     program: Code<'_>,
     input: Input<'_>,
