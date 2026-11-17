@@ -423,7 +423,7 @@ property-free instantiation references no membership tables; the Unicode
 instantiation is reachable through the explicit installer. The layout builder
 and provider-independent scans remain shared.
 
-The program and its binding witness cache the selected entry points, so a DFA
+The program and its binding witness cache the selected entry table, so a DFA
 operation dispatches once before its loops. Neither a membership query nor a
 resumed view reads the installation slot. Program words and cache words still
 hold offsets and IDs, never native pointers. Feature-off builds call the Unicode
@@ -437,4 +437,6 @@ through its character loop. Both read the same program format and reader methods
 The operation fixes whether it needs bounds as a const parameter of the same
 search implementation. The VM caches Unicode mode for one immutable program
 borrow; character reads and case folding reuse that mode. The validated view
-keeps words and the VM query contiguous, with DFA entry functions after them.
+keeps words and the VM query contiguous, followed by the immutable DFA table
+pointer. A DFA operation loads its entry once; no table pointer travels through
+its character loop.

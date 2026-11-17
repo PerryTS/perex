@@ -24,19 +24,21 @@ pub fn install_unicode_properties() {
     #[cfg(feature = "selectable-unicode")]
     let _ = MEMBERSHIP.set(Membership {
         query: Query::unicode(),
-        dfa: crate::dfa::UNICODE_DISPATCH,
+        dfa: &crate::dfa::UNICODE_DISPATCH,
     });
 }
 
 /// A process-local capability, never part of relocatable program words.
 /// The default configuration is zero-sized and retains direct dispatch.
+/// The VM query stays direct; the immutable DFA table keeps borrowed views and
+/// relocation witnesses compact without carrying three unused entry pointers.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Membership {
     #[cfg(feature = "selectable-unicode")]
     query: Query,
     #[cfg(feature = "selectable-unicode")]
-    pub(crate) dfa: crate::dfa::Dispatch,
+    pub(crate) dfa: &'static crate::dfa::Dispatch,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -65,7 +67,7 @@ impl PartialEq for Membership {
     fn eq(&self, other: &Self) -> bool {
         #[cfg(feature = "selectable-unicode")]
         {
-            core::ptr::fn_addr_eq(self.query.0, other.query.0) && self.dfa == other.dfa
+            core::ptr::fn_addr_eq(self.query.0, other.query.0) && core::ptr::eq(self.dfa, other.dfa)
         }
         #[cfg(not(feature = "selectable-unicode"))]
         {

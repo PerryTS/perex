@@ -428,22 +428,11 @@ static PROPERTY_FREE_DISPATCH: Dispatch = Dispatch {
 };
 
 #[cfg(feature = "selectable-unicode")]
-impl Default for Dispatch {
+impl Default for &Dispatch {
     fn default() -> Self {
-        PROPERTY_FREE_DISPATCH
+        &PROPERTY_FREE_DISPATCH
     }
 }
-
-#[cfg(feature = "selectable-unicode")]
-impl PartialEq for Dispatch {
-    fn eq(&self, other: &Self) -> bool {
-        core::ptr::fn_addr_eq(self.find, other.find)
-            && core::ptr::fn_addr_eq(self.test, other.test)
-            && core::ptr::fn_addr_eq(self.captures, other.captures)
-    }
-}
-#[cfg(feature = "selectable-unicode")]
-impl Eq for Dispatch {}
 
 // These concrete entries compile the Unicode instantiation in this crate in
 // both feature modes. Callers cannot specialize only the direct entry against
