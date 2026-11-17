@@ -428,3 +428,8 @@ operation dispatches once before its loops. Neither a membership query nor a
 resumed view reads the installation slot. Program words and cache words still
 hold offsets and IDs, never native pointers. Feature-off builds call the Unicode
 instantiation directly.
+
+The DFA core borrows a provider-independent validated word view. Its monomorphized
+state carries no VM query or dispatch table. The VM separately retains only its
+cached membership query, so neither executor copies the other engine’s capability
+through its character loop. Both read the same program format and reader methods.

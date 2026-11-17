@@ -22,7 +22,7 @@ pub(crate) fn eligible(p: Program<'_>) -> bool {
 /// from a validated program whose descriptor was derived from its instructions.
 #[derive(Clone, Copy)]
 pub struct LiteralPrefix<'a> {
-    program: Program<'a>,
+    program: Code<'a>,
 }
 
 impl<'a> Program<'a> {
@@ -31,6 +31,13 @@ impl<'a> Program<'a> {
     /// assertions remain the ordinary evaluator's or automaton's responsibility.
     #[inline]
     pub fn literal_prefix(self) -> Option<LiteralPrefix<'a>> {
+        self.code().literal_prefix()
+    }
+}
+
+impl<'a> Code<'a> {
+    #[inline]
+    pub(crate) fn literal_prefix(self) -> Option<LiteralPrefix<'a>> {
         (self.words()[7] & LITERAL_PREFIX != 0).then_some(LiteralPrefix { program: self })
     }
 }

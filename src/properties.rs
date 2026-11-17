@@ -34,15 +34,13 @@ pub fn install_unicode_properties() {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Membership {
     #[cfg(feature = "selectable-unicode")]
-    query: Query,
+    pub(crate) query: Query,
     #[cfg(feature = "selectable-unicode")]
     pub(crate) dfa: &'static crate::dfa::Dispatch,
 }
 
-#[cfg(feature = "selectable-unicode")]
-#[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
-struct Query(fn(u32, u32) -> bool);
+pub(crate) struct Query(#[cfg(feature = "selectable-unicode")] fn(u32, u32) -> bool);
 
 #[cfg(feature = "selectable-unicode")]
 impl Default for Query {
@@ -70,10 +68,24 @@ impl Eq for Membership {}
 
 impl Membership {
     #[inline(always)]
+    pub(crate) fn query(self) -> Query {
+        #[cfg(feature = "selectable-unicode")]
+        return self.query;
+        #[cfg(not(feature = "selectable-unicode"))]
+        Query()
+    }
+    #[inline(always)]
+    pub(crate) fn contains(self, id: u32, c: u32) -> bool {
+        self.query().contains(id, c)
+    }
+}
+
+impl Query {
+    #[inline(always)]
     pub(crate) fn contains(self, id: u32, c: u32) -> bool {
         #[cfg(feature = "selectable-unicode")]
         {
-            (self.query.0)(id, c)
+            (self.0)(id, c)
         }
         #[cfg(not(feature = "selectable-unicode"))]
         contains_data(id, c)

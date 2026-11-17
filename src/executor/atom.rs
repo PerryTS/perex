@@ -154,9 +154,9 @@ impl<'p> Vm<'_, 'p, '_, '_> {
                     let [lo, hi] = self.class_range(index as usize);
                     found = if lo & PROPERTY != 0 {
                         if hi == 2 {
-                            !self.program.membership.contains(lo & !PROPERTY, c)
+                            !self.membership.contains(lo & !PROPERTY, c)
                         } else {
-                            self.program.membership.contains(lo & !PROPERTY, c) != (hi != 0)
+                            self.membership.contains(lo & !PROPERTY, c) != (hi != 0)
                         }
                     } else {
                         c >= lo && c <= hi
