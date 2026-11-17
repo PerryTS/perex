@@ -3,7 +3,7 @@ use crate::{
     Budget, casefold,
     input::{Cursor, Input, Mark, Position},
     program::*,
-    properties, sequences,
+    sequences,
     span::Span,
 };
 mod admission;
@@ -1183,7 +1183,7 @@ impl Vm<'_, '_, '_, '_> {
             self.charge(1)?;
             let [lo, hi] = self.class_range(index as usize);
             let found = if lo & PROPERTY != 0 {
-                let inside = properties::contains(lo & !PROPERTY, c);
+                let inside = self.program.membership.contains(lo & !PROPERTY, c);
                 // A `v` complement (kind 2): see `class_step`.
                 if hi == 2 {
                     !inside
@@ -1253,7 +1253,7 @@ impl Vm<'_, '_, '_, '_> {
             if lo & PROPERTY != 0 && hi == 2 {
                 let inside = values
                     .iter()
-                    .any(|&value| properties::contains(lo & !PROPERTY, value));
+                    .any(|&value| self.program.membership.contains(lo & !PROPERTY, value));
                 if !inside {
                     self.class_result(true, negated, context);
                     return Ok(());
@@ -1262,7 +1262,7 @@ impl Vm<'_, '_, '_, '_> {
             }
             let found = values.iter().any(|&value| {
                 if lo & PROPERTY != 0 {
-                    properties::contains(lo & !PROPERTY, value) != (hi != 0)
+                    self.program.membership.contains(lo & !PROPERTY, value) != (hi != 0)
                 } else {
                     value >= lo && value <= hi
                 }

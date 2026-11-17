@@ -16,7 +16,6 @@ use crate::{
     },
     input::{Cursor, Input},
     program::*,
-    properties,
     span::Span,
 };
 
@@ -1711,11 +1710,11 @@ fn class(program: Program<'_>, a: u32, b: u32, values: [u32; 4], sorted: bool) -
             if lo & PROPERTY != 0 && hi == 2 {
                 return !values
                     .iter()
-                    .any(|&value| properties::contains(lo & !PROPERTY, value));
+                    .any(|&value| program.membership.contains(lo & !PROPERTY, value));
             }
             values.iter().any(|&value| {
                 if lo & PROPERTY != 0 {
-                    properties::contains(lo & !PROPERTY, value) != (hi != 0)
+                    program.membership.contains(lo & !PROPERTY, value) != (hi != 0)
                 } else {
                     value >= lo && value <= hi
                 }

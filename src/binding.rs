@@ -221,17 +221,40 @@ fn same_header(words: &[u32], header: &[u32; crate::program::HEADER]) -> bool {
 }
 
 /// What validating a program established, as plain data: its length and
-/// header. Obtained only from a [`BoundProgram`] that validated it, and small
+/// header and, with selectable Unicode, its resolved native provider. The
+/// provider is process-local and is never serialized into program words.
+/// Obtained only from a [`BoundProgram`] that validated it, and small
 /// enough for a host to keep beside the program it describes, so later
 /// bindings of that same program need not validate it again.
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProgramWitness {
     header: [u32; crate::program::HEADER],
+    // Fill the alignment gap before native words explicitly. Hosts that scan
+    // allocation bytes must never observe uninitialized Rust padding.
+    reserved: u32,
     words: usize,
+    membership: crate::properties::Membership,
+}
+
+impl ProgramWitness {
+    /// Whether this target inserts implicit padding between or after fields.
+    /// This is false on 32- and 64-bit targets. A host that scans allocation
+    /// bytes can assert this before storing typed witnesses in scanned memory.
+    /// A witness contains a native function pointer with selectable Unicode;
+    /// arbitrary bit patterns (including all zeros) are not valid witnesses.
+    pub const fn has_padding() -> bool {
+        core::mem::size_of::<Self>()
+            != core::mem::size_of::<[u32; crate::program::HEADER]>()
+                + core::mem::size_of::<u32>()
+                + core::mem::size_of::<usize>()
+                + core::mem::size_of::<crate::properties::Membership>()
+    }
 }
 
 /// A program validated once against an immutable owner, with no interior view.
 pub struct BoundProgram<P: ImmutableProgram> {
+    membership: crate::properties::Membership,
     storage: P,
     header: [u32; crate::program::HEADER],
     words: usize,
@@ -247,13 +270,15 @@ impl<P: ImmutableProgram> BoundProgram<P> {
                     (
                         p.words[..crate::program::HEADER].try_into().unwrap(),
                         words.len(),
+                        p.membership,
                     )
                 })
             })
             .map_err(BoundProgramError::Resource)
             .and_then(|result| result.map_err(BoundProgramError::Validation));
         match result {
-            Ok((header, words)) => Ok(Self {
+            Ok((header, words, membership)) => Ok(Self {
+                membership,
                 storage,
                 header,
                 words,
@@ -290,6 +315,7 @@ impl<P: ImmutableProgram> BoundProgram<P> {
             Ok(()) => Ok(Self {
                 storage,
                 header: witness.header,
+                membership: witness.membership,
                 words: witness.words,
             }),
             Err(error) => Err(BindingError { storage, error }),
@@ -300,6 +326,8 @@ impl<P: ImmutableProgram> BoundProgram<P> {
     /// program again with [`BoundProgram::new_witnessed`].
     pub fn witness(&self) -> ProgramWitness {
         ProgramWitness {
+            reserved: 0,
+            membership: self.membership,
             header: self.header,
             words: self.words,
         }
@@ -323,7 +351,10 @@ impl<P: ImmutableProgram> BoundProgram<P> {
                 if words.len() != self.words || !same_header(words, &self.header) {
                     return Err(BoundProgramError::ChangedLayout);
                 }
-                Ok(f(Program { words }))
+                Ok(f(Program {
+                    words,
+                    membership: self.membership,
+                }))
             })
             .map_err(BoundProgramError::Resource)?
     }

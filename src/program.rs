@@ -615,11 +615,13 @@ pub(crate) struct ProgramSections<'a> {
     pub repeats: &'a [[u32; 8]],
 }
 
-/// A validated immutable view. All persistent data is in `words`, with no
-/// pointers, reference counts, source borrow, or separate owning allocation.
-/// Release this borrow before moving the storage and validate its new borrow.
+/// A validated immutable view. Relocatable `words` contain no pointers, source
+/// borrow or separate owning allocation. With selectable Unicode, this view
+/// also retains an immutable native function resolved during validation.
+/// Release the view before moving storage; validate again or reuse a binding witness.
 #[derive(Clone, Copy, Debug)]
 pub struct Program<'a> {
+    pub(crate) membership: properties::Membership,
     pub(crate) words: &'a [u32],
 }
 
@@ -642,6 +644,14 @@ impl<'a> Program<'a> {
     /// The experimental native-u32 format requires four-byte alignment; it is
     /// not a stable wire format or a cross-endian serialization format.
     pub fn from_words(words: &'a [u32], budget: &mut Budget) -> Result<Self, ProgramError> {
+        Self::from_words_resolved(words, budget, properties::Resolver::default())
+    }
+
+    pub(crate) fn from_words_resolved(
+        words: &'a [u32],
+        budget: &mut Budget,
+        mut membership: properties::Resolver,
+    ) -> Result<Self, ProgramError> {
         let bad = ProgramError::Invalid;
         if words.len() < HEADER
             || words[0] != MAGIC
@@ -686,7 +696,10 @@ impl<'a> Program<'a> {
         {
             return Err(bad);
         }
-        let p = Self { words };
+        let mut p = Self {
+            words,
+            membership: membership.get(),
+        };
         budget
             .charge(LEADING_SCAN / 8)
             .map_err(|_| ProgramError::WorkLimit)?;
@@ -751,7 +764,11 @@ impl<'a> Program<'a> {
                 let group = p.named_group(i).ok_or(bad)?;
                 for (j, point) in core::char::decode_utf16(group.name_units()).enumerate() {
                     budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
-                    if !properties::identifier(point.map_err(|_| bad)? as u32, j == 0) {
+                    if !properties::identifier(
+                        &mut membership,
+                        point.map_err(|_| bad)? as u32,
+                        j == 0,
+                    ) {
                         return Err(bad);
                     }
                 }
@@ -852,7 +869,11 @@ impl<'a> Program<'a> {
             budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
             let [lo, hi] = p.range(i);
             let valid = if lo & PROPERTY != 0 {
-                p.unicode() && properties::valid(lo & !PROPERTY) && hi <= 2
+                if !p.unicode() || !properties::valid(lo & !PROPERTY) || hi > 2 {
+                    return Err(bad);
+                }
+                membership.require();
+                true
             } else {
                 lo <= hi && hi <= if p.unicode() { 0x10ffff } else { 0xffff }
             };
@@ -899,6 +920,7 @@ impl<'a> Program<'a> {
         {
             return Err(bad);
         }
+        p.membership = membership.get();
         Ok(p)
     }
     pub fn words(self) -> &'a [u32] {

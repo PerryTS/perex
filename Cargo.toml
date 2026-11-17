@@ -28,4 +28,8 @@ include = [
     "third_party/unicode/17.0.0/receipt.json",
 ]
 
+[features]
+# Opt-in std integration; the default engine remains no_std.
+selectable-unicode = []
+
 [dependencies]

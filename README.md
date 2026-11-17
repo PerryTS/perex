@@ -193,3 +193,28 @@ Case equivalence uses generated Unicode 17.0.0 data under the [Unicode License V
 [Skipping a failed start's run](docs/repetition.md) removes the starts inside a leading atom repeat's run once one of them has failed, since each reaches a subset of the positions the first one tried.
 
 [Single-atom repetition merging](docs/repetition.md) removes duplicate partitions when match ordering can be preserved, using the same evaluator and caller-owned storage.
+
+### Selectable Unicode membership for std embedders
+
+The optional `selectable-unicode` feature lets an embedder omit the Unicode
+membership database when it proves that no pattern or imported program needs
+it. Call `perex::install_unicode_properties()` before compiling or validating
+arbitrary patterns/programs, including non-ASCII capture names. Installation is
+idempotent and safe across threads. Missing installation panics on that cold
+path, before a program needing membership can be published.
+
+Compilation and validation resolve the provider once, on the first property or
+non-ASCII identifier query. The validated `Program` view and `ProgramWitness`
+retain the native function pointer. Evaluator, atom and DFA membership calls
+invoke it directly, without reading the installation slot or checking whether
+it is filled. Rebinding a witnessed program, relocation and resumed searches
+reuse the same capability. Property-free patterns never read the slot.
+
+Program words remain relocation-safe property IDs: no native pointer is stored
+in the bytecode, and format 16 is unchanged. Hosts may move program storage
+between borrows; witnesses are process-local, not serialization metadata.
+Descriptors, property names, case folding and properties-of-strings data remain
+independent. The default build remains no_std with direct membership calls;
+the optional feature uses std and adds no dependencies or unsafe code. Cargo
+feature unification applies this initialization contract to every user of the
+same Perex instance.

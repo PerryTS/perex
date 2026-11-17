@@ -13,6 +13,11 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+#[cfg(any(test, feature = "selectable-unicode"))]
+extern crate std;
+
+pub use properties::install_unicode_properties;
+
 pub mod binding;
 pub mod input;
 pub mod literal;

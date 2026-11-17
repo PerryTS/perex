@@ -2,12 +2,127 @@
 #[path = "property_data.rs"]
 mod data;
 
-pub(crate) fn identifier(c: u32, first: bool) -> bool {
+#[cfg(feature = "selectable-unicode")]
+static MEMBERSHIP: std::sync::OnceLock<fn(u32, u32) -> bool> = std::sync::OnceLock::new();
+
+/// Install the immutable Unicode membership provider before compiling or
+/// validating programs that need properties or non-ASCII capture names.
+///
+/// Installation is idempotent and safe across threads. The opt-in
+/// `selectable-unicode` feature requires std; an absent provider panics on the
+/// cold compile/validation path. Validated programs retain the resolved native
+/// function, so matching and resumed borrows never read the installation slot.
+/// Without this feature the engine remains no_std and calls the database
+/// directly; installation is a no-op.
+///
+/// Hosts accepting arbitrary patterns or imported programs must install
+/// conservatively. Omitting every reference to this function lets linker
+/// section collection discard the membership tables. Names, descriptors,
+/// case-fold data and properties of strings are independent.
+pub fn install_unicode_properties() {
+    #[cfg(feature = "selectable-unicode")]
+    let _ = MEMBERSHIP.set(contains_data);
+}
+
+/// A process-local capability, never part of relocatable program words.
+/// The default configuration is zero-sized and retains direct dispatch.
+#[cfg_attr(feature = "selectable-unicode", repr(transparent))]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Membership {
+    #[cfg(feature = "selectable-unicode")]
+    query: Query,
+}
+
+#[cfg(feature = "selectable-unicode")]
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+struct Query(fn(u32, u32) -> bool);
+
+#[cfg(feature = "selectable-unicode")]
+impl Default for Query {
+    fn default() -> Self {
+        // Only property-free programs carry this function. Compilation and
+        // validation resolve every property before publishing a program.
+        Self(|_, _| unreachable!("property-free program queried membership"))
+    }
+}
+
+impl PartialEq for Membership {
+    fn eq(&self, other: &Self) -> bool {
+        #[cfg(feature = "selectable-unicode")]
+        {
+            core::ptr::fn_addr_eq(self.query.0, other.query.0)
+        }
+        #[cfg(not(feature = "selectable-unicode"))]
+        {
+            let _ = other;
+            true
+        }
+    }
+}
+impl Eq for Membership {}
+
+impl Membership {
+    #[inline(always)]
+    pub(crate) fn contains(self, id: u32, c: u32) -> bool {
+        #[cfg(feature = "selectable-unicode")]
+        {
+            (self.query.0)(id, c)
+        }
+        #[cfg(not(feature = "selectable-unicode"))]
+        contains_data(id, c)
+    }
+}
+
+/// Compilation/validation alone may discover a first property. Once resolved,
+/// the same capability travels through preparation, emission and validation.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Resolver {
+    #[cfg(feature = "selectable-unicode")]
+    membership: Option<Membership>,
+}
+
+impl Resolver {
+    pub(crate) fn require(&mut self) -> Membership {
+        #[cfg(feature = "selectable-unicode")]
+        {
+            *self.membership.get_or_insert_with(|| {
+                #[cfg(test)]
+                SLOT_READS.with(|reads| reads.set(reads.get() + 1));
+                Membership {
+                    query: Query(
+                        *MEMBERSHIP
+                            .get()
+                            .expect("Unicode properties must be installed by the host"),
+                    ),
+                }
+            })
+        }
+        #[cfg(not(feature = "selectable-unicode"))]
+        Membership::default()
+    }
+
+    pub(crate) fn get(self) -> Membership {
+        #[cfg(feature = "selectable-unicode")]
+        {
+            self.membership.unwrap_or_default()
+        }
+        #[cfg(not(feature = "selectable-unicode"))]
+        Membership::default()
+    }
+}
+
+#[cfg(all(test, feature = "selectable-unicode"))]
+std::thread_local! {
+    static SLOT_READS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+pub(crate) fn identifier(resolver: &mut Resolver, c: u32, first: bool) -> bool {
     if c < 128 {
         return matches!(c, 36 | 65..=90 | 95 | 97..=122) || (!first && matches!(c, 48..=57));
     }
     (!first && matches!(c, 0x200c | 0x200d))
-        || contains(
+        || resolver.require().contains(
             if first {
                 data::ID_START
             } else {
@@ -32,7 +147,7 @@ pub(crate) fn ascii(id: u32) -> u128 {
 
 /// ASCII stays in the small descriptor table; non-ASCII membership uses a
 /// category mask or binary search over shared, disjoint interval boundaries.
-pub(crate) fn contains(id: u32, c: u32) -> bool {
+fn contains_data(id: u32, c: u32) -> bool {
     let row = data::PROPERTIES[id as usize];
     if c < 128 {
         return row[2 + c as usize / 32] & (1 << (c % 32)) != 0;
@@ -70,3 +185,6 @@ pub(crate) fn resolve(name: &[u8], value: Option<&[u8]>) -> Option<u32> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests;
