@@ -117,6 +117,7 @@ cargo check --locked --all-targets
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo test --locked --release
+cargo test --locked --release --features selectable-unicode --lib properties::tests
 python3 tools/generate-casefold.py --check
 python3 tools/generate-properties.py --check
 cargo run --locked --release --example compilable
