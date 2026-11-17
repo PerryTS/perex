@@ -2236,8 +2236,28 @@ fn read(cursor: &mut Cursor<'_>, unicode: bool, reverse: bool) -> Option<u32> {
 
 /// Synchronous execution of the same resumable evaluator. Output is untouched
 /// on no-match/error. The host owns lastIndex, result objects and global loops.
+#[inline(always)]
 pub fn find(
     program: Program<'_>,
+    input: Input<'_>,
+    start_utf16: usize,
+    scratch: Scratch<'_>,
+    captures: &mut [Option<Span>],
+    budget: &mut Budget,
+) -> Result<bool, ExecError> {
+    find_program(
+        VmProgram::new(program),
+        input,
+        start_utf16,
+        scratch,
+        captures,
+        budget,
+    )
+}
+
+#[inline(never)]
+fn find_program(
+    program: VmProgram<'_>,
     input: Input<'_>,
     start_utf16: usize,
     mut scratch: Scratch<'_>,
@@ -2255,7 +2275,7 @@ pub fn find(
     // single borrow. Search uses this identical VM across multiple borrows.
     let mut state = State::new(start_utf16, input.len_utf16());
     let mut vm = Vm {
-        program: VmProgram::new(program),
+        program,
         sections: program.sections(),
         input,
         cursor: input.cursor(),
@@ -2283,8 +2303,20 @@ pub fn find(
 /// capture registers it is about to copy out. Nothing here reads them, so
 /// nothing checks them, and the budget is charged for that check only by
 /// `find`. Registers are still written, since a backreference reads them.
+#[inline(always)]
 pub fn is_match(
     program: Program<'_>,
+    input: Input<'_>,
+    start_utf16: usize,
+    scratch: Scratch<'_>,
+    budget: &mut Budget,
+) -> Result<bool, ExecError> {
+    is_match_program(VmProgram::new(program), input, start_utf16, scratch, budget)
+}
+
+#[inline(never)]
+fn is_match_program(
+    program: VmProgram<'_>,
     input: Input<'_>,
     start_utf16: usize,
     mut scratch: Scratch<'_>,
@@ -2296,7 +2328,7 @@ pub fn is_match(
     let mut state = State::new(start_utf16, input.len_utf16());
     state.boolean = true;
     let mut vm = Vm {
-        program: VmProgram::new(program),
+        program,
         sections: program.sections(),
         input,
         cursor: input.cursor(),

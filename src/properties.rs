@@ -23,7 +23,8 @@ static MEMBERSHIP: std::sync::OnceLock<Membership> = std::sync::OnceLock::new();
 pub fn install_unicode_properties() {
     #[cfg(feature = "selectable-unicode")]
     let _ = MEMBERSHIP.set(Membership {
-        dfa: &crate::dfa::UNICODE_DISPATCH,
+        query: Query::unicode(),
+        dfa: crate::dfa::UNICODE_DISPATCH,
     });
 }
 
@@ -33,7 +34,9 @@ pub fn install_unicode_properties() {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Membership {
     #[cfg(feature = "selectable-unicode")]
-    pub(crate) dfa: &'static crate::dfa::Dispatch,
+    query: Query,
+    #[cfg(feature = "selectable-unicode")]
+    pub(crate) dfa: crate::dfa::Dispatch,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -51,11 +54,18 @@ impl Query {
     }
 }
 
+#[cfg(feature = "selectable-unicode")]
+impl Default for Query {
+    fn default() -> Self {
+        Self::property_free()
+    }
+}
+
 impl PartialEq for Membership {
     fn eq(&self, other: &Self) -> bool {
         #[cfg(feature = "selectable-unicode")]
         {
-            core::ptr::eq(self.dfa, other.dfa)
+            core::ptr::fn_addr_eq(self.query.0, other.query.0) && self.dfa == other.dfa
         }
         #[cfg(not(feature = "selectable-unicode"))]
         {
@@ -70,7 +80,7 @@ impl Membership {
     #[inline(always)]
     pub(crate) fn query(self) -> Query {
         #[cfg(feature = "selectable-unicode")]
-        return self.dfa.query;
+        return self.query;
         #[cfg(not(feature = "selectable-unicode"))]
         Query()
     }

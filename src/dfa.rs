@@ -406,9 +406,9 @@ type Capture = fn(
 ) -> Result<Found, ExecError>;
 
 #[cfg(feature = "selectable-unicode")]
-#[derive(Debug)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Dispatch {
-    pub(crate) query: crate::properties::Query,
     find: Find,
     test: Test,
     captures: Capture,
@@ -416,23 +416,69 @@ pub(crate) struct Dispatch {
 
 #[cfg(feature = "selectable-unicode")]
 pub(crate) static UNICODE_DISPATCH: Dispatch = Dispatch {
-    query: crate::properties::Query::unicode(),
-    find: find_with::<crate::properties::Unicode>,
-    test: is_match_with::<crate::properties::Unicode>,
-    captures: capture_search::<crate::properties::Unicode>,
+    find: Dfa::<crate::properties::Unicode>::find,
+    test: Dfa::<crate::properties::Unicode>::is_match,
+    captures: Dfa::<crate::properties::Unicode>::captures,
 };
 #[cfg(feature = "selectable-unicode")]
 static PROPERTY_FREE_DISPATCH: Dispatch = Dispatch {
-    query: crate::properties::Query::property_free(),
     find: find_with::<crate::properties::PropertyFree>,
     test: is_match_with::<crate::properties::PropertyFree>,
     captures: capture_search::<crate::properties::PropertyFree>,
 };
 
 #[cfg(feature = "selectable-unicode")]
-impl Default for &Dispatch {
+impl Default for Dispatch {
     fn default() -> Self {
-        &PROPERTY_FREE_DISPATCH
+        PROPERTY_FREE_DISPATCH
+    }
+}
+
+#[cfg(feature = "selectable-unicode")]
+impl PartialEq for Dispatch {
+    fn eq(&self, other: &Self) -> bool {
+        core::ptr::fn_addr_eq(self.find, other.find)
+            && core::ptr::fn_addr_eq(self.test, other.test)
+            && core::ptr::fn_addr_eq(self.captures, other.captures)
+    }
+}
+#[cfg(feature = "selectable-unicode")]
+impl Eq for Dispatch {}
+
+// These concrete entries compile the Unicode instantiation in this crate in
+// both feature modes. Callers cannot specialize only the direct entry against
+// their subject representation, while the selected entry stays general.
+impl Dfa<'_, '_, crate::properties::Unicode> {
+    #[inline(never)]
+    fn find(
+        program: Code<'_>,
+        input: Input<'_>,
+        start: usize,
+        cache: &mut [u32],
+        budget: &mut Budget,
+    ) -> Result<Found, ExecError> {
+        find_with::<crate::properties::Unicode>(program, input, start, cache, budget)
+    }
+    #[inline(never)]
+    fn is_match(
+        program: Code<'_>,
+        input: Input<'_>,
+        start: usize,
+        cache: &mut [u32],
+        budget: &mut Budget,
+    ) -> Result<Tested, ExecError> {
+        is_match_with::<crate::properties::Unicode>(program, input, start, cache, budget)
+    }
+    #[inline(never)]
+    fn captures(
+        program: Code<'_>,
+        input: Input<'_>,
+        start: usize,
+        cache: &mut [u32],
+        budget: &mut Budget,
+        out: &mut [Option<Span>],
+    ) -> Result<Found, ExecError> {
+        capture_search::<crate::properties::Unicode>(program, input, start, cache, budget, out)
     }
 }
 
@@ -441,7 +487,7 @@ impl Default for &Dispatch {
 /// keeps one per program. A cache built for another program of the same
 /// length and header is the host's error and may give wrong answers; one with
 /// a different length or header is rebuilt.
-#[cfg_attr(feature = "selectable-unicode", inline(always))]
+#[inline(always)]
 pub fn is_match(
     program: Program<'_>,
     input: Input<'_>,
@@ -452,7 +498,7 @@ pub fn is_match(
     #[cfg(feature = "selectable-unicode")]
     return (program.membership.dfa.test)(program.code(), input, start_utf16, cache, budget);
     #[cfg(not(feature = "selectable-unicode"))]
-    is_match_with::<crate::properties::Unicode>(program.code(), input, start_utf16, cache, budget)
+    Dfa::<crate::properties::Unicode>::is_match(program.code(), input, start_utf16, cache, budget)
 }
 
 #[inline(always)]
@@ -476,7 +522,7 @@ fn is_match_with<P: Provider>(
 /// at or after `start_utf16` — group zero, leftmost first — answered by the
 /// automaton in `cache`. Captures come from the evaluator, started at the
 /// span's start. The cache contract is [`is_match`]'s.
-#[cfg_attr(feature = "selectable-unicode", inline(always))]
+#[inline(always)]
 pub fn find(
     program: Program<'_>,
     input: Input<'_>,
@@ -487,7 +533,7 @@ pub fn find(
     #[cfg(feature = "selectable-unicode")]
     return (program.membership.dfa.find)(program.code(), input, start_utf16, cache, budget);
     #[cfg(not(feature = "selectable-unicode"))]
-    find_with::<crate::properties::Unicode>(program.code(), input, start_utf16, cache, budget)
+    Dfa::<crate::properties::Unicode>::find(program.code(), input, start_utf16, cache, budget)
 }
 
 // The default public entry and the selectable dispatch entry are instantiated
@@ -551,7 +597,7 @@ pub fn captures(
         out,
     );
     #[cfg(not(feature = "selectable-unicode"))]
-    capture_search::<crate::properties::Unicode>(
+    Dfa::<crate::properties::Unicode>::captures(
         program.code(),
         input,
         start_utf16,
