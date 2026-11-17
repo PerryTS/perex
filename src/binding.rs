@@ -235,6 +235,10 @@ pub struct ProgramWitness {
     reserved: u32,
     words: usize,
     membership: crate::properties::Membership,
+    // Scanned hosts store witnesses in whole eight-byte words on both target
+    // widths. Keep the trailing bytes initialized rather than adding padding.
+    #[cfg(target_pointer_width = "32")]
+    trailing: u32,
 }
 
 impl ProgramWitness {
@@ -249,8 +253,18 @@ impl ProgramWitness {
                 + core::mem::size_of::<u32>()
                 + core::mem::size_of::<usize>()
                 + core::mem::size_of::<crate::properties::Membership>()
+                + if cfg!(target_pointer_width = "32") {
+                    core::mem::size_of::<u32>()
+                } else {
+                    0
+                }
     }
 }
+
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+const _: () = assert!(
+    !ProgramWitness::has_padding() && core::mem::size_of::<ProgramWitness>().is_multiple_of(8)
+);
 
 /// A program validated once against an immutable owner, with no interior view.
 pub struct BoundProgram<P: ImmutableProgram> {
@@ -330,6 +344,8 @@ impl<P: ImmutableProgram> BoundProgram<P> {
             membership: self.membership,
             header: self.header,
             words: self.words,
+            #[cfg(target_pointer_width = "32")]
+            trailing: 0,
         }
     }
 
