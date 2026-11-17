@@ -14,7 +14,7 @@ mod state;
 use state::*;
 const UNSET: usize = usize::MAX;
 
-fn equal(program: Code<'_>, left: u32, right: u32, fold: bool) -> bool {
+fn equal(program: VmProgram<'_>, left: u32, right: u32, fold: bool) -> bool {
     left == right || (fold && casefold::equal(left, right, program.unicode()))
 }
 fn line_terminator(c: u32) -> bool {
@@ -370,8 +370,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
                 return Ok(Progress::Pending);
             }
             let mut vm = Vm {
-                program: program.code(),
-                membership: program.membership.query(),
+                program: VmProgram::new(program),
                 sections: program.sections(),
                 input,
                 cursor: input.cursor(),
@@ -581,8 +580,7 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
                     return Err(ExecError::ChangedResources);
                 }
                 let mut vm = Vm {
-                    program: program.code(),
-                    membership: program.membership.query(),
+                    program: VmProgram::new(program),
                     sections: program.sections(),
                     input,
                     cursor,
@@ -740,9 +738,32 @@ impl<'r, R: Resources, B: ScratchOwner> Search<'r, R, B> {
     }
 }
 
-struct Vm<'a, 'p, 's, 'w> {
-    program: Code<'p>,
+// Keep only the VM query with its words. DFA dispatch metadata belongs to the
+// compiled capability, outside the evaluator's active frame.
+#[derive(Clone, Copy)]
+struct VmProgram<'a> {
     membership: crate::properties::Query,
+    code: Code<'a>,
+}
+impl<'a> VmProgram<'a> {
+    #[inline]
+    fn new(program: Program<'a>) -> Self {
+        Self {
+            membership: program.membership.query(),
+            code: program.code(),
+        }
+    }
+}
+impl<'a> core::ops::Deref for VmProgram<'a> {
+    type Target = Code<'a>;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.code
+    }
+}
+
+struct Vm<'a, 'p, 's, 'w> {
+    program: VmProgram<'p>,
     sections: ProgramSections<'p>,
     input: Input<'a>,
     cursor: Cursor<'a>,
@@ -1186,7 +1207,7 @@ impl Vm<'_, '_, '_, '_> {
             self.charge(1)?;
             let [lo, hi] = self.class_range(index as usize);
             let found = if lo & PROPERTY != 0 {
-                let inside = self.membership.contains(lo & !PROPERTY, c);
+                let inside = self.program.membership.contains(lo & !PROPERTY, c);
                 // A `v` complement (kind 2): see `class_step`.
                 if hi == 2 {
                     !inside
@@ -1256,7 +1277,7 @@ impl Vm<'_, '_, '_, '_> {
             if lo & PROPERTY != 0 && hi == 2 {
                 let inside = values
                     .iter()
-                    .any(|&value| self.membership.contains(lo & !PROPERTY, value));
+                    .any(|&value| self.program.membership.contains(lo & !PROPERTY, value));
                 if !inside {
                     self.class_result(true, negated, context);
                     return Ok(());
@@ -1265,7 +1286,7 @@ impl Vm<'_, '_, '_, '_> {
             }
             let found = values.iter().any(|&value| {
                 if lo & PROPERTY != 0 {
-                    self.membership.contains(lo & !PROPERTY, value) != (hi != 0)
+                    self.program.membership.contains(lo & !PROPERTY, value) != (hi != 0)
                 } else {
                     value >= lo && value <= hi
                 }
@@ -2234,8 +2255,7 @@ pub fn find(
     // single borrow. Search uses this identical VM across multiple borrows.
     let mut state = State::new(start_utf16, input.len_utf16());
     let mut vm = Vm {
-        program: program.code(),
-        membership: program.membership.query(),
+        program: VmProgram::new(program),
         sections: program.sections(),
         input,
         cursor: input.cursor(),
@@ -2276,8 +2296,7 @@ pub fn is_match(
     let mut state = State::new(start_utf16, input.len_utf16());
     state.boolean = true;
     let mut vm = Vm {
-        program: program.code(),
-        membership: program.membership.query(),
+        program: VmProgram::new(program),
         sections: program.sections(),
         input,
         cursor: input.cursor(),

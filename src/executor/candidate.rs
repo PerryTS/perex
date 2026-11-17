@@ -239,7 +239,7 @@ impl Vm<'_, '_, '_, '_> {
         // A leading run and an alternation both name the exact bytes their
         // first two characters admit, which on ordinary text stops at a small
         // fraction of the positions the descriptor's widened interval does.
-        let prefix = (leading != 0).then(|| prefix(self.program, leading));
+        let prefix = (leading != 0).then(|| prefix(self.program.code, leading));
         let mut scanned = 0;
         let found = loop {
             let (found, inspected) = match &prefix {

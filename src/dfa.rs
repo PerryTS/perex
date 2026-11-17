@@ -408,6 +408,7 @@ type Capture = fn(
 #[cfg(feature = "selectable-unicode")]
 #[derive(Debug)]
 pub(crate) struct Dispatch {
+    pub(crate) query: crate::properties::Query,
     find: Find,
     test: Test,
     captures: Capture,
@@ -415,12 +416,14 @@ pub(crate) struct Dispatch {
 
 #[cfg(feature = "selectable-unicode")]
 pub(crate) static UNICODE_DISPATCH: Dispatch = Dispatch {
+    query: crate::properties::Query::unicode(),
     find: find_with::<crate::properties::Unicode>,
     test: is_match_with::<crate::properties::Unicode>,
     captures: capture_search::<crate::properties::Unicode>,
 };
 #[cfg(feature = "selectable-unicode")]
 static PROPERTY_FREE_DISPATCH: Dispatch = Dispatch {
+    query: crate::properties::Query::property_free(),
     find: find_with::<crate::properties::PropertyFree>,
     test: is_match_with::<crate::properties::PropertyFree>,
     captures: capture_search::<crate::properties::PropertyFree>,
@@ -438,7 +441,7 @@ impl Default for &Dispatch {
 /// keeps one per program. A cache built for another program of the same
 /// length and header is the host's error and may give wrong answers; one with
 /// a different length or header is rebuilt.
-#[inline(always)]
+#[cfg_attr(feature = "selectable-unicode", inline(always))]
 pub fn is_match(
     program: Program<'_>,
     input: Input<'_>,
@@ -452,7 +455,7 @@ pub fn is_match(
     is_match_with::<crate::properties::Unicode>(program.code(), input, start_utf16, cache, budget)
 }
 
-#[inline(never)]
+#[inline(always)]
 fn is_match_with<P: Provider>(
     program: Code<'_>,
     input: Input<'_>,
@@ -473,7 +476,7 @@ fn is_match_with<P: Provider>(
 /// at or after `start_utf16` — group zero, leftmost first — answered by the
 /// automaton in `cache`. Captures come from the evaluator, started at the
 /// span's start. The cache contract is [`is_match`]'s.
-#[inline(always)]
+#[cfg_attr(feature = "selectable-unicode", inline(always))]
 pub fn find(
     program: Program<'_>,
     input: Input<'_>,
@@ -487,9 +490,9 @@ pub fn find(
     find_with::<crate::properties::Unicode>(program.code(), input, start_utf16, cache, budget)
 }
 
-// Keep the search frame out of its caller in both feature modes. Provider
-// specialization happens inside this operation boundary.
-#[inline(never)]
+// The default public entry and the selectable dispatch entry are instantiated
+// in this crate, so caller-specific constants do not split their search cores.
+#[inline(always)]
 fn find_with<P: Provider>(
     program: Code<'_>,
     input: Input<'_>,
