@@ -452,6 +452,7 @@ pub fn is_match(
     is_match_with::<crate::properties::Unicode>(program.code(), input, start_utf16, cache, budget)
 }
 
+#[inline(never)]
 fn is_match_with<P: Provider>(
     program: Code<'_>,
     input: Input<'_>,
@@ -486,6 +487,9 @@ pub fn find(
     find_with::<crate::properties::Unicode>(program.code(), input, start_utf16, cache, budget)
 }
 
+// Keep the search frame out of its caller in both feature modes. Provider
+// specialization happens inside this operation boundary.
+#[inline(never)]
 fn find_with<P: Provider>(
     program: Code<'_>,
     input: Input<'_>,

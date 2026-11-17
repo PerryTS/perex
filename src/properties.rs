@@ -185,6 +185,7 @@ pub(crate) fn ascii(id: u32) -> u128 {
 
 /// ASCII stays in the small descriptor table; non-ASCII membership uses a
 /// category mask or binary search over shared, disjoint interval boundaries.
+#[inline(always)]
 fn contains_data(id: u32, c: u32) -> bool {
     let row = data::PROPERTIES[id as usize];
     if c < 128 {
