@@ -1,4 +1,4 @@
-//! Compile once, then scan the same mixed UTF-8 subject with reused scratch.
+//! Compile once, then scan the same mixed UTF-16 subject with reused scratch.
 //! Run under perf stat; the checksum covers every returned span, not wall time.
 use perex::{
     Budget,
@@ -21,8 +21,11 @@ fn main() {
         _ => panic!("unknown case"),
     };
     assert!(engine == "vm" || engine == "dfa");
-    let subject = "_Abc αβΓΔ 012９ 汉字 ſK 𐐀𐐨 😀!\n".repeat(65536);
-    let input = Input::utf8(&subject);
+    // Native UTF-16 storage makes global-loop start seeks constant-time.
+    // Repeated byte-input find calls would benchmark prefix rescanning instead.
+    let unit: Vec<u16> = "_Abc αβΓΔ 012９ 汉字 ſK 𐐀𐐨 😀!\n".encode_utf16().collect();
+    let subject = unit.repeat(65536);
+    let input = Input::utf16(&subject);
     let mut words = [0; 4096];
     let program = compile(
         Input::utf8(pattern),
@@ -81,7 +84,7 @@ fn main() {
     let word_sum: u64 = program.words().iter().map(|&w| u64::from(w)).sum();
     println!(
         "{{\"case\":{case:?},\"engine\":{engine:?},\"bytes\":{},\"utf16\":{},\"repeats\":{repeats},\"matches\":{count},\"starts\":{starts},\"ends\":{ends},\"program_words\":{},\"program_sum\":{word_sum}}}",
-        subject.len(),
+        subject.len() * 2,
         input.len_utf16(),
         program.words().len()
     );
