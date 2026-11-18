@@ -433,9 +433,8 @@ fn derive_alternation(words: &[u32], instructions: usize) -> bool {
 /// such a program tries only its first start, as a sticky one does: every later
 /// start fails at the same `^`.
 ///
-/// Derived from the instructions when the program is emitted and again when it
-/// is validated, which rejects a word 2 [`ANCHORED`] flag that disagrees, so no
-/// program word can claim it falsely and a search only reads the flag.
+/// Emission publishes this bit in word 7. Import validates it against the
+/// instructions so searches can read the flag directly.
 pub(crate) fn derive_start_anchored(words: &[u32], instructions: usize) -> bool {
     // Almost every program reaches a consuming instruction straight after its
     // entry `SAVE`s, which decides the claim without the branch stack below.
@@ -498,26 +497,26 @@ pub(crate) fn leading_pc(words: &[u32], instructions: usize) -> usize {
 /// lookaround and properties of strings make it ineligible.
 ///
 /// Called on validated instructions and repeat records only.
-pub(crate) fn derive_dfa(p: Program<'_>) -> bool {
+fn derive_dfa(p: Program<'_>) -> bool {
     if p.instructions() > PC_LIMIT {
         return false;
     }
-    for pc in 0..p.instructions() {
-        let [op, a, _] = p.instruction(pc);
+    let sections = p.sections();
+    for (pc, &[op, a, _]) in sections.instructions.iter().enumerate() {
         let admitted = match op {
             MATCH | CHAR | CHAR_I | ANY | ANY_S | CLASS | CLASS_I | CLASS_SORTED
             | CLASS_SORTED_I | SAVE | SPLIT | BRANCH | JUMP | START | START_M | END | END_M
             | WORD | WORD_I | REPEAT_INIT | ATOM_REPEAT => true,
-            REPEAT_CHOICE => p.repeat(a as usize)[3] as usize == pc + 1,
-            REPEAT_BODY => p.repeat(a as usize)[3] as usize == pc,
-            REPEAT_NEXT => p.repeat(a as usize)[4] as usize == pc + 1,
+            REPEAT_CHOICE => sections.repeats[a as usize][3] as usize == pc + 1,
+            REPEAT_BODY => sections.repeats[a as usize][3] as usize == pc,
+            REPEAT_NEXT => sections.repeats[a as usize][4] as usize == pc + 1,
             _ => false,
         };
         if !admitted {
             return false;
         }
     }
-    dfa_fields(p.code(), |_, _, _| {})
+    sections.repeats.is_empty() || dfa_fields(p.code(), |_, _, _| {})
 }
 
 /// Instructions an automaton thread can address beside its generation tag.
@@ -531,18 +530,17 @@ const PC_LIMIT: usize = (1 << 24) - 1;
 /// properly, counts too far, or the fields around one instruction exceed 32
 /// bits.
 pub(crate) fn dfa_fields(p: Code<'_>, mut each: impl FnMut(usize, u32, u32)) -> bool {
-    let n = p.instructions();
+    let sections = p.sections();
     let mut open = [(0usize, 0u32); 32];
     let mut depth = 0;
-    for pc in 0..n {
-        while depth > 0 && open[depth - 1].0 <= pc {
-            depth -= 1;
-        }
-        let [op, a, _] = p.instruction(pc);
+    for (pc, &[op, a, _]) in sections.instructions.iter().enumerate() {
         if !matches!(op, REPEAT_INIT | ATOM_REPEAT) {
             continue;
         }
-        let r = p.repeat(a as usize);
+        while depth > 0 && open[depth - 1].0 <= pc {
+            depth -= 1;
+        }
+        let r = &sections.repeats[a as usize];
         let exit = r[4] as usize;
         if r[3] as usize != pc + 2
             || exit < pc + 4
@@ -641,10 +639,47 @@ impl<'a> Program<'a> {
     /// The experimental native-u32 format requires four-byte alignment; it is
     /// not a stable wire format or a cross-endian serialization format.
     pub fn from_words(words: &'a [u32], budget: &mut Budget) -> Result<Self, ProgramError> {
-        Self::from_words_resolved(words, budget, properties::Resolver::default())
+        let p = Self::validate_structure(words, budget, properties::Resolver::default())?;
+        let (entry, leading) = p.execution_hints();
+        if words[7] & (ANCHORED | DFA | LITERAL_PREFIX) != entry
+            || words[9] & (RUN_SKIP | LEADING_MASK) != leading
+        {
+            return Err(ProgramError::Invalid);
+        }
+        Ok(p)
     }
 
-    pub(crate) fn from_words_resolved(
+    /// The compiler owns these words until it publishes the validated hints.
+    /// Importers instead compare the same derivation to the serialized claims.
+    pub(crate) fn finish_emission(
+        words: &mut [u32],
+        budget: &mut Budget,
+        membership: properties::Resolver,
+    ) -> Result<(), ProgramError> {
+        let p = Program::validate_structure(words, budget, membership)?;
+        let (entry, leading) = p.execution_hints();
+        words[7] |= entry;
+        words[9] |= leading;
+        Ok(())
+    }
+
+    fn execution_hints(self) -> (u32, u32) {
+        let mut entry = 0;
+        if derive_start_anchored(self.words, self.instructions()) {
+            entry |= ANCHORED;
+        }
+        if derive_dfa(self) {
+            entry |= DFA;
+        }
+        if crate::literal::eligible(self) {
+            entry |= LITERAL_PREFIX;
+        }
+        let leading =
+            derive_run_skip(self.words, self) | derive_leading(self.words, self.instructions());
+        (entry, leading)
+    }
+
+    fn validate_structure(
         words: &'a [u32],
         budget: &mut Budget,
         mut membership: properties::Resolver,
@@ -703,15 +738,7 @@ impl<'a> Program<'a> {
         budget
             .charge(p.instructions() / 8 + 1)
             .map_err(|_| ProgramError::WorkLimit)?;
-        // Word 9's bits are now fully assigned: the leading claim in its low
-        // byte, the run-skip instruction in its middle bits and the forward
-        // admission claim in its top bit. There are no reserved bits to reject,
-        // so every field is checked on its own.
-        if words[9] & RUN_SKIP != derive_run_skip(words, p)
-            || words[9] & LEADING_MASK != derive_leading(words, p.instructions())
-            || (words[7] & ANCHORED != 0) != derive_start_anchored(words, p.instructions())
-            || (words[9] & ADMISSION_FORWARD != 0 && words[2] & ADMISSION == 0)
-        {
+        if words[9] & ADMISSION_FORWARD != 0 && words[2] & ADMISSION == 0 {
             return Err(bad);
         }
         if let Some((pc, _)) = p.admission()
@@ -783,9 +810,9 @@ impl<'a> Program<'a> {
                 return Err(bad);
             }
         }
-        for pc in 0..p.instructions() {
+        let sections = p.sections();
+        for (pc, &[op, a, b]) in sections.instructions.iter().enumerate() {
             budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
-            let [op, a, b] = p.instruction(pc);
             let valid = match op {
                 MATCH | ANY | ANY_S | START | START_M | END | END_M | ASSERT_END => {
                     a == 0 && b == 0
@@ -802,7 +829,7 @@ impl<'a> Program<'a> {
                     let mut previous = None;
                     for index in a..end {
                         budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
-                        let [lo, hi] = p.range(index as usize);
+                        let [lo, hi] = sections.ranges[index as usize];
                         if lo & PROPERTY != 0 || previous.is_some_and(|last| last >= lo) {
                             return Err(bad);
                         }
@@ -853,8 +880,8 @@ impl<'a> Program<'a> {
                 ATOM_REPEAT => {
                     a < words[6]
                         && b == 0
-                        && p.repeat(a as usize)[7] == 1
-                        && (p.repeat(a as usize)[3] as usize).checked_sub(2) == Some(pc)
+                        && sections.repeats[a as usize][7] == 1
+                        && (sections.repeats[a as usize][3] as usize).checked_sub(2) == Some(pc)
                 }
                 _ => false,
             };
@@ -862,9 +889,8 @@ impl<'a> Program<'a> {
                 return Err(bad);
             }
         }
-        for i in 0..words[5] as usize {
+        for &[lo, hi] in sections.ranges {
             budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
-            let [lo, hi] = p.range(i);
             let valid = if lo & PROPERTY != 0 {
                 if !p.unicode() || !properties::valid(lo & !PROPERTY) || hi > 2 {
                     return Err(bad);
@@ -878,9 +904,8 @@ impl<'a> Program<'a> {
                 return Err(bad);
             }
         }
-        for i in 0..words[6] as usize {
+        for (i, r) in sections.repeats.iter().enumerate() {
             budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
-            let r = p.repeat(i);
             if r[2] > 3
                 || (r[2] & 1 == 0 && r[0] > r[1])
                 || r[3] == 0
@@ -912,11 +937,6 @@ impl<'a> Program<'a> {
         budget
             .charge(p.instructions() / 8 + 1)
             .map_err(|_| ProgramError::WorkLimit)?;
-        if (words[7] & LITERAL_PREFIX != 0) != crate::literal::eligible(p)
-            || (words[7] & DFA != 0) != derive_dfa(p)
-        {
-            return Err(bad);
-        }
         p.membership = membership.get();
         Ok(p)
     }

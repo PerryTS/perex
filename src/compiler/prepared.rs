@@ -283,46 +283,14 @@ impl Prepared<'_> {
             output[2] |= hint;
         }
         parser.candidate()?;
-        output[7] = parser.candidate_descriptor(root)
-            | if crate::program::derive_start_anchored(output, count as usize) {
-                crate::program::ANCHORED
-            } else {
-                0
-            }
-            | if crate::program::derive_dfa(Program {
-                words: output,
-                membership: parser.membership.get(),
-            }) {
-                crate::program::DFA
-            } else {
-                0
-            };
-        if crate::literal::eligible(Program {
-            words: output,
-            membership: parser.membership.get(),
-        }) {
-            output[7] |= crate::program::LITERAL_PREFIX;
-        }
+        output[7] = parser.candidate_descriptor(root);
         output[8] = parser.end_candidate_descriptor(root);
-        // Derived from the emitted instructions with the same function the
-        // validator re-runs, so the stored word cannot disagree with the program.
-        output[9] = crate::program::derive_run_skip(
-            output,
-            Program {
-                words: output,
-                membership: parser.membership.get(),
-            },
-        ) | crate::program::derive_leading(output, count as usize)
-            | if parser.forward {
-                crate::program::ADMISSION_FORWARD
-            } else {
-                0
-            };
-        Program::from_words_resolved(output, parser.budget, parser.membership)
-            .map(|_| ())
-            .map_err(|e| match e {
-                ProgramError::WorkLimit => CompileError::WorkLimit,
-                ProgramError::Invalid => CompileError::InvalidProgram,
-            })
+        if parser.forward {
+            output[9] = crate::program::ADMISSION_FORWARD;
+        }
+        Program::finish_emission(output, parser.budget, parser.membership).map_err(|e| match e {
+            ProgramError::WorkLimit => CompileError::WorkLimit,
+            ProgramError::Invalid => CompileError::InvalidProgram,
+        })
     }
 }
