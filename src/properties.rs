@@ -23,20 +23,17 @@ static MEMBERSHIP: std::sync::OnceLock<Membership> = std::sync::OnceLock::new();
 pub fn install_unicode_properties() {
     #[cfg(feature = "selectable-unicode")]
     let _ = MEMBERSHIP.set(Membership {
-        query: Query::unicode(),
         dfa: &crate::dfa::UNICODE_DISPATCH,
     });
 }
 
 /// A process-local capability, never part of relocatable program words.
 /// The default configuration is zero-sized and retains direct dispatch.
-/// The VM query stays direct; the immutable DFA table keeps borrowed views and
-/// relocation witnesses compact without carrying three unused entry pointers.
+/// A single immutable table keeps borrowed views and relocation witnesses
+/// compact. The VM projects its query into the active frame once per borrow.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Membership {
-    #[cfg(feature = "selectable-unicode")]
-    query: Query,
     #[cfg(feature = "selectable-unicode")]
     pub(crate) dfa: &'static crate::dfa::Dispatch,
 }
@@ -56,18 +53,11 @@ impl Query {
     }
 }
 
-#[cfg(feature = "selectable-unicode")]
-impl Default for Query {
-    fn default() -> Self {
-        Self::property_free()
-    }
-}
-
 impl PartialEq for Membership {
     fn eq(&self, other: &Self) -> bool {
         #[cfg(feature = "selectable-unicode")]
         {
-            core::ptr::fn_addr_eq(self.query.0, other.query.0) && core::ptr::eq(self.dfa, other.dfa)
+            core::ptr::eq(self.dfa, other.dfa)
         }
         #[cfg(not(feature = "selectable-unicode"))]
         {
@@ -82,7 +72,7 @@ impl Membership {
     #[inline(always)]
     pub(crate) fn query(self) -> Query {
         #[cfg(feature = "selectable-unicode")]
-        return self.query;
+        return self.dfa.query;
         #[cfg(not(feature = "selectable-unicode"))]
         Query()
     }

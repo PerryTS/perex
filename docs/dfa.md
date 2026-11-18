@@ -437,6 +437,6 @@ through its character loop. Both read the same program format and reader methods
 The operation fixes whether it needs bounds as a const parameter of the same
 search implementation. The VM caches Unicode mode for one immutable program
 borrow; character reads and case folding reuse that mode. The validated view
-keeps words and the VM query contiguous, followed by the immutable DFA table
-pointer. A DFA operation loads its entry once; no table pointer travels through
-its character loop.
+keeps one immutable provider-table pointer beside its words. Each VM borrow
+loads the query into its execution frame once; a DFA operation loads its entry
+once. No table pointer travels through either character loop.

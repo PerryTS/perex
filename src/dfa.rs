@@ -409,6 +409,7 @@ type Capture = fn(
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Dispatch {
+    pub(crate) query: crate::properties::Query,
     find: Find,
     test: Test,
     captures: Capture,
@@ -416,12 +417,14 @@ pub(crate) struct Dispatch {
 
 #[cfg(feature = "selectable-unicode")]
 pub(crate) static UNICODE_DISPATCH: Dispatch = Dispatch {
+    query: crate::properties::Query::unicode(),
     find: Dfa::<crate::properties::Unicode>::find,
     test: Dfa::<crate::properties::Unicode>::is_match,
     captures: Dfa::<crate::properties::Unicode>::captures,
 };
 #[cfg(feature = "selectable-unicode")]
 static PROPERTY_FREE_DISPATCH: Dispatch = Dispatch {
+    query: crate::properties::Query::property_free(),
     find: find_with::<crate::properties::PropertyFree>,
     test: is_match_with::<crate::properties::PropertyFree>,
     captures: capture_search::<crate::properties::PropertyFree>,

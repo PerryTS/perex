@@ -220,6 +220,12 @@ fn same_header(words: &[u32], header: &[u32; crate::program::HEADER]) -> bool {
     words.first_chunk::<{ crate::program::HEADER }>() == Some(header)
 }
 
+const WITNESS_FIELDS_BYTES: usize = core::mem::size_of::<[u32; crate::program::HEADER]>()
+    + core::mem::size_of::<u32>()
+    + core::mem::size_of::<usize>()
+    + core::mem::size_of::<crate::properties::Membership>();
+const WITNESS_TAIL_BYTES: usize = (8 - WITNESS_FIELDS_BYTES % 8) % 8;
+
 /// What validating a program established, as plain data: its length and
 /// header and, with selectable Unicode, its resolved native provider. The
 /// provider is process-local and is never serialized into program words.
@@ -237,27 +243,17 @@ pub struct ProgramWitness {
     membership: crate::properties::Membership,
     // Scanned hosts store witnesses in whole eight-byte words on both target
     // widths. Keep the trailing bytes initialized rather than adding padding.
-    #[cfg(target_pointer_width = "32")]
-    trailing: u32,
+    trailing: [u8; WITNESS_TAIL_BYTES],
 }
 
 impl ProgramWitness {
     /// Whether this target inserts implicit padding between or after fields.
     /// This is false on 32- and 64-bit targets. A host that scans allocation
     /// bytes can assert this before storing typed witnesses in scanned memory.
-    /// A witness contains a native function pointer with selectable Unicode;
+    /// A witness contains a native provider reference with selectable Unicode;
     /// arbitrary bit patterns (including all zeros) are not valid witnesses.
     pub const fn has_padding() -> bool {
-        core::mem::size_of::<Self>()
-            != core::mem::size_of::<[u32; crate::program::HEADER]>()
-                + core::mem::size_of::<u32>()
-                + core::mem::size_of::<usize>()
-                + core::mem::size_of::<crate::properties::Membership>()
-                + if cfg!(target_pointer_width = "32") {
-                    core::mem::size_of::<u32>()
-                } else {
-                    0
-                }
+        core::mem::size_of::<Self>() != WITNESS_FIELDS_BYTES + WITNESS_TAIL_BYTES
     }
 }
 
@@ -344,8 +340,7 @@ impl<P: ImmutableProgram> BoundProgram<P> {
             membership: self.membership,
             header: self.header,
             words: self.words,
-            #[cfg(target_pointer_width = "32")]
-            trailing: 0,
+            trailing: [0; WITNESS_TAIL_BYTES],
         }
     }
 
