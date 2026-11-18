@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.22 — 2026-11-18
+
+- Less work at startup: when a program is published, its execution hints are derived once, after validation, and written into the existing header words, instead of being derived separately during emission and again during validation. An imported program still re-derives its hints and rejects one whose stored hints disagree. On a 448-pattern startup fixture, perex's exclusive instruction count fell 6.3% against 0.1.20.
+- No API, program-format or cache-layout change; answers, complete captures, work limits and declines are unchanged.
+
 ## 0.1.21 — 2026-11-18
 
 - Opt-in `selectable-unicode` feature: Unicode property membership is resolved once, when a program, atom or DFA is built or validated, and the compiled structure keeps the chosen function. Nothing is looked up per membership query. The DFA is specialized over its provider, so its membership call stays direct and inlinable: with the feature on, the DFA is within noise of feature-off on `\p{L}+`, `[\p{Script=Greek}\p{Nd}]` and `/\p{Lu}/iu`, and the VM is not slower. A host that leaves the tables out drops them from its binary (perry's chess binary: -131 KB).
