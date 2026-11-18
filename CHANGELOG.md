@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.21 — 2026-11-18
+
+- Opt-in `selectable-unicode` feature: Unicode property membership is resolved once, when a program, atom or DFA is built or validated, and the compiled structure keeps the chosen function. Nothing is looked up per membership query. The DFA is specialized over its provider, so its membership call stays direct and inlinable: with the feature on, the DFA is within noise of feature-off on `\p{L}+`, `[\p{Script=Greek}\p{Nd}]` and `/\p{Lu}/iu`, and the VM is not slower. A host that leaves the tables out drops them from its binary (perry's chess binary: -131 KB).
+- The default engine is unchanged and stays `no_std`; answers, complete captures, work limits and declines are unchanged.
+- The release workflow now publishes the crate from the version tag.
+
 ## 0.1.20 — 2026-11-16
 
 - Backtrack inside a trial without returning to the outer phase loop: the executor pops a frame and runs the Fail, Rollback and Clear phases in place when no pause or capacity request can fall between them, with the same charges. On the three.js track-name parse the engine-only instruction count fell from 21.8x node to 18x node.
