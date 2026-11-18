@@ -22,8 +22,10 @@ jobs:
             echo "tag $GITHUB_REF_NAME does not match Cargo.toml version v$version" >&2
             exit 1
           fi
-      # The crate is published with `cargo publish` by the releaser before the
-      # tag is pushed; this workflow only records the GitHub release.
+      - name: Publish the crate
+        run: cargo +stable publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Create the GitHub release
         run: gh release create "$GITHUB_REF_NAME" --generate-notes
         env:
