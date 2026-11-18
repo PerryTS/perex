@@ -29,7 +29,7 @@ impl Parser<'_, '_> {
                 self.step()?;
                 self.cursor.next_point().ok_or_else(|| self.error())?
             };
-            if !properties::identifier(point, count == 0) {
+            if !properties::identifier(&mut self.membership, point, count == 0) {
                 return Err(self.error());
             }
             if self.range_used == self.ranges.len() - self.name_chars {

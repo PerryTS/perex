@@ -239,7 +239,7 @@ impl Vm<'_, '_, '_, '_> {
         // A leading run and an alternation both name the exact bytes their
         // first two characters admit, which on ordinary text stops at a small
         // fraction of the positions the descriptor's widened interval does.
-        let prefix = (leading != 0).then(|| prefix(self.program, leading));
+        let prefix = (leading != 0).then(|| prefix(self.program.code, leading));
         let mut scanned = 0;
         let found = loop {
             let (found, inspected) = match &prefix {
@@ -354,7 +354,7 @@ impl Vm<'_, '_, '_, '_> {
 /// claim of `leading` characters: the byte pairs it admits at its first two.
 /// The evaluator's candidate phase and the automaton's idle skip both use it.
 #[inline(always)]
-pub(crate) fn prefix(program: Program<'_>, leading: usize) -> Prefix {
+pub(crate) fn prefix(program: Code<'_>, leading: usize) -> Prefix {
     if leading == LEADING_ALTERNATION as usize {
         branch_pairs(program)
     } else {
@@ -367,7 +367,7 @@ pub(crate) fn prefix(program: Program<'_>, leading: usize) -> Prefix {
 /// characters, so each contributes exactly one pair, and there are at most
 /// `LEADING_BRANCHES` of them.
 #[inline(always)]
-fn branch_pairs(program: Program<'_>) -> Prefix {
+fn branch_pairs(program: Code<'_>) -> Prefix {
     let mut prefix = Prefix {
         first: [0; LEADING_BRANCHES],
         second: [0; LEADING_BRANCHES],
@@ -408,7 +408,7 @@ fn branch_pairs(program: Program<'_>) -> Prefix {
 /// wholly ASCII storage, where an ASCII-insensitive comparison is exact for
 /// a folded run.
 #[inline(always)]
-fn literal_pairs(program: Program<'_>) -> Prefix {
+fn literal_pairs(program: Code<'_>) -> Prefix {
     let mut prefix = Prefix {
         first: [0; LEADING_BRANCHES],
         second: [0; LEADING_BRANCHES],

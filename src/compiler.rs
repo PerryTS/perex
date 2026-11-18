@@ -51,6 +51,7 @@ pub struct Range {
 /// between preparation and emission. Emission consumes the plan.
 #[must_use = "emit the prepared program or drop it to release scratch borrows"]
 pub struct Prepared<'s> {
+    membership: properties::Resolver,
     nodes: &'s mut [Node],
     ranges: &'s mut [Range],
     budget: &'s mut Budget,
@@ -102,6 +103,7 @@ mod repetition;
 mod sets;
 
 struct Parser<'a, 's> {
+    membership: properties::Resolver,
     pattern: Input<'a>,
     cursor: Cursor<'a>,
     flags: u32,
@@ -474,6 +476,9 @@ impl Parser<'_, '_> {
         })
     }
     fn range(&mut self, lo: u32, hi: u32) -> Result<(), CompileError> {
+        if lo & PROPERTY != 0 {
+            self.membership.require();
+        }
         self.step()?;
         if self.range_used == self.ranges.len() - self.name_chars {
             return Err(CompileError::Ranges);
@@ -901,6 +906,7 @@ fn prepare_with<'s, T>(
         return Err(CompileError::Syntax { utf16_offset: 0 });
     }
     let mut parser = Parser {
+        membership: properties::Resolver::default(),
         pattern,
         cursor: pattern.cursor(),
         flags: bits,
@@ -964,6 +970,7 @@ fn prepare_with<'s, T>(
         return Err(CompileError::SizeLimit);
     }
     finish(Prepared {
+        membership: parser.membership,
         nodes: parser.nodes,
         ranges: parser.ranges,
         budget: parser.budget,

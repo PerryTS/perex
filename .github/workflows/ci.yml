@@ -19,6 +19,7 @@ jobs:
       - run: cargo +stable clippy --locked --all-targets -- -D warnings
       - run: cargo +stable test --locked
       - run: cargo +stable test --locked --release
+      - run: cargo +stable test --locked --release --features selectable-unicode --lib properties::tests
       - run: python3 tools/generate-casefold.py --check
       - run: python3 tools/generate-properties.py --check
 

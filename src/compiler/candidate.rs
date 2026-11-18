@@ -127,13 +127,14 @@ impl Prepared<'_> {
                                 // A `v` complement negates membership of the
                                 // whole closure, matching the evaluator.
                                 found = if r.lo & PROPERTY != 0 && r.hi == 2 {
-                                    !values
-                                        .iter()
-                                        .any(|&v| properties::contains(r.lo & !PROPERTY, v))
+                                    !values.iter().any(|&v| {
+                                        self.membership.get().contains(r.lo & !PROPERTY, v)
+                                    })
                                 } else {
                                     values.iter().any(|&v| {
                                         if r.lo & PROPERTY != 0 {
-                                            properties::contains(r.lo & !PROPERTY, v) != (r.hi != 0)
+                                            self.membership.get().contains(r.lo & !PROPERTY, v)
+                                                != (r.hi != 0)
                                         } else {
                                             v >= r.lo && v <= r.hi
                                         }

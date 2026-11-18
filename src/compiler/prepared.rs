@@ -33,6 +33,7 @@ impl Prepared<'_> {
             *first = 0;
         }
         let size = self.size;
+        let membership = self.membership.get();
         if output.len() < size {
             return Err(CompileError::ProgramStorage {
                 required_words: size,
@@ -45,7 +46,10 @@ impl Prepared<'_> {
         }
         // emit_into has validated these exact immutable words under the same
         // operation budget. No callback or write occurs between that and here.
-        Ok(Program { words: output })
+        Ok(Program {
+            words: output,
+            membership,
+        })
     }
 
     /// The filter an operator left on one group of a property of strings: one
@@ -236,7 +240,10 @@ impl Prepared<'_> {
         // the generic body words avoids a second program or an AST relocation pass.
         for i in 0..parser.repeats as usize {
             parser.step()?;
-            let p = Program { words: output };
+            let p = Program {
+                words: output,
+                membership: parser.membership.get(),
+            };
             let r = p.repeat(i);
             let entry = r[3] as usize - 2;
             if r[4] as usize == entry + 5 && r[5] == r[6] && consuming(p.instruction(entry + 3)[0])
@@ -266,7 +273,13 @@ impl Prepared<'_> {
             }
         }
         if parser.repeats != 0 {
-            let hint = parser.admission(Program { words: output }, root)?;
+            let hint = parser.admission(
+                Program {
+                    words: output,
+                    membership: parser.membership.get(),
+                },
+                root,
+            )?;
             output[2] |= hint;
         }
         parser.candidate()?;
@@ -276,25 +289,36 @@ impl Prepared<'_> {
             } else {
                 0
             }
-            | if crate::program::derive_dfa(Program { words: output }) {
+            | if crate::program::derive_dfa(Program {
+                words: output,
+                membership: parser.membership.get(),
+            }) {
                 crate::program::DFA
             } else {
                 0
             };
-        if crate::literal::eligible(Program { words: output }) {
+        if crate::literal::eligible(Program {
+            words: output,
+            membership: parser.membership.get(),
+        }) {
             output[7] |= crate::program::LITERAL_PREFIX;
         }
         output[8] = parser.end_candidate_descriptor(root);
         // Derived from the emitted instructions with the same function the
         // validator re-runs, so the stored word cannot disagree with the program.
-        output[9] = crate::program::derive_run_skip(output, Program { words: output })
-            | crate::program::derive_leading(output, count as usize)
+        output[9] = crate::program::derive_run_skip(
+            output,
+            Program {
+                words: output,
+                membership: parser.membership.get(),
+            },
+        ) | crate::program::derive_leading(output, count as usize)
             | if parser.forward {
                 crate::program::ADMISSION_FORWARD
             } else {
                 0
             };
-        Program::from_words(output, parser.budget)
+        Program::from_words_resolved(output, parser.budget, parser.membership)
             .map(|_| ())
             .map_err(|e| match e {
                 ProgramError::WorkLimit => CompileError::WorkLimit,

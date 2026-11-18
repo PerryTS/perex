@@ -1,6 +1,9 @@
 //! Versioned, relocatable programs in caller-owned u32 storage.
 use crate::{Budget, properties};
 
+mod code;
+pub(crate) use code::Code;
+
 pub(crate) const HEADER: usize = 11;
 pub(crate) const MAGIC: u32 = 0x50525831;
 pub(crate) const VERSION: u32 = 16;
@@ -514,7 +517,7 @@ pub(crate) fn derive_dfa(p: Program<'_>) -> bool {
             return false;
         }
     }
-    dfa_fields(p, |_, _, _| {})
+    dfa_fields(p.code(), |_, _, _| {})
 }
 
 /// Instructions an automaton thread can address beside its generation tag.
@@ -527,7 +530,7 @@ const PC_LIMIT: usize = (1 << 24) - 1;
 /// returns false when a repeat is not in the emitted shape, does not nest
 /// properly, counts too far, or the fields around one instruction exceed 32
 /// bits.
-pub(crate) fn dfa_fields(p: Program<'_>, mut each: impl FnMut(usize, u32, u32)) -> bool {
+pub(crate) fn dfa_fields(p: Code<'_>, mut each: impl FnMut(usize, u32, u32)) -> bool {
     let n = p.instructions();
     let mut open = [(0usize, 0u32); 32];
     let mut depth = 0;
@@ -615,33 +618,37 @@ pub(crate) struct ProgramSections<'a> {
     pub repeats: &'a [[u32; 8]],
 }
 
-/// A validated immutable view. All persistent data is in `words`, with no
-/// pointers, reference counts, source borrow, or separate owning allocation.
-/// Release this borrow before moving the storage and validate its new borrow.
+/// A validated immutable view. Relocatable `words` contain no pointers, source
+/// borrow or separate owning allocation. With selectable Unicode, this view
+/// also retains an immutable native function resolved during validation.
+/// Release the view before moving storage; validate again or reuse a binding witness.
+// Words and the VM query form a contiguous prefix, so a VM borrow does not
+// gather its inputs around the DFA entries.
+#[cfg_attr(feature = "selectable-unicode", repr(C))]
 #[derive(Clone, Copy, Debug)]
 pub struct Program<'a> {
     pub(crate) words: &'a [u32],
+    pub(crate) membership: properties::Membership,
 }
 
 impl<'a> Program<'a> {
-    /// The validated header fixes these section extents for this borrow.
-    /// Taking each slice once lets the evaluator index records against their
-    /// own bounds instead of rebuilding an offset into all words per opcode.
-    pub(crate) fn sections(self) -> ProgramSections<'a> {
-        let (instructions, tail) = self.words[HEADER..].split_at(self.instructions() * 3);
-        let (ranges, tail) = tail.split_at(self.words[5] as usize * 2);
-        let repeats = &tail[..self.words[6] as usize * 8];
-        ProgramSections {
-            instructions: instructions.as_chunks::<3>().0,
-            ranges: ranges.as_chunks::<2>().0,
-            repeats: repeats.as_chunks::<8>().0,
-        }
+    #[inline(always)]
+    pub(crate) fn code(self) -> Code<'a> {
+        Code { words: self.words }
     }
 
     /// Validate the entire format, including every opcode, target and table range.
     /// The experimental native-u32 format requires four-byte alignment; it is
     /// not a stable wire format or a cross-endian serialization format.
     pub fn from_words(words: &'a [u32], budget: &mut Budget) -> Result<Self, ProgramError> {
+        Self::from_words_resolved(words, budget, properties::Resolver::default())
+    }
+
+    pub(crate) fn from_words_resolved(
+        words: &'a [u32],
+        budget: &mut Budget,
+        mut membership: properties::Resolver,
+    ) -> Result<Self, ProgramError> {
         let bad = ProgramError::Invalid;
         if words.len() < HEADER
             || words[0] != MAGIC
@@ -686,7 +693,10 @@ impl<'a> Program<'a> {
         {
             return Err(bad);
         }
-        let p = Self { words };
+        let mut p = Self {
+            words,
+            membership: membership.get(),
+        };
         budget
             .charge(LEADING_SCAN / 8)
             .map_err(|_| ProgramError::WorkLimit)?;
@@ -751,7 +761,11 @@ impl<'a> Program<'a> {
                 let group = p.named_group(i).ok_or(bad)?;
                 for (j, point) in core::char::decode_utf16(group.name_units()).enumerate() {
                     budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
-                    if !properties::identifier(point.map_err(|_| bad)? as u32, j == 0) {
+                    if !properties::identifier(
+                        &mut membership,
+                        point.map_err(|_| bad)? as u32,
+                        j == 0,
+                    ) {
                         return Err(bad);
                     }
                 }
@@ -852,7 +866,11 @@ impl<'a> Program<'a> {
             budget.charge(1).map_err(|_| ProgramError::WorkLimit)?;
             let [lo, hi] = p.range(i);
             let valid = if lo & PROPERTY != 0 {
-                p.unicode() && properties::valid(lo & !PROPERTY) && hi <= 2
+                if !p.unicode() || !properties::valid(lo & !PROPERTY) || hi > 2 {
+                    return Err(bad);
+                }
+                membership.require();
+                true
             } else {
                 lo <= hi && hi <= if p.unicode() { 0x10ffff } else { 0xffff }
             };
@@ -899,150 +917,62 @@ impl<'a> Program<'a> {
         {
             return Err(bad);
         }
+        p.membership = membership.get();
         Ok(p)
     }
+    #[inline]
+    pub(crate) fn sections(self) -> ProgramSections<'a> {
+        self.code().sections()
+    }
+    #[inline]
     pub fn words(self) -> &'a [u32] {
-        self.words
+        self.code().words()
     }
+    #[inline]
     pub fn capture_count(self) -> usize {
-        self.words[3] as usize
+        self.code().capture_count()
     }
+    #[inline]
     pub fn register_count(self) -> usize {
-        (self.words[3] as usize + self.words[6] as usize) * 2
+        self.code().register_count()
     }
+    #[inline]
     pub fn size_bytes(self) -> usize {
-        self.words.len() * 4
+        self.code().size_bytes()
     }
-    // The optional hint uses spare flag/header bits and points into existing
-    // instructions. It adds no program words or second literal/class buffer.
-    /// Characters at instruction zero that every match consumes first. Zero
-    /// disables the claim. See [`derive_leading`].
-    pub(crate) fn leading(self) -> usize {
-        (self.words[9] & LEADING_MASK & !LEADING_FOLD) as usize
-    }
-    /// Whether [`Program::leading`] compares without regard to ASCII case.
-    pub(crate) fn leading_fold(self) -> bool {
-        self.words[9] & LEADING_FOLD != 0
-    }
-    /// Whether every successful match consumes the admission condition at or
-    /// after its own start position, so an absent later occurrence proves that
-    /// no match can begin at or after that position.
-    pub(crate) fn admission_forward(self) -> bool {
-        self.words[9] & ADMISSION_FORWARD != 0
-    }
-    /// Units an end-anchored match can span, so no match can begin earlier than
-    /// that far from the subject's end. Zero when no bound was derived.
+    #[inline]
     pub(crate) fn end_bound(self) -> Option<usize> {
-        match self.words[8] >> 24 {
-            0 => None,
-            packed => Some((packed - 1) as usize),
-        }
+        self.code().end_bound()
     }
-    /// Instruction of the leading atom repeat whose run a failed start lets the
-    /// search skip. See [`derive_run_skip`].
-    pub(crate) fn run_skip(self) -> Option<usize> {
-        match (self.words[9] & RUN_SKIP) >> 8 {
-            0 => None,
-            packed => Some(packed as usize - 1),
-        }
-    }
-    /// Instruction holding the first character of [`Program::leading`].
-    /// Word 7's first-character descriptor; see `docs/candidate.md`.
-    pub(crate) fn first_descriptor(self) -> u32 {
-        self.words[7] & DESCRIPTOR
-    }
-    /// Whether every match begins at the subject's start. See
-    /// [`derive_start_anchored`].
-    pub(crate) fn start_anchored(self) -> bool {
-        self.words[7] & ANCHORED != 0
-    }
-    pub(crate) fn leading_pc(self) -> usize {
-        leading_pc(self.words, self.instructions())
-    }
+    #[inline]
     pub(crate) fn admission(self) -> Option<(usize, bool)> {
-        (self.words[2] & ADMISSION != 0).then_some((
-            (self.words[2] >> 8) as usize,
-            self.words[2] & ADMISSION_REVERSE != 0,
-        ))
+        self.code().admission()
     }
-    pub(crate) fn literal_run(self, pc: usize) -> usize {
-        let op = self.instruction(pc)[0];
-        (pc..self.instructions())
-            .take(ADMISSION_MAX)
-            .take_while(|&at| matches!(op, CHAR | CHAR_I) && self.instruction(at)[0] == op)
-            .count()
-    }
-    fn filters_start(self) -> usize {
-        HEADER + self.instructions() * 3 + self.words[5] as usize * 2 + self.words[6] as usize * 8
-    }
-    fn names_start(self) -> usize {
-        self.filters_start() + self.words[10] as usize
-    }
-    /// One word of the filter section, which an instruction addresses by its
-    /// first word. Members the operators removed have a zero bit.
-    pub(crate) fn filter(self, at: usize) -> u32 {
-        self.words[self.filters_start() + at]
-    }
+    #[inline]
     pub fn name_count(self) -> usize {
-        if self.words[2] & NAMES == 0 {
-            0
-        } else {
-            self.words[self.names_start()] as usize
-        }
+        self.code().name_count()
     }
     /// Names appear in first-declaration order, independently of references.
+    #[inline]
     pub fn named_groups(self) -> impl ExactSizeIterator<Item = NamedGroup<'a>> + 'a {
-        (0..self.name_count()).map(move |i| self.named_group(i).unwrap())
+        self.code().named_groups()
     }
+    #[inline]
     pub fn named_group(self, index: usize) -> Option<NamedGroup<'a>> {
-        if index >= self.name_count() {
-            return None;
-        }
-        let at = self.names_start() + 1 + index * 3;
-        let units = self.words[at] as usize;
-        let members = self.words[at + 1] as usize;
-        let start = self.words[at + 2] as usize;
-        let end = start + units.div_ceil(2);
-        Some(NamedGroup {
-            words: &self.words[start..end],
-            units,
-            captures: &self.words[end..end + members],
-        })
+        self.code().named_group(index)
     }
+    #[inline]
     pub(crate) fn instructions(self) -> usize {
-        self.words[4] as usize
+        self.code().instructions()
     }
+    #[inline]
     pub(crate) fn unicode(self) -> bool {
-        self.words[2] & U != 0
+        self.code().unicode()
     }
+    #[inline]
     pub(crate) fn instruction(self, pc: usize) -> [u32; 3] {
-        let at = HEADER + pc * 3;
-        self.words[at..at + 3].try_into().unwrap()
+        self.code().instruction(pc)
     }
-    /// Whether the assertion at `at` has a body that is nothing but a run of
-    /// ASCII characters followed by its end, which is the shape the executor
-    /// already compares against original bytes.
-    fn literal_assertion(self, at: usize) -> bool {
-        let [_, after, _] = self.instruction(at);
-        let body = at + 1;
-        let Some(end) = (after as usize).checked_sub(1) else {
-            return false;
-        };
-        let Some(length) = end.checked_sub(body) else {
-            return false;
-        };
-        if length < 1 || length > LEADING_MAX as usize || end >= self.instructions() {
-            return false;
-        }
-        if self.instruction(end)[0] != ASSERT_END {
-            return false;
-        }
-        (body..end).all(|pc| {
-            let [op, a, _] = self.instruction(pc);
-            op == CHAR && a < 128
-        })
-    }
-
     /// Whether the compilation tier described in `docs/compilation.md` could
     /// emit code for this program, and whether its work at one start position is
     /// therefore statically bounded.
@@ -1058,77 +988,16 @@ impl<'a> Program<'a> {
     /// repeats of those. Folding, properties, sorted classes, assertions,
     /// alternation, backreferences and unbounded repeats are all excluded, and
     /// each would be a separate decision to admit.
+    #[inline]
     pub fn compilable(self) -> bool {
-        for pc in 0..self.instructions() {
-            let [op, a, b] = self.instruction(pc);
-            let admitted = match op {
-                MATCH | SAVE => true,
-                // A folded ASCII comparison is exact on the storage this tier
-                // requires: the only two non-ASCII characters that fold into
-                // ASCII, U+017F and U+212A, cannot occur in it. That is the
-                // same argument the start scan and the retreat already make,
-                // and the differential suite already covers it.
-                CHAR | CHAR_I => a < 128,
-                ANY | ANY_S => true,
-                // Position against zero, against the length, or either side of
-                // a line terminator. None of them reads the subject beyond a
-                // byte, and none needs a table.
-                START | START_M | END | END_M => true,
-                // A word boundary over ASCII is two membership tests of a range
-                // set the emitter can write out.
-                WORD | WORD_I => true,
-                // A lookbehind whose body is a run of ASCII characters is a
-                // comparison against the bytes just before the position, which
-                // the interpreter already makes over bytes and an emitter can
-                // make the same way. Every other assertion needs a sub-search,
-                // which this subset does not do.
-                ASSERT => b & 2 != 0 && self.literal_assertion(pc),
-                ASSERT_END => true,
-                CLASS | CLASS_I => {
-                    let count = b & !NEGATED;
-                    // A property range needs the shared tables, which generated
-                    // code does not carry, and a range past ASCII needs decoding
-                    // this subset does not do.
-                    // A folded class is the range and its case-swapped
-                    // counterpart, which over ASCII is arithmetic rather than
-                    // the case-equivalence table the interpreter consults.
-                    (a..a + count).all(|i| {
-                        let [lo, hi] = self.range(i as usize);
-                        lo & PROPERTY == 0 && hi < 128
-                    })
-                }
-                // Bounded or not. An unbounded repeat makes a search's work
-                // depend on the subject, but what bounds how long generated
-                // code runs before the collector may have it is the budget it
-                // is given, not the pattern: a search that exhausts that budget
-                // returns and is re-run by the interpreter. Requiring a static
-                // bound here instead admitted only trivial literals, which are
-                // the cases already within 2x of V8.
-                ATOM_REPEAT => true,
-                // A repeat's own structure around its body. `REPEAT_INIT` is
-                // absent from this list: a repeat that needs it has captures or
-                // nullability to reset per iteration, which is a separate
-                // decision to admit.
-                REPEAT_CHOICE | REPEAT_BODY | REPEAT_NEXT => true,
-                _ => false,
-            };
-            if !admitted {
-                return false;
-            }
-        }
-        true
+        self.code().compilable()
     }
-
+    #[inline]
     pub(crate) fn range(self, i: usize) -> [u32; 2] {
-        let at = HEADER + self.instructions() * 3 + i * 2;
-        self.words[at..at + 2].try_into().unwrap()
+        self.code().range(i)
     }
+    #[inline]
     pub(crate) fn repeat(self, i: usize) -> [u32; 8] {
-        let at = HEADER + self.instructions() * 3 + self.words[5] as usize * 2 + i * 8;
-        self.words[at..at + 8].try_into().unwrap()
-    }
-    /// Whether the group's `index`th member survived the operators around it.
-    pub(crate) fn admits(self, filter: u32, index: usize) -> bool {
-        filter == 0 || self.filter(filter as usize - 1 + index / 32) & (1 << (index % 32)) != 0
+        self.code().repeat(i)
     }
 }

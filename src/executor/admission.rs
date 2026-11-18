@@ -249,7 +249,7 @@ impl Vm<'_, '_, '_, '_> {
                 }
             }
             Phase::AdmitClass => {
-                if let Some(c) = read(&mut self.cursor, self.program.unicode(), false) {
+                if let Some(c) = read(&mut self.cursor, self.unicode, false) {
                     self.charge(1)?;
                     let (pc, _) = self.program.admission().ok_or(ExecError::InvalidProgram)?;
                     let [op, a, b] = self.opcode(pc);
@@ -272,8 +272,8 @@ impl Vm<'_, '_, '_, '_> {
                 } else {
                     self.charge(1)?;
                     let required = self.required(index - 1);
-                    let c = read(&mut self.cursor, self.program.unicode(), true);
-                    if c.is_some_and(|c| equal(self.program, c, required, self.needle_fold())) {
+                    let c = read(&mut self.cursor, self.unicode, true);
+                    if c.is_some_and(|c| equal(self.unicode, c, required, self.needle_fold())) {
                         self.state.phase = Phase::AdmitSuffix(index - 1);
                     } else {
                         self.cursor = self.input.cursor();
@@ -282,9 +282,9 @@ impl Vm<'_, '_, '_, '_> {
                 }
             }
             Phase::AdmitScan => {
-                if let Some(c) = read(&mut self.cursor, self.program.unicode(), false) {
+                if let Some(c) = read(&mut self.cursor, self.unicode, false) {
                     self.charge(1)?;
-                    if equal(self.program, c, self.required(0), self.needle_fold()) {
+                    if equal(self.unicode, c, self.required(0), self.needle_fold()) {
                         self.state.phase = Phase::AdmitProbe {
                             index: 1,
                             scan: self.cursor.mark(),
@@ -300,8 +300,8 @@ impl Vm<'_, '_, '_, '_> {
                 } else {
                     self.charge(1)?;
                     let required = self.required(index);
-                    if read(&mut self.cursor, self.program.unicode(), false)
-                        .is_some_and(|c| equal(self.program, c, required, self.needle_fold()))
+                    if read(&mut self.cursor, self.unicode, false)
+                        .is_some_and(|c| equal(self.unicode, c, required, self.needle_fold()))
                     {
                         self.state.phase = Phase::AdmitProbe {
                             index: index + 1,

@@ -146,7 +146,7 @@ impl<'p> Vm<'_, 'p, '_, '_> {
     /// own and so must not pay again when the step it serves is resumed.
     fn atom_member(&self, op: u32, a: u32, b: u32, c: u32) -> bool {
         match op {
-            CHAR => equal(self.program, c, a, false),
+            CHAR => equal(self.unicode, c, a, false),
             ANY | ANY_S => op == ANY_S || !line_terminator(c),
             _ => {
                 let mut found = false;
@@ -154,9 +154,9 @@ impl<'p> Vm<'_, 'p, '_, '_> {
                     let [lo, hi] = self.class_range(index as usize);
                     found = if lo & PROPERTY != 0 {
                         if hi == 2 {
-                            !properties::contains(lo & !PROPERTY, c)
+                            !self.program.membership.contains(lo & !PROPERTY, c)
                         } else {
-                            properties::contains(lo & !PROPERTY, c) != (hi != 0)
+                            self.program.membership.contains(lo & !PROPERTY, c) != (hi != 0)
                         }
                     } else {
                         c >= lo && c <= hi
@@ -514,7 +514,7 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         self.state.work = Work::Atom(atom);
         let matched = if let Some(c) = self.read() {
             match op {
-                CHAR | CHAR_I => equal(self.program, c, a, op == CHAR_I),
+                CHAR | CHAR_I => equal(self.unicode, c, a, op == CHAR_I),
                 ANY | ANY_S => op == ANY_S || !line_terminator(c),
                 // A repeated plain class is tested here rather than through the
                 // resumable class phase. That phase exists for folding, sorted
@@ -768,7 +768,7 @@ impl<'p> Vm<'_, 'p, '_, '_> {
             // Uncharged: a commit that asks for more frames is resumed and
             // asks this again, and must not pay for it twice.
             let possible = match next {
-                CHAR | CHAR_I => equal(self.program, c, value, next == CHAR_I),
+                CHAR | CHAR_I => equal(self.unicode, c, value, next == CHAR_I),
                 _ => self.atom_member(next, value, third, c),
             };
             if possible {
@@ -858,12 +858,8 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         // Every position between this endpoint and the minimum was already
         // accepted by this same atom on this immutable input. No membership
         // recheck, subject copy or saved per-character record is necessary.
-        read(
-            &mut self.cursor,
-            self.program.unicode(),
-            !self.state.reverse,
-        )
-        .ok_or(ExecError::InvalidProgram)?;
+        read(&mut self.cursor, self.unicode, !self.state.reverse)
+            .ok_or(ExecError::InvalidProgram)?;
         if if self.state.reverse {
             self.cursor.position() > atom.minimum_end
         } else {
@@ -952,12 +948,8 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         }
         loop {
             self.charge(1)?;
-            read(
-                &mut self.cursor,
-                self.program.unicode(),
-                !self.state.reverse,
-            )
-            .ok_or(ExecError::InvalidProgram)?;
+            read(&mut self.cursor, self.unicode, !self.state.reverse)
+                .ok_or(ExecError::InvalidProgram)?;
             let position = self.cursor.position();
             if if self.state.reverse {
                 position > minimum_end
@@ -968,7 +960,7 @@ impl<'p> Vm<'_, 'p, '_, '_> {
             }
             let possible = {
                 let mut ahead = self.cursor;
-                match read(&mut ahead, self.program.unicode(), self.state.reverse) {
+                match read(&mut ahead, self.unicode, self.state.reverse) {
                     Some(c) => self.atom_holds(op, a, b, c)?,
                     None => false,
                 }
@@ -1017,12 +1009,8 @@ impl<'p> Vm<'_, 'p, '_, '_> {
         }
         loop {
             self.charge(1)?;
-            read(
-                &mut self.cursor,
-                self.program.unicode(),
-                !self.state.reverse,
-            )
-            .ok_or(ExecError::InvalidProgram)?;
+            read(&mut self.cursor, self.unicode, !self.state.reverse)
+                .ok_or(ExecError::InvalidProgram)?;
             let position = self.cursor.position();
             if if self.state.reverse {
                 position > minimum_end
@@ -1033,8 +1021,8 @@ impl<'p> Vm<'_, 'p, '_, '_> {
             }
             self.charge(1)?;
             let mut probe = self.cursor;
-            let possible = read(&mut probe, self.program.unicode(), self.state.reverse)
-                .is_some_and(|c| equal(self.program, c, value, fold));
+            let possible = read(&mut probe, self.unicode, self.state.reverse)
+                .is_some_and(|c| equal(self.unicode, c, value, fold));
             if possible || position == minimum_end {
                 self.state.phase = Phase::AtomCommit;
                 return Ok(());
